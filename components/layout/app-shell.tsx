@@ -1,16 +1,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
-import { Building2, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { getRequiredPermission, hasPermission } from '@/lib/permissions';
+import { Building2, Loader2, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -37,6 +41,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) return null;
+
+  const allowed = hasPermission(profile?.permissions, getRequiredPermission(pathname));
 
   return (
     <div className="min-h-screen bg-secondary">
@@ -67,7 +73,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className={cn('transition-all duration-300', collapsed ? 'lg:ml-16' : 'lg:ml-64')}>
         <Topbar onMenuClick={() => setMobileOpen(true)} />
         <main className="p-4 lg:p-6 max-w-[1600px] mx-auto">
-          <div className="animate-fade-in">{children}</div>
+          {allowed ? (
+            <div className="animate-fade-in">{children}</div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+                <ShieldAlert className="w-9 h-9 text-destructive" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">Access Denied</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Your role ({profile?.role_name ?? 'Unknown'}) doesn't have permission to view this page.
+                </p>
+              </div>
+              <Link href="/dashboard"><Button>Back to Dashboard</Button></Link>
+            </div>
+          )}
         </main>
       </div>
     </div>

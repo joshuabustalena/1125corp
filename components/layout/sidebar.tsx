@@ -4,11 +4,14 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { navSections } from '@/lib/navigation';
+import { getRequiredPermission, hasPermission } from '@/lib/permissions';
+import { useAuth } from '@/lib/auth-context';
 import { Building2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const pathname = usePathname();
+  const { profile } = useAuth();
 
   return (
     <aside
@@ -34,7 +37,12 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-6">
-        {navSections.map((section) => (
+        {navSections.map((section) => {
+          const visibleItems = section.items.filter((item) =>
+            hasPermission(profile?.permissions, getRequiredPermission(item.href))
+          );
+          if (visibleItems.length === 0) return null;
+          return (
           <div key={section.title}>
             {!collapsed && (
               <p className="px-3 mb-2 text-xs font-semibold text-white/40 uppercase tracking-wider">
@@ -42,7 +50,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
               </p>
             )}
             <div className="space-y-1">
-              {section.items.map((item) => {
+              {visibleItems.map((item) => {
                 const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
                 const Icon = item.icon;
                 return (
@@ -67,7 +75,8 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* Collapse toggle */}

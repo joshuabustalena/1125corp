@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -28,6 +29,7 @@ export default function EmployeesPage() {
   const { toast } = useToast();
   const [employees, setEmployees] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  const [positions, setPositions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -36,6 +38,7 @@ export default function EmployeesPage() {
   const [editing, setEditing] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [saving, setSaving] = useState(false);
+  const [createLogin, setCreateLogin] = useState(true);
   const pageSize = 10;
 
   const [form, setForm] = useState({
@@ -43,11 +46,16 @@ export default function EmployeesPage() {
     branch_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
   });
 
-  useEffect(() => { load(); loadBranches(); }, [search, page]);
+  useEffect(() => { load(); loadBranches(); loadPositions(); }, [search, page]);
 
   async function loadBranches() {
     const { data } = await supabase.from('branches').select('id, name').eq('status', 'active');
     setBranches(data ?? []);
+  }
+
+  async function loadPositions() {
+    const { data } = await supabase.from('roles').select('id, name').neq('name', 'Administrator').order('name');
+    setPositions(data ?? []);
   }
 
   async function load() {
@@ -64,6 +72,7 @@ export default function EmployeesPage() {
   function openCreate() {
     setEditing(null);
     setForm({ first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '' });
+    setCreateLogin(true);
     setDialogOpen(true);
   }
 
@@ -94,10 +103,52 @@ export default function EmployeesPage() {
       else { toast({ title: 'Success', description: 'Employee updated' }); setDialogOpen(false); load(); }
     } else {
       const { error } = await supabase.from('employees').insert(payload);
-      if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      else { toast({ title: 'Success', description: 'Employee added' }); setDialogOpen(false); load(); }
+      if (error) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
+        setSaving(false);
+        return;
+      }
+      toast({ title: 'Success', description: 'Employee added' });
+
+      if (createLogin && form.email && form.position) {
+        await createLoginAccount();
+      }
+
+      setDialogOpen(false);
+      load();
     }
     setSaving(false);
+  }
+
+  async function createLoginAccount() {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    try {
+      const res = await fetch('/api/employees/create-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          email: form.email,
+          full_name: `${form.first_name} ${form.last_name}`,
+          role_name: form.position,
+          branch_id: form.branch_id || null,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        toast({ title: 'Login account not created', description: result.error ?? 'Unknown error', variant: 'destructive' });
+      } else if (result.emailSent) {
+        toast({ title: 'Login account created', description: `Credentials emailed to ${form.email}` });
+      } else {
+        toast({
+          title: 'Login account created, but email failed',
+          description: result.password ? `Share this password manually: ${result.password}` : (result.emailError ?? 'Email could not be sent'),
+        });
+      }
+    } catch (err: any) {
+      toast({ title: 'Login account not created', description: err?.message ?? 'Network error', variant: 'destructive' });
+    }
   }
 
   async function handleDelete() {
@@ -201,7 +252,13 @@ export default function EmployeesPage() {
               <div className="space-y-2"><Label>First Name *</Label><Input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Last Name *</Label><Input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Department</Label><Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="e.g. Operations" /></div>
-              <div className="space-y-2"><Label>Position</Label><Input value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} placeholder="e.g. Collector" /></div>
+              <div className="space-y-2">
+                <Label>Position</Label>
+                <Select value={form.position} onValueChange={(v) => setForm({ ...form, position: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select position" /></SelectTrigger>
+                  <SelectContent>{positions.map(p => <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2"><Label>Branch</Label><Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v })}><SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger><SelectContent>{branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent></Select></div>
               <div className="space-y-2"><Label>Salary (₱)</Label><Input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} placeholder="0.00" /></div>
               <div className="space-y-2"><Label>Hire Date</Label><Input type="date" value={form.hire_date} onChange={(e) => setForm({ ...form, hire_date: e.target.value })} /></div>
@@ -210,6 +267,23 @@ export default function EmployeesPage() {
               <div className="space-y-2"><Label>Email</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
             </div>
             <div className="space-y-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
+
+            {!editing && (
+              <div className="flex items-start space-x-2 rounded-lg border border-border p-3">
+                <Checkbox
+                  id="createLogin"
+                  checked={createLogin}
+                  onCheckedChange={(checked) => setCreateLogin(checked === true)}
+                />
+                <div>
+                  <Label htmlFor="createLogin" className="cursor-pointer">Create login account</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Generates a password and emails the login credentials to the Email address above (using the selected Position as their system role). Requires Email and Position to be filled in.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}{editing ? 'Update' : 'Add'} Employee</Button>

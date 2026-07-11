@@ -34,6 +34,25 @@ export function formatDateTime(date: string | Date | null | undefined): string {
   });
 }
 
+export function formatTime(date: string | Date | null | undefined): string {
+  if (!date) return '—';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  return d.toLocaleTimeString('en-PH', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function formatDuration(start: string | Date | null | undefined, end: string | Date | null | undefined): string {
+  if (!start || !end) return '—';
+  const s = typeof start === 'string' ? new Date(start) : start;
+  const e = typeof end === 'string' ? new Date(end) : end;
+  const minutes = Math.max(0, Math.round((e.getTime() - s.getTime()) / 60000));
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours}h ${mins}m`;
+}
+
 export function generateLoanNumber(): string {
   const year = new Date().getFullYear();
   const random = Math.floor(100000 + Math.random() * 900000);

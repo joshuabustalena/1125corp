@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "PowerShell(try { Invoke-WebRequest -Uri \"http://localhost:3000/api/employees/create-account\" -Method POST -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop } catch { $_.Exception.Response.StatusCode; $reader = New-Object System.IO.StreamReader\\($_.Exception.Response.GetResponseStream\\(\\)\\); $reader.ReadToEnd\\(\\) })",
+      "PowerShell(Get-Process -Id 20604)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId = 20604\")",
+      "PowerShell(try { Invoke-WebRequest -Uri \"http://localhost:3000/api/employees/create-account\" -Method POST -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop } catch { \"Status: $\\($_.Exception.Response.StatusCode\\)\" })",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/dashboard\" -UseBasicParsing -TimeoutSec 15; Write-Host \"Status: $\\($r.StatusCode\\)\" } catch { Write-Host \"ERROR: $\\($_.Exception.Message\\)\" })",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/attendance\" -UseBasicParsing -TimeoutSec 15; Write-Host \"Status: $\\($r.StatusCode\\)\" } catch { Write-Host \"ERROR: $\\($_.Exception.Message\\)\" })"
     ]
   }
 }

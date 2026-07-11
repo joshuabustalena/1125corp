@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   Users, Landmark, AlertCircle, Wallet, TrendingUp, Banknote,
-  Activity, UserCheck, ScrollText, Calendar, ArrowRight, Download,
+  Activity, UserCheck, ScrollText, Calendar, ArrowRight, Download, Loader2,
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -115,6 +115,15 @@ export default function DashboardPage() {
     { name: 'Absent', value: 4, color: '#EF4444' },
     { name: 'Leave', value: 3, color: '#3B82F6' },
   ];
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">Loading your dashboard...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

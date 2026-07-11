@@ -10,6 +10,7 @@ export interface UserProfile {
   full_name: string;
   role_id: string | null;
   role_name: string | null;
+  permissions: string[];
   branch_id: string | null;
   phone: string | null;
   avatar_url: string | null;
@@ -45,7 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const fetchProfile = useCallback(async (userId: string) => {
     const { data, error } = await supabase
       .from('profiles')
-      .select('*, roles(name)')
+      .select('*, roles(name, permissions)')
       .eq('id', userId)
       .maybeSingle();
 
@@ -57,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       full_name: data.full_name,
       role_id: data.role_id,
       role_name: data.roles?.name ?? null,
+      permissions: data.roles?.permissions ?? [],
       branch_id: data.branch_id,
       phone: data.phone,
       avatar_url: data.avatar_url,
