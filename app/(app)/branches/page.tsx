@@ -32,18 +32,16 @@ interface Branch {
   address: string | null;
   phone: string | null;
   email: string | null;
-  manager_id: string | null;
   max_loan_limit: number;
   status: string;
-  manager: { full_name: string } | null;
 }
 
 export default function BranchesPage() {
   const { toast } = useToast();
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [managers, setManagers] = useState<any[]>([]);
   const [employeeCounts, setEmployeeCounts] = useState<Record<string, number>>({});
   const [customerCounts, setCustomerCounts] = useState<Record<string, number>>({});
+  const [managersByBranch, setManagersByBranch] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -58,28 +56,33 @@ export default function BranchesPage() {
 
   const [form, setForm] = useState({
     name: '', code: '', address: '', phone: '', email: '',
-    manager_id: '', max_loan_limit: '80000', status: 'active',
+    max_loan_limit: '80000', status: 'active',
   });
 
   useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
-    const [branchesRes, managersRes, employeesRes, customersRes] = await Promise.all([
-      supabase.from('branches').select('*, manager:profiles!branches_manager_id_fkey(full_name)').order('name'),
-      supabase.from('profiles').select('id, full_name').order('full_name'),
-      supabase.from('employees').select('id, branch_id'),
+    const [branchesRes, employeesRes, customersRes] = await Promise.all([
+      supabase.from('branches').select('*').order('name'),
+      supabase.from('employees').select('id, branch_id, first_name, last_name, position'),
       supabase.from('customers').select('id, branch_id'),
     ]);
 
     setBranches(branchesRes.data ?? []);
-    setManagers(managersRes.data ?? []);
 
     const eCounts: Record<string, number> = {};
+    const managers: Record<string, string[]> = {};
     for (const e of employeesRes.data ?? []) {
-      if (e.branch_id) eCounts[e.branch_id] = (eCounts[e.branch_id] ?? 0) + 1;
+      if (e.branch_id) {
+        eCounts[e.branch_id] = (eCounts[e.branch_id] ?? 0) + 1;
+        if (e.position === 'Branch Manager') {
+          managers[e.branch_id] = [...(managers[e.branch_id] ?? []), `${e.first_name} ${e.last_name}`];
+        }
+      }
     }
     setEmployeeCounts(eCounts);
+    setManagersByBranch(managers);
 
     const cCounts: Record<string, number> = {};
     for (const c of customersRes.data ?? []) {
@@ -101,7 +104,7 @@ export default function BranchesPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ name: '', code: nextBranchCode(), address: '', phone: '', email: '', manager_id: '', max_loan_limit: '80000', status: 'active' });
+    setForm({ name: '', code: nextBranchCode(), address: '', phone: '', email: '', max_loan_limit: '80000', status: 'active' });
     setDialogOpen(true);
   }
 
@@ -109,8 +112,7 @@ export default function BranchesPage() {
     setEditing(b);
     setForm({
       name: b.name, code: b.code, address: b.address ?? '', phone: b.phone ?? '',
-      email: b.email ?? '', manager_id: b.manager_id ?? '',
-      max_loan_limit: String(b.max_loan_limit ?? '80000'), status: b.status,
+      email: b.email ?? '', max_loan_limit: String(b.max_loan_limit ?? '80000'), status: b.status,
     });
     setDialogOpen(true);
   }
@@ -133,7 +135,6 @@ export default function BranchesPage() {
     const payload = {
       name: form.name, code: form.code, address: form.address || null,
       phone: form.phone || null, email: form.email || null,
-      manager_id: form.manager_id || null,
       max_loan_limit: Number(form.max_loan_limit) || 0,
       status: form.status,
     };
@@ -158,7 +159,7 @@ export default function BranchesPage() {
 
   function handleExport() {
     exportToCSV(branches.map(b => ({
-      Name: b.name, Code: b.code, Manager: b.manager?.full_name ?? '',
+      Name: b.name, Code: b.code, Manager: (managersByBranch[b.id] ?? []).join('; '),
       Employees: employeeCounts[b.id] ?? 0, Customers: customerCounts[b.id] ?? 0,
       MaxLoanLimit: b.max_loan_limit, Status: b.status,
     })), 'branches.csv');
@@ -215,7 +216,7 @@ export default function BranchesPage() {
                         <div><p className="font-medium text-sm">{b.name}</p><p className="text-xs text-muted-foreground">{b.code}</p></div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-sm">{b.manager?.full_name ?? '—'}</TableCell>
+                    <TableCell className="text-sm">{(managersByBranch[b.id] ?? []).join(', ') || '—'}</TableCell>
                     <TableCell className="text-sm">
                       <span className="inline-flex items-center gap-1"><UserCog className="w-3.5 h-3.5 text-muted-foreground" />{employeeCounts[b.id] ?? 0}</span>
                     </TableCell>
@@ -251,13 +252,6 @@ export default function BranchesPage() {
               <div className="space-y-2 col-span-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
               <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
               <div className="space-y-2"><Label>Email</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-              <div className="space-y-2">
-                <Label>Manager</Label>
-                <Select value={form.manager_id} onValueChange={(v) => setForm({ ...form, manager_id: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
-                  <SelectContent>{managers.map(m => <SelectItem key={m.id} value={m.id}>{m.full_name}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
               <div className="space-y-2"><Label>Max Loan Limit (₱)</Label><Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} /></div>
               <div className="space-y-2">
                 <Label>Status</Label>
@@ -267,6 +261,9 @@ export default function BranchesPage() {
                 </Select>
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Manager is assigned automatically — add an employee to this branch with Position set to "Branch Manager" on the Employees page.
+            </p>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}{editing ? 'Update' : 'Add'} Branch</Button>
@@ -293,7 +290,9 @@ export default function BranchesPage() {
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Building2 className="w-5 h-5" />{viewTarget?.name}</DialogTitle>
-            <DialogDescription>{viewTarget?.code} · Manager: {viewTarget?.manager?.full_name ?? 'Unassigned'}</DialogDescription>
+            <DialogDescription>
+              {viewTarget?.code} · Manager: {viewTarget ? ((managersByBranch[viewTarget.id] ?? []).join(', ') || 'Unassigned') : ''}
+            </DialogDescription>
           </DialogHeader>
           {viewLoading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>

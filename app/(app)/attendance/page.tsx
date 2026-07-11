@@ -62,7 +62,11 @@ export default function AttendancePage() {
       setEmployees(data ?? []);
       return;
     }
-    const { data } = await supabase.from('employees').select('id, first_name, last_name').eq('email', profile?.email ?? '').maybeSingle();
+    let { data } = await supabase.from('employees').select('id, first_name, last_name').eq('profile_id', profile?.id ?? '').maybeSingle();
+    if (!data) {
+      // Fallback for employees not yet linked via profile_id (legacy records)
+      ({ data } = await supabase.from('employees').select('id, first_name, last_name').eq('email', profile?.email ?? '').maybeSingle());
+    }
     if (data) {
       setEmployees([data]);
       setMyEmployeeId(data.id);

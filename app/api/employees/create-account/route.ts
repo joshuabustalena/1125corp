@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Only administrators can create login accounts' }, { status: 403 });
   }
 
-  const { email, full_name, role_name, branch_id } = await request.json();
+  const { email, full_name, role_name, branch_id, employee_id } = await request.json();
   if (!email || !full_name || !role_name) {
     return NextResponse.json({ error: 'email, full_name, and role_name are required' }, { status: 400 });
   }
@@ -74,6 +74,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: profileError.message }, { status: 400 });
   }
 
+  if (employee_id) {
+    await supabaseAdmin.from('employees').update({ profile_id: created.user.id }).eq('id', employee_id);
+  }
+
   const resendApiKey = process.env.RESEND_API_KEY;
   let emailSent = false;
   let emailError: string | null = null;
@@ -82,7 +86,7 @@ export async function POST(request: NextRequest) {
     try {
       const resend = new Resend(resendApiKey);
       const { error: sendError } = await resend.emails.send({
-        from: 'admin@1125corp.org',
+        from: 'onboarding@resend.dev',
         to: email,
         subject: 'Your 1125Corp account has been created',
         html: `

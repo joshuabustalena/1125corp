@@ -14,6 +14,7 @@ import {
   Receipt,
   ShieldCheck,
   Building2,
+  MapPin,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -40,6 +41,7 @@ export const navSections: NavSection[] = [
     title: 'Organization',
     items: [
       { label: 'Branches', href: '/branches', icon: Building2 },
+      { label: 'Areas', href: '/areas', icon: MapPin },
     ],
   },
   {

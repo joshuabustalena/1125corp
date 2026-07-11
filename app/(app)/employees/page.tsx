@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
@@ -29,6 +29,7 @@ export default function EmployeesPage() {
   const { toast } = useToast();
   const [employees, setEmployees] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  const [areas, setAreas] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -43,14 +44,19 @@ export default function EmployeesPage() {
 
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', department: '', position: '',
-    branch_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
+    branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
   });
 
-  useEffect(() => { load(); loadBranches(); loadPositions(); }, [search, page]);
+  useEffect(() => { load(); loadBranches(); loadAreas(); loadPositions(); }, [search, page]);
 
   async function loadBranches() {
     const { data } = await supabase.from('branches').select('id, name').eq('status', 'active');
     setBranches(data ?? []);
+  }
+
+  async function loadAreas() {
+    const { data } = await supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
+    setAreas(data ?? []);
   }
 
   async function loadPositions() {
@@ -71,7 +77,7 @@ export default function EmployeesPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '' });
+    setForm({ first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '' });
     setCreateLogin(true);
     setDialogOpen(true);
   }
@@ -80,7 +86,7 @@ export default function EmployeesPage() {
     setEditing(e);
     setForm({
       first_name: e.first_name, last_name: e.last_name, middle_name: e.middle_name ?? '',
-      department: e.department ?? '', position: e.position ?? '', branch_id: e.branch_id ?? '',
+      department: e.department ?? '', position: e.position ?? '', branch_id: e.branch_id ?? '', area_id: e.area_id ?? '',
       salary: String(e.salary ?? ''), status: e.status, hire_date: e.hire_date ?? '',
       phone: e.phone ?? '', email: e.email ?? '', address: e.address ?? '',
     });
@@ -93,7 +99,9 @@ export default function EmployeesPage() {
     const payload = {
       first_name: form.first_name, last_name: form.last_name, middle_name: form.middle_name || null,
       department: form.department || null, position: form.position || null,
-      branch_id: form.branch_id || null, salary: Number(form.salary) || 0,
+      branch_id: form.branch_id || null,
+      area_id: form.position === 'Collector' ? (form.area_id || null) : null,
+      salary: Number(form.salary) || 0,
       status: form.status, hire_date: form.hire_date || null,
       phone: form.phone || null, email: form.email || null, address: form.address || null,
     };
@@ -102,7 +110,7 @@ export default function EmployeesPage() {
       if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
       else { toast({ title: 'Success', description: 'Employee updated' }); setDialogOpen(false); load(); }
     } else {
-      const { error } = await supabase.from('employees').insert(payload);
+      const { data: inserted, error } = await supabase.from('employees').insert(payload).select('id').single();
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
         setSaving(false);
@@ -111,7 +119,7 @@ export default function EmployeesPage() {
       toast({ title: 'Success', description: 'Employee added' });
 
       if (createLogin && form.email && form.position) {
-        await createLoginAccount();
+        await createLoginAccount(inserted.id);
       }
 
       setDialogOpen(false);
@@ -120,7 +128,7 @@ export default function EmployeesPage() {
     setSaving(false);
   }
 
-  async function createLoginAccount() {
+  async function createLoginAccount(employeeId: string) {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
@@ -133,6 +141,7 @@ export default function EmployeesPage() {
           full_name: `${form.first_name} ${form.last_name}`,
           role_name: form.position,
           branch_id: form.branch_id || null,
+          employee_id: employeeId,
         }),
       });
       const result = await res.json();
@@ -153,6 +162,22 @@ export default function EmployeesPage() {
 
   async function handleDelete() {
     if (!deleteTarget) return;
+
+    if (deleteTarget.profile_id) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const res = await fetch('/api/employees/delete-account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ profile_id: deleteTarget.profile_id }),
+        });
+        if (!res.ok) {
+          const result = await res.json().catch(() => ({}));
+          toast({ title: 'Login account not deleted', description: result.error ?? 'Unknown error', variant: 'destructive' });
+        }
+      }
+    }
+
     const { error } = await supabase.from('employees').delete().eq('id', deleteTarget.id);
     if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
     else { toast({ title: 'Success', description: 'Employee deleted' }); setDeleteTarget(null); load(); }
@@ -211,7 +236,10 @@ export default function EmployeesPage() {
                     <TableRow key={e.id} className="hover:bg-secondary/50">
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <Avatar className="w-9 h-9"><AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(`${e.first_name} ${e.last_name}`)}</AvatarFallback></Avatar>
+                          <Avatar className="w-9 h-9">
+                            <AvatarImage src={e.photo_url ?? undefined} className="object-cover" />
+                            <AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(`${e.first_name} ${e.last_name}`)}</AvatarFallback>
+                          </Avatar>
                           <div><p className="font-medium text-sm">{e.first_name} {e.last_name}</p><p className="text-xs text-muted-foreground">{e.email ?? ''}</p></div>
                         </div>
                       </TableCell>
@@ -254,12 +282,29 @@ export default function EmployeesPage() {
               <div className="space-y-2"><Label>Department</Label><Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="e.g. Operations" /></div>
               <div className="space-y-2">
                 <Label>Position</Label>
-                <Select value={form.position} onValueChange={(v) => setForm({ ...form, position: v })}>
+                <Select value={form.position} onValueChange={(v) => setForm({ ...form, position: v, area_id: v === 'Collector' ? form.area_id : '' })}>
                   <SelectTrigger><SelectValue placeholder="Select position" /></SelectTrigger>
                   <SelectContent>{positions.map(p => <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2"><Label>Branch</Label><Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v })}><SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger><SelectContent>{branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2">
+                <Label>Branch</Label>
+                <Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v, area_id: '' })}>
+                  <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
+                  <SelectContent>{branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              {form.position === 'Collector' && (
+                <div className="space-y-2">
+                  <Label>Area</Label>
+                  <Select value={form.area_id} onValueChange={(v) => setForm({ ...form, area_id: v })} disabled={!form.branch_id}>
+                    <SelectTrigger><SelectValue placeholder={form.branch_id ? 'Select area' : 'Select a branch first'} /></SelectTrigger>
+                    <SelectContent>
+                      {areas.filter(a => a.branch_id === form.branch_id).map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="space-y-2"><Label>Salary (₱)</Label><Input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} placeholder="0.00" /></div>
               <div className="space-y-2"><Label>Hire Date</Label><Input type="date" value={form.hire_date} onChange={(e) => setForm({ ...form, hire_date: e.target.value })} /></div>
               <div className="space-y-2"><Label>Status</Label><Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem><SelectItem value="resigned">Resigned</SelectItem></SelectContent></Select></div>
@@ -294,7 +339,13 @@ export default function EmployeesPage() {
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Delete Employee</DialogTitle><DialogDescription>Are you sure you want to delete {deleteTarget?.first_name} {deleteTarget?.last_name}?</DialogDescription></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Delete Employee</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete {deleteTarget?.first_name} {deleteTarget?.last_name}?
+              {deleteTarget?.profile_id && ' Their login account will also be permanently deleted.'}
+            </DialogDescription>
+          </DialogHeader>
           <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={handleDelete}>Delete</Button></DialogFooter>
         </DialogContent>
       </Dialog>

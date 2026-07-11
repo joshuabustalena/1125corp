@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { useTheme } from '@/lib/theme-context';
+import { hasPermission } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -138,11 +139,19 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/settings" className="cursor-pointer">
-                <SettingsIcon className="w-4 h-4 mr-2" />
-                Settings
+              <Link href="/profile" className="cursor-pointer">
+                <User className="w-4 h-4 mr-2" />
+                My Profile
               </Link>
             </DropdownMenuItem>
+            {hasPermission(profile?.permissions, 'settings') && (
+              <DropdownMenuItem asChild>
+                <Link href="/settings" className="cursor-pointer">
+                  <SettingsIcon className="w-4 h-4 mr-2" />
+                  Settings
+                </Link>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() => signOut().then(() => router.push('/login'))}

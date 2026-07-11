@@ -6,7 +6,9 @@
 export const PAGE_PERMISSIONS: Record<string, string | null> = {
   '/dashboard': null,
   '/search': null,
+  '/profile': null,
   '/branches': 'branches',
+  '/areas': 'branches',
   '/customers': 'customers',
   '/loans': 'loans',
   '/payments': 'payments',
