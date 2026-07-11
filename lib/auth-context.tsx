@@ -36,35 +36,11 @@ const AuthContext = createContext<AuthContextType>({
   refreshProfile: async () => {},
 });
 
-const DEV_BYPASS_AUTH = process.env.NEXT_PUBLIC_DEV_BYPASS_AUTH === 'true';
-
-const DEV_BYPASS_PROFILE: UserProfile = {
-  id: 'dev-bypass-admin',
-  email: 'admin@1125corp.org',
-  full_name: 'System Administrator (dev bypass)',
-  role_id: 'dev-bypass-role',
-  role_name: 'Administrator',
-  branch_id: null,
-  phone: null,
-  avatar_url: null,
-  status: 'active',
-};
-
-const DEV_BYPASS_USER = {
-  id: 'dev-bypass-admin',
-  aud: 'authenticated',
-  role: 'authenticated',
-  email: 'admin@1125corp.org',
-  app_metadata: {},
-  user_metadata: {},
-  created_at: new Date().toISOString(),
-} as User;
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(DEV_BYPASS_AUTH ? DEV_BYPASS_USER : null);
+  const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(DEV_BYPASS_AUTH ? DEV_BYPASS_PROFILE : null);
-  const [loading, setLoading] = useState(!DEV_BYPASS_AUTH);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const fetchProfile = useCallback(async (userId: string) => {
     const { data, error } = await supabase
@@ -89,8 +65,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (DEV_BYPASS_AUTH) return;
-
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -118,17 +92,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [fetchProfile]);
 
   const signIn = async (email: string, password: string) => {
-    if (DEV_BYPASS_AUTH) {
-      setUser(DEV_BYPASS_USER);
-      setProfile(DEV_BYPASS_PROFILE);
-      return { error: null };
-    }
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return { error: error?.message ?? null };
   };
 
   const signOut = async () => {
-    if (!DEV_BYPASS_AUTH) await supabase.auth.signOut();
+    await supabase.auth.signOut();
     setProfile(null);
     setUser(null);
     setSession(null);

@@ -1,16 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install *)",
-      "PowerShell(npm --version)",
-      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" | Select-Object Name; Write-Host \"---MACHINE PATH---\"; [Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) -split ';' | Select-String \"nodejs\"; Write-Host \"---USER PATH---\"; [Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\) -split ';' | Select-String \"nodejs\")",
-      "PowerShell(& \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" install)",
-      "PowerShell(& \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" run dev)",
-      "PowerShell(Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue)",
-      "PowerShell(Get-Process node -ErrorAction SilentlyContinue)",
-      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3000\" -UseBasicParsing -TimeoutSec 15; Write-Host \"Status: $\\($r.StatusCode\\)\"; $r.Content.Substring\\(0,[Math]::Min\\(300,$r.Content.Length\\)\\) } catch { Write-Host \"ERROR: $_\" })",
-      "PowerShell([Environment]::GetEnvironmentVariable\\(\"Path\", \"User\"\\))",
-      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/branches\" -UseBasicParsing -TimeoutSec 15; Write-Host \"Status: $\\($r.StatusCode\\)\" } catch { Write-Host \"ERROR: $\\($_.Exception.Message\\)\" })"
+      "Bash(git config *)"
     ]
   }
 }
