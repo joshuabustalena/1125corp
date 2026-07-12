@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,6 +17,7 @@ import { getInitials, exportToCSV } from '@/lib/format';
 import { UserCheck, Search, Download, Loader2 } from 'lucide-react';
 
 export default function CollectorsPage() {
+  const router = useRouter();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const [collectors, setCollectors] = useState<any[]>([]);
@@ -98,7 +100,7 @@ export default function CollectorsPage() {
                 </TableRow>
               ) : (
                 filtered.map(c => (
-                  <TableRow key={c.id} className="hover:bg-secondary/50">
+                  <TableRow key={c.id} className="cursor-pointer hover:bg-secondary/50" onClick={() => router.push(`/collectors/${c.id}`)}>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="w-9 h-9">

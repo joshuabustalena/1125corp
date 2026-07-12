@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth-context';
 
 interface Customer {
   id: string;
@@ -54,6 +55,8 @@ interface Customer {
 export default function CustomersPage() {
   const router = useRouter();
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
@@ -79,14 +82,21 @@ export default function CustomersPage() {
   });
 
   useEffect(() => {
+    if (!profile) return;
     loadCustomers();
     loadOptions();
-  }, [search, branchFilter, statusFilter, page]);
+  }, [profile, search, branchFilter, statusFilter, page]);
 
   async function loadOptions() {
+    let branchQuery = supabase.from('branches').select('id, name').eq('status', 'active');
+    let areaQuery = supabase.from('areas').select('id, name, branch_id, max_loan_limit').eq('status', 'active');
+    if (!isAdmin && profile?.branch_id) {
+      branchQuery = branchQuery.eq('id', profile.branch_id);
+      areaQuery = areaQuery.eq('branch_id', profile.branch_id);
+    }
     const [b, a, c, ac] = await Promise.all([
-      supabase.from('branches').select('id, name').eq('status', 'active'),
-      supabase.from('areas').select('id, name, branch_id, max_loan_limit').eq('status', 'active'),
+      branchQuery,
+      areaQuery,
       supabase.from('collectors').select('id, profile_id, branch_id, area_id, profiles(full_name)').eq('status', 'active'),
       supabase.from('customers').select('id, area_id, max_loan_limit'),
     ]);
@@ -114,7 +124,11 @@ export default function CustomersPage() {
     if (search) {
       query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,phone.ilike.%${search}%`);
     }
-    if (branchFilter !== 'all') query = query.eq('branch_id', branchFilter);
+    if (!isAdmin) {
+      query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (branchFilter !== 'all') {
+      query = query.eq('branch_id', branchFilter);
+    }
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
 
     query = query.range((page - 1) * pageSize, page * pageSize - 1).order('created_at', { ascending: false });
@@ -130,7 +144,7 @@ export default function CustomersPage() {
     setForm({
       first_name: '', last_name: '', middle_name: '', phone: '', email: '',
       address: '', barangay: '', city: '', province: '', zip_code: '',
-      branch_id: '', area_id: '', collector_id: '', max_loan_limit: '80000',
+      branch_id: !isAdmin ? (profile?.branch_id ?? '') : '', area_id: '', collector_id: '', max_loan_limit: '80000',
       status: 'active', gender: '', birth_date: '', government_id: '',
     });
     setDialogOpen(true);
@@ -271,6 +285,7 @@ export default function CustomersPage() {
                 className="pl-10"
               />
             </div>
+            {isAdmin && (
             <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setPage(1); }}>
               <SelectTrigger className="w-full sm:w-48">
                 <SelectValue placeholder="All Branches" />
@@ -282,6 +297,7 @@ export default function CustomersPage() {
                 ))}
               </SelectContent>
             </Select>
+            )}
             <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
               <SelectTrigger className="w-full sm:w-40">
                 <SelectValue placeholder="All Status" />
@@ -441,7 +457,11 @@ export default function CustomersPage() {
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>Branch</Label>
-                <Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v, area_id: '', collector_id: '' })}>
+                <Select
+                  value={form.branch_id}
+                  onValueChange={(v) => setForm({ ...form, branch_id: v, area_id: '', collector_id: '' })}
+                  disabled={!isAdmin}
+                >
                   <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
                   <SelectContent>
                     {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
