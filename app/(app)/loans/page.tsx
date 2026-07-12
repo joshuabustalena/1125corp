@@ -10,6 +10,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
@@ -23,7 +26,8 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exportToCSV } from '@/lib/format';
 import {
   Landmark, Plus, Search, Download, Eye, Loader2, Calculator, RefreshCw,
-  CalendarDays, ChevronLeft, ChevronRight, CheckCircle2, Circle, Upload, FileText,
+  CalendarDays, ChevronLeft, ChevronRight,
+  ChevronDown, Check,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -40,26 +44,27 @@ interface Loan {
   status: string;
   due_date: string | null;
   release_date: string | null;
+  decline_reason: string | null;
   customer_id: string;
+  loan_type_id: string | null;
+  term_days: number;
+  collector_id: string | null;
+  branch_id: string | null;
+  area_id: string | null;
+  reapplied: boolean;
   customers: { first_name: string; last_name: string } | null;
   collectors: { profiles: { full_name: string } } | null;
   branches: { name: string } | null;
+  areas: { name: string } | null;
   loan_types: { name: string } | null;
 }
-
-const REQUIRED_DOCUMENTS = [
-  { type: 'valid_id', label: 'Valid Government ID' },
-  { type: 'clearance', label: 'Barangay Clearance' },
-  { type: 'proof_of_billing', label: 'Proof of Billing' },
-  { type: 'promissory_note', label: 'Promissory Note' },
-];
 
 export default function LoansPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const { profile } = useAuth();
-  const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
+  const isAdmin = profile?.role_name === 'Administrator';
   const [loans, setLoans] = useState<Loan[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -69,6 +74,8 @@ export default function LoansPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [customerFilter, setCustomerFilter] = useState('all');
+  const [areaFilter, setAreaFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -76,10 +83,7 @@ export default function LoansPage() {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleMonth, setScheduleMonth] = useState(new Date());
   const [existingLoanBlock, setExistingLoanBlock] = useState<string | null>(null);
-  const [approveLoan, setApproveLoan] = useState<Loan | null>(null);
-  const [approveDocs, setApproveDocs] = useState<any[]>([]);
-  const [approveDocsLoading, setApproveDocsLoading] = useState(false);
-  const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
+  const [reapplyingId, setReapplyingId] = useState<string | null>(null);
   const pageSize = 10;
 
   const [form, setForm] = useState({
@@ -131,15 +135,22 @@ export default function LoansPage() {
   }, [form.customer_id, customers]);
 
   useEffect(() => {
+    if (!profile) return;
     loadLoans();
     loadOptions();
-  }, [search, statusFilter, page]);
+  }, [profile, search, statusFilter, customerFilter, areaFilter, page]);
 
   async function loadOptions() {
+    let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('first_name');
+    let areaQuery = supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
+    if (!isAdmin) {
+      customerQuery = customerQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
+      areaQuery = areaQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
+    }
     const [c, b, a, col, lt] = await Promise.all([
-      supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('first_name'),
+      customerQuery,
       supabase.from('branches').select('id, name').eq('status', 'active'),
-      supabase.from('areas').select('id, name, branch_id').eq('status', 'active'),
+      areaQuery,
       supabase.from('collectors').select('id, branch_id, area_id, profiles(full_name)').eq('status', 'active'),
       supabase.from('loan_types').select('id, name, interest_rate, term_days').eq('status', 'active'),
     ]);
@@ -154,12 +165,17 @@ export default function LoansPage() {
     setLoading(true);
     let query = supabase
       .from('loans')
-      .select('*, customers(first_name, last_name), collectors(profiles(full_name)), branches(name), loan_types(name)', { count: 'exact' });
+      .select('*, customers(first_name, last_name), collectors(profiles(full_name)), branches(name), areas(name), loan_types(name)', { count: 'exact' });
 
     if (search) {
       query = query.or(`loan_number.ilike.%${search}%`);
     }
+    if (!isAdmin) {
+      query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
+    }
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
+    if (customerFilter !== 'all') query = query.eq('customer_id', customerFilter);
+    if (areaFilter !== 'all') query = query.eq('area_id', areaFilter);
 
     query = query.range((page - 1) * pageSize, page * pageSize - 1).order('created_at', { ascending: false });
 
@@ -276,70 +292,38 @@ export default function LoansPage() {
     setSaving(false);
   }
 
-  async function handleApprove(loanId: string, loanNumber: string) {
-    const { error } = await supabase.from('loans').update({ status: 'active' }).eq('id', loanId);
+  async function handleReapply(l: Loan) {
+    setReapplyingId(l.id);
+    const newLoanNumber = generateLoanNumber();
+    const releaseDate = new Date().toISOString().split('T')[0];
+    const { error } = await supabase.from('loans').insert({
+      loan_number: newLoanNumber,
+      customer_id: l.customer_id,
+      loan_type_id: l.loan_type_id,
+      amount: l.amount,
+      interest_rate: l.interest_rate,
+      interest_amount: l.interest_amount,
+      service_fee: l.service_fee,
+      release_amount: l.release_amount,
+      total_payable: l.total_payable,
+      remaining_balance: l.total_payable,
+      term_days: l.term_days,
+      collector_id: l.collector_id,
+      branch_id: l.branch_id,
+      area_id: l.area_id,
+      status: 'pending',
+      release_date: releaseDate,
+      due_date: new Date(Date.now() + l.term_days * 86400000).toISOString().split('T')[0],
+    });
+
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Loan approved', description: `${loanNumber} is now active.` });
+      await supabase.from('loans').update({ reapplied: true }).eq('id', l.id);
+      toast({ title: 'Re-submitted for approval', description: `New application ${newLoanNumber} is pending review.` });
       loadLoans();
     }
-  }
-
-  async function openApprove(loan: Loan) {
-    setApproveLoan(loan);
-    setApproveDocsLoading(true);
-    const { data } = await supabase
-      .from('customer_documents')
-      .select('*')
-      .eq('customer_id', loan.customer_id);
-    setApproveDocs(data ?? []);
-    setApproveDocsLoading(false);
-  }
-
-  async function handleDocUpload(docType: string, file: File) {
-    if (!approveLoan) return;
-    setUploadingDocType(docType);
-    const ext = file.name.split('.').pop();
-    const path = `${approveLoan.customer_id}/${docType}-${Date.now()}.${ext}`;
-
-    const { error: uploadError } = await supabase.storage.from('customer-documents').upload(path, file, {
-      contentType: file.type,
-    });
-    if (uploadError) {
-      toast({ title: 'Upload failed', description: uploadError.message, variant: 'destructive' });
-      setUploadingDocType(null);
-      return;
-    }
-
-    const { data: urlData } = supabase.storage.from('customer-documents').getPublicUrl(path);
-    const { error: insertError } = await supabase.from('customer_documents').insert({
-      customer_id: approveLoan.customer_id,
-      document_type: docType,
-      file_name: file.name,
-      file_url: urlData.publicUrl,
-    });
-
-    if (insertError) {
-      toast({ title: 'Error', description: insertError.message, variant: 'destructive' });
-    } else {
-      const { data } = await supabase
-        .from('customer_documents')
-        .select('*')
-        .eq('customer_id', approveLoan.customer_id);
-      setApproveDocs(data ?? []);
-    }
-    setUploadingDocType(null);
-  }
-
-  const missingDocs = approveLoan
-    ? REQUIRED_DOCUMENTS.filter(rd => !approveDocs.some(d => d.document_type === rd.type))
-    : [];
-
-  async function handleConfirmApprove() {
-    if (!approveLoan || missingDocs.length > 0) return;
-    await handleApprove(approveLoan.id, approveLoan.loan_number);
-    setApproveLoan(null);
+    setReapplyingId(null);
   }
 
   function handleExport() {
@@ -363,6 +347,7 @@ export default function LoansPage() {
     switch (status) {
       case 'active': return 'default';
       case 'overdue': return 'destructive';
+      case 'declined': return 'destructive';
       case 'paid': return 'secondary';
       case 'pending': return 'outline';
       default: return 'secondary';
@@ -376,10 +361,12 @@ export default function LoansPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        <Button size="sm" onClick={() => { setExistingLoanBlock(null); setDialogOpen(true); }}>
-          <Plus className="w-4 h-4 mr-2" />
-          New Loan
-        </Button>
+        {profile?.role_name !== 'Cashier' && (
+          <Button size="sm" onClick={() => { setExistingLoanBlock(null); setDialogOpen(true); }}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Loan
+          </Button>
+        )}
       </PageHeader>
 
       {/* Filters */}
@@ -395,18 +382,6 @@ export default function LoansPage() {
                 className="pl-10"
               />
             </div>
-            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
-              <SelectTrigger className="w-full sm:w-40">
-                <SelectValue placeholder="All Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="overdue">Overdue</SelectItem>
-                <SelectItem value="paid">Paid</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
         </CardContent>
       </Card>
@@ -414,33 +389,96 @@ export default function LoansPage() {
       {/* Table */}
       <Card className="glass-card border-border">
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : loans.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <Landmark className="w-12 h-12 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">No loans found</p>
-            </div>
-          ) : (
-            <>
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Loan #</TableHead>
-                    <TableHead>Customer</TableHead>
+                    <TableHead>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
+                          Customer
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem onClick={() => { setCustomerFilter('all'); setPage(1); }} className="flex items-center justify-between">
+                            All Customers
+                            {customerFilter === 'all' && <Check className="w-4 h-4" />}
+                          </DropdownMenuItem>
+                          {customers.map(c => (
+                            <DropdownMenuItem key={c.id} onClick={() => { setCustomerFilter(c.id); setPage(1); }} className="flex items-center justify-between">
+                              {c.first_name} {c.last_name}
+                              {customerFilter === c.id && <Check className="w-4 h-4" />}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Interest</TableHead>
                     <TableHead>Release</TableHead>
                     <TableHead>Balance</TableHead>
                     <TableHead>Due Date</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
+                          Status
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          {[
+                            ['all', 'All Status'],
+                            ['pending', 'Pending'],
+                            ['active', 'Active'],
+                            ['declined', 'Declined'],
+                            ['overdue', 'Overdue'],
+                            ['paid', 'Paid'],
+                          ].map(([value, label]) => (
+                            <DropdownMenuItem key={value} onClick={() => { setStatusFilter(value); setPage(1); }} className="flex items-center justify-between">
+                              {label}
+                              {statusFilter === value && <Check className="w-4 h-4" />}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableHead>
+                    <TableHead>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
+                          Area
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem onClick={() => { setAreaFilter('all'); setPage(1); }} className="flex items-center justify-between">
+                            All Areas
+                            {areaFilter === 'all' && <Check className="w-4 h-4" />}
+                          </DropdownMenuItem>
+                          {areas.map(a => (
+                            <DropdownMenuItem key={a.id} onClick={() => { setAreaFilter(a.id); setPage(1); }} className="flex items-center justify-between">
+                              {a.name}
+                              {areaFilter === a.id && <Check className="w-4 h-4" />}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loans.map((l) => (
+                  {loading ? (
+                    <TableRow>
+                      <TableCell colSpan={10} className="py-16 text-center">
+                        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
+                      </TableCell>
+                    </TableRow>
+                  ) : loans.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={10} className="py-16 text-center">
+                        <Landmark className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
+                        <p className="text-sm text-muted-foreground">No loans found</p>
+                      </TableCell>
+                    </TableRow>
+                  ) : loans.map((l) => (
                     <TableRow key={l.id} className="cursor-pointer hover:bg-secondary/50" onClick={() => router.push(`/loans/${l.id}`)}>
                       <TableCell className="font-medium text-sm">{l.loan_number}</TableCell>
                       <TableCell className="text-sm">{l.customers?.first_name} {l.customers?.last_name}</TableCell>
@@ -452,15 +490,17 @@ export default function LoansPage() {
                       <TableCell>
                         <Badge variant={statusVariant(l.status)}>{l.status}</Badge>
                       </TableCell>
+                      <TableCell className="text-sm">{l.areas?.name ?? '—'}</TableCell>
                       <TableCell className="text-right">
-                        {l.status === 'pending' && canApprove && (
+                        {l.status === 'declined' && !l.reapplied && profile?.role_name !== 'Cashier' && (
                           <Button
                             variant="outline"
                             size="sm"
                             className="mr-1"
-                            onClick={(e) => { e.stopPropagation(); openApprove(l); }}
+                            disabled={reapplyingId === l.id}
+                            onClick={(e) => { e.stopPropagation(); handleReapply(l); }}
                           >
-                            Approve
+                            {reapplyingId === l.id ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Re-apply'}
                           </Button>
                         )}
                         <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); router.push(`/loans/${l.id}`); }}>
@@ -473,15 +513,13 @@ export default function LoansPage() {
               </Table>
               <div className="flex items-center justify-between p-4 border-t border-border">
                 <p className="text-sm text-muted-foreground">
-                  Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+                  Showing {total === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
                 </p>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</Button>
                   <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
                 </div>
               </div>
-            </>
-          )}
         </CardContent>
       </Card>
 
@@ -658,83 +696,6 @@ export default function LoansPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Approve loan — requires KYC documents on file */}
-      <Dialog open={!!approveLoan} onOpenChange={(open) => !open && setApproveLoan(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Approve {approveLoan?.loan_number}</DialogTitle>
-            <DialogDescription>
-              All required documents for {approveLoan?.customers?.first_name} {approveLoan?.customers?.last_name} must be on file before this loan can be approved.
-            </DialogDescription>
-          </DialogHeader>
-
-          {approveDocsLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {REQUIRED_DOCUMENTS.map(rd => {
-                const doc = approveDocs.find(d => d.document_type === rd.type);
-                return (
-                  <div key={rd.type} className="flex items-center gap-3 p-3 rounded-lg bg-secondary/50">
-                    {doc ? (
-                      <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
-                    ) : (
-                      <Circle className="w-5 h-5 text-muted-foreground shrink-0" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">{rd.label}</p>
-                      {doc ? (
-                        <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
-                          <FileText className="w-3 h-3" /> {doc.file_name ?? 'View file'}
-                        </a>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">Not uploaded yet</p>
-                      )}
-                    </div>
-                    <div>
-                      <input
-                        type="file"
-                        id={`doc-upload-${rd.type}`}
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleDocUpload(rd.type, file);
-                          e.target.value = '';
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={uploadingDocType === rd.type}
-                        onClick={() => document.getElementById(`doc-upload-${rd.type}`)?.click()}
-                      >
-                        {uploadingDocType === rd.type ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <>
-                            <Upload className="w-4 h-4 mr-1.5" />
-                            {doc ? 'Replace' : 'Upload'}
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setApproveLoan(null)}>Cancel</Button>
-            <Button type="button" disabled={missingDocs.length > 0 || approveDocsLoading} onClick={handleConfirmApprove}>
-              {missingDocs.length > 0 ? `${missingDocs.length} document${missingDocs.length > 1 ? 's' : ''} missing` : 'Approve Loan'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

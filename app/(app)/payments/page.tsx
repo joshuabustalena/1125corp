@@ -135,7 +135,7 @@ export default function PaymentsPage() {
   async function loadLoans() {
     const { data } = await supabase
       .from('loans')
-      .select('id, loan_number, remaining_balance, status, total_payable, term_days, customer_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
+      .select('id, loan_number, remaining_balance, status, total_payable, term_days, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
       .in('status', ['active', 'overdue'])
       .order('loan_number');
     setLoans(data ?? []);
@@ -192,6 +192,7 @@ export default function PaymentsPage() {
       or_number: orNumber,
       loan_id: form.loan_id,
       customer_id: selectedLoan?.customer_id ?? null,
+      collector_id: selectedLoan?.collector_id ?? null,
       amount: Number(form.amount_paid),
       remaining_balance: newBalance,
       payment_date: paymentDate,
@@ -208,6 +209,7 @@ export default function PaymentsPage() {
     const { error: payError } = await supabase.from('payments').insert({
       loan_id: form.loan_id,
       customer_id: selectedLoan?.customer_id ?? null,
+      collector_id: selectedLoan?.collector_id ?? null,
       receipt_id: receipt.id,
       amount_paid: Number(form.amount_paid),
       principal: 0,
@@ -235,6 +237,11 @@ export default function PaymentsPage() {
 
     toast({ title: 'Success', description: `Payment posted. OR: ${orNumber}` });
 
+    const dailyDue = selectedLoan && selectedLoan.term_days > 0 ? selectedLoan.total_payable / selectedLoan.term_days : 0;
+    const amountPaidNum = Number(form.amount_paid);
+    const daysCovered = dailyDue > 0 ? Math.floor((amountPaidNum + 0.001) / dailyDue) : 0;
+    const advanceCredit = dailyDue > 0 ? Math.round((amountPaidNum - daysCovered * dailyDue) * 100) / 100 : 0;
+
     setReceiptData({
       orNumber,
       loanNumber: selectedLoan?.loan_number,
@@ -243,9 +250,12 @@ export default function PaymentsPage() {
       branchName: selectedLoan?.branches?.name ?? null,
       areaName: selectedLoan?.areas?.name ?? null,
       collectorName: selectedLoan?.collectors?.profiles?.full_name ?? null,
-      amount: Number(form.amount_paid),
+      amount: amountPaidNum,
       remainingBalance: newBalance,
       date: paymentDate,
+      dailyDue,
+      daysCovered,
+      advanceCredit,
     });
 
     setForm({ ...form, loan_id: '', amount_paid: '', payment_date: new Date().toISOString().split('T')[0], notes: '' });
@@ -280,10 +290,12 @@ export default function PaymentsPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        <Button size="sm" onClick={() => setDialogOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          Post Collection
-        </Button>
+        {profile?.role_name !== 'Cashier' && (
+          <Button size="sm" onClick={() => setDialogOpen(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            Post Collection
+          </Button>
+        )}
       </PageHeader>
 
       {/* Filters */}
@@ -521,6 +533,12 @@ export default function PaymentsPage() {
               <div className="py-4 text-center">
                 <p className="text-xs" style={{ color: '#6B7280' }}>Amount Paid</p>
                 <p className="text-3xl font-bold" style={{ color: '#16A34A' }}>{formatCurrency(receiptData.amount)}</p>
+                {receiptData.daysCovered > 0 && (
+                  <p className="text-xs mt-1" style={{ color: '#6B7280' }}>
+                    Covers {receiptData.daysCovered} day{receiptData.daysCovered > 1 ? 's' : ''} of payment
+                    {receiptData.advanceCredit > 0.009 && ` + ${formatCurrency(receiptData.advanceCredit)} advance toward the next day`}
+                  </p>
+                )}
               </div>
 
               <div className="rounded-lg p-3 flex justify-between text-sm" style={{ backgroundColor: '#F3F4F6' }}>
