@@ -7,8 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Building2, Eye, EyeOff, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
+import { Eye, EyeOff, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -47,8 +48,8 @@ export default function LoginPage() {
         </div>
         <div className="relative z-10 flex flex-col justify-between p-12 text-white">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-white/10 backdrop-blur flex items-center justify-center">
-              <Building2 className="w-7 h-7" />
+            <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center overflow-hidden shrink-0">
+              <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={48} height={48} className="object-contain" />
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight">1125Corp</h1>
@@ -89,8 +90,8 @@ export default function LoginPage() {
       <div className="flex-1 flex items-center justify-center p-6 bg-secondary">
         <div className="w-full max-w-md animate-slide-up">
           <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-            <div className="w-12 h-12 rounded-xl bg-[rgb(11,31,58)] flex items-center justify-center">
-              <Building2 className="w-7 h-7 text-white" />
+            <div className="w-12 h-12 rounded-xl bg-white border border-border flex items-center justify-center overflow-hidden shrink-0">
+              <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={48} height={48} className="object-contain" />
             </div>
             <div>
               <h1 className="text-2xl font-bold text-primary">1125Corp</h1>

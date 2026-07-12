@@ -10,6 +10,9 @@ const inter = Inter({ subsets: ['latin'] });
 export const metadata: Metadata = {
   title: '1125Corp — Enterprise Loan Management System',
   description: '1125Corp — Professional loan management, collections, payroll, and accounting platform for lending corporations.',
+  icons: {
+    icon: '/image/1125_Corp_Logo.png',
+  },
   openGraph: {
     title: '1125Corp',
     description: 'Enterprise Loan Management System',

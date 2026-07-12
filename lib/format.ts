@@ -70,7 +70,10 @@ export function computeLoanDetails(
   interestRate: number,
   termDays: number,
 ) {
-  const interestAmount = (amount * interestRate) / 100;
+  // Interest rate is always a monthly rate — scale it by the number of
+  // months in the term (30-day months) rather than applying it once flat.
+  const months = termDays / 30;
+  const interestAmount = amount * (interestRate / 100) * months;
   const totalPayable = amount + interestAmount;
   const serviceFee = amount >= 10000 ? amount * 0.03 : 300;
   const releaseAmount = amount - serviceFee;

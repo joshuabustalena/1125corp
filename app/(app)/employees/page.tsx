@@ -93,6 +93,26 @@ export default function EmployeesPage() {
     setDialogOpen(true);
   }
 
+  // customers.collector_id references the separate `collectors` table (linked
+  // to login accounts), not `employees` directly — keep them in sync whenever
+  // an employee with a login account is saved as (or stops being) a Collector.
+  async function syncCollectorRecord(
+    profileId: string,
+    payload: { position: string | null; branch_id: string | null; area_id: string | null; status: string }
+  ) {
+    if (payload.position !== 'Collector') {
+      await supabase.from('collectors').delete().eq('profile_id', profileId);
+      return;
+    }
+    const { data: existing } = await supabase.from('collectors').select('id').eq('profile_id', profileId).maybeSingle();
+    const collectorPayload = { branch_id: payload.branch_id, area_id: payload.area_id, status: payload.status };
+    if (existing) {
+      await supabase.from('collectors').update(collectorPayload).eq('id', existing.id);
+    } else {
+      await supabase.from('collectors').insert({ profile_id: profileId, ...collectorPayload });
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -107,8 +127,14 @@ export default function EmployeesPage() {
     };
     if (editing) {
       const { error } = await supabase.from('employees').update(payload).eq('id', editing.id);
-      if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      else { toast({ title: 'Success', description: 'Employee updated' }); setDialogOpen(false); load(); }
+      if (error) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      } else {
+        if (editing.profile_id) await syncCollectorRecord(editing.profile_id, payload);
+        toast({ title: 'Success', description: 'Employee updated' });
+        setDialogOpen(false);
+        load();
+      }
     } else {
       const { data: inserted, error } = await supabase.from('employees').insert(payload).select('id').single();
       if (error) {

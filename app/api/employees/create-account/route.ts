@@ -76,6 +76,20 @@ export async function POST(request: NextRequest) {
 
   if (employee_id) {
     await supabaseAdmin.from('employees').update({ profile_id: created.user.id }).eq('id', employee_id);
+
+    // If this employee is a Collector, mirror them into the `collectors` table
+    // too — customers.collector_id references collectors(id), a separate
+    // table from employees, so both must stay in sync.
+    const { data: employee } = await supabaseAdmin.from('employees').select('position, area_id').eq('id', employee_id).maybeSingle();
+    if (employee?.position === 'Collector') {
+      const { data: existingCollector } = await supabaseAdmin.from('collectors').select('id').eq('profile_id', created.user.id).maybeSingle();
+      const collectorPayload = { branch_id: branch_id || null, area_id: employee.area_id ?? null, status: 'active' };
+      if (existingCollector) {
+        await supabaseAdmin.from('collectors').update(collectorPayload).eq('id', existingCollector.id);
+      } else {
+        await supabaseAdmin.from('collectors').insert({ profile_id: created.user.id, ...collectorPayload });
+      }
+    }
   }
 
   const resendApiKey = process.env.RESEND_API_KEY;

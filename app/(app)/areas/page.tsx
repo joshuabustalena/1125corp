@@ -76,7 +76,7 @@ export default function AreasPage() {
     const [areasRes, branchesRes, collectorsRes, customersRes] = await Promise.all([
       supabase.from('areas').select('*, branches(name)').order('name'),
       supabase.from('branches').select('id, name, max_loan_limit').eq('status', 'active').order('name'),
-      supabase.from('collectors').select('id, area_id'),
+      supabase.from('employees').select('id, area_id').eq('position', 'Collector'),
       supabase.from('customers').select('id, area_id'),
     ]);
 
@@ -117,7 +117,7 @@ export default function AreasPage() {
     setViewTarget(a);
     setViewLoading(true);
     const [collectorsRes, customersRes] = await Promise.all([
-      supabase.from('collectors').select('id, status, profiles(full_name)').eq('area_id', a.id),
+      supabase.from('employees').select('id, first_name, last_name, status').eq('area_id', a.id).eq('position', 'Collector').order('first_name'),
       supabase.from('customers').select('id, first_name, last_name, phone, status').eq('area_id', a.id).order('first_name'),
     ]);
     setViewCollectors(collectorsRes.data ?? []);
@@ -199,47 +199,53 @@ export default function AreasPage() {
 
       <Card className="glass-card border-border">
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
-          ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <MapPin className="w-12 h-12 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">No areas found</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Area</TableHead>
-                  <TableHead>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
-                        Branch
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        <DropdownMenuItem onClick={() => setBranchFilter('all')} className="flex items-center justify-between">
-                          All Branches
-                          {branchFilter === 'all' && <Check className="w-4 h-4" />}
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Area</TableHead>
+                <TableHead>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
+                      Branch
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={() => setBranchFilter('all')} className="flex items-center justify-between">
+                        All Branches
+                        {branchFilter === 'all' && <Check className="w-4 h-4" />}
+                      </DropdownMenuItem>
+                      {branches.map((b) => (
+                        <DropdownMenuItem key={b.id} onClick={() => setBranchFilter(b.id)} className="flex items-center justify-between">
+                          {b.name}
+                          {branchFilter === b.id && <Check className="w-4 h-4" />}
                         </DropdownMenuItem>
-                        {branches.map((b) => (
-                          <DropdownMenuItem key={b.id} onClick={() => setBranchFilter(b.id)} className="flex items-center justify-between">
-                            {b.name}
-                            {branchFilter === b.id && <Check className="w-4 h-4" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableHead>
-                  <TableHead>Collectors</TableHead>
-                  <TableHead>Clients</TableHead>
-                  <TableHead>Max Loan</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableHead>
+                <TableHead>Collectors</TableHead>
+                <TableHead>Clients</TableHead>
+                <TableHead>Max Loan</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-16 text-center">
+                    <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map(a => (
+              ) : filtered.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-16 text-center">
+                    <MapPin className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
+                    <p className="text-sm text-muted-foreground">No areas found</p>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filtered.map(a => (
                   <TableRow key={a.id} className="hover:bg-secondary/50">
                     <TableCell>
                       <div className="flex items-center gap-3">
@@ -262,10 +268,10 @@ export default function AreasPage() {
                       <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(a)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                     </TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                ))
+              )}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 
@@ -349,7 +355,7 @@ export default function AreasPage() {
                     <TableBody>
                       {viewCollectors.map((c: any) => (
                         <TableRow key={c.id}>
-                          <TableCell className="text-sm font-medium">{c.profiles?.full_name ?? '—'}</TableCell>
+                          <TableCell className="text-sm font-medium">{c.first_name} {c.last_name}</TableCell>
                           <TableCell><Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge></TableCell>
                         </TableRow>
                       ))}

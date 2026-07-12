@@ -9,12 +9,15 @@ import { Button } from '@/components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
-  ArrowLeft, Landmark, Wallet, Calendar, User, MapPin,
-  Loader2, RefreshCw, Plus, Receipt,
+  ArrowLeft, Landmark, Wallet, Calendar, User, MapPin, Check,
+  Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -26,6 +29,8 @@ export default function LoanDetailPage() {
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [renewing, setRenewing] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleMonth, setScheduleMonth] = useState(new Date());
 
   useEffect(() => {
     async function load() {
@@ -50,6 +55,51 @@ export default function LoanDetailPage() {
 
   const offsetRequired = loan.remaining_balance * 0.40;
   const canRenew = loan.remaining_balance <= offsetRequired && loan.status === 'active';
+  const dailyAmount = loan.term_days > 0 ? loan.total_payable / loan.term_days : 0;
+
+  const paidAmountByDate = new Map<string, number>();
+  for (const p of payments) {
+    const key = p.payment_date;
+    paidAmountByDate.set(key, (paidAmountByDate.get(key) ?? 0) + Number(p.amount_paid));
+  }
+
+  function openSchedule() {
+    setScheduleMonth(loan.release_date ? new Date(loan.release_date) : new Date());
+    setScheduleOpen(true);
+  }
+
+  function getMonthGrid(monthDate: Date) {
+    const year = monthDate.getFullYear();
+    const month = monthDate.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const startOffset = firstDay.getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const cells: { date: Date; inCurrentMonth: boolean }[] = [];
+
+    for (let i = 0; i < startOffset; i++) {
+      cells.push({ date: new Date(year, month, i - startOffset + 1), inCurrentMonth: false });
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      cells.push({ date: new Date(year, month, d), inCurrentMonth: true });
+    }
+    while (cells.length % 7 !== 0) {
+      const last = cells[cells.length - 1].date;
+      cells.push({ date: new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1), inCurrentMonth: false });
+    }
+    return cells;
+  }
+
+  function isWithinLoanTerm(date: Date) {
+    if (!loan.release_date || !loan.due_date) return false;
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const start = new Date(loan.release_date).setHours(0, 0, 0, 0);
+    const end = new Date(loan.due_date).setHours(0, 0, 0, 0);
+    return d >= start && d <= end;
+  }
+
+  function dateKey(date: Date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
 
   async function handleRenew() {
     setRenewing(true);
@@ -111,6 +161,10 @@ export default function LoanDetailPage() {
         <Button size="sm" variant="outline" onClick={handleRenew} disabled={!canRenew || renewing}>
           {renewing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
           Renew Loan
+        </Button>
+        <Button size="sm" variant="outline" onClick={openSchedule}>
+          <CalendarDays className="w-4 h-4 mr-2" />
+          Calendar
         </Button>
       </PageHeader>
 
@@ -257,6 +311,71 @@ export default function LoanDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Payment calendar */}
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl">Payment Calendar</DialogTitle>
+            <DialogDescription className="text-base">
+              {formatCurrency(dailyAmount)} due per day, from {formatDate(loan.release_date)} to {formatDate(loan.due_date)}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-success/20 border border-success" /> Paid</span>
+            <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-primary/10 border border-primary/30" /> Due</span>
+            <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-muted" /> Outside term</span>
+          </div>
+
+          <div className="flex items-center justify-between mb-2">
+            <Button type="button" variant="outline" size="icon" className="h-10 w-10"
+              onClick={() => setScheduleMonth(new Date(scheduleMonth.getFullYear(), scheduleMonth.getMonth() - 1, 1))}>
+              <ChevronLeft className="w-5 h-5" />
+            </Button>
+            <p className="text-lg font-semibold">
+              {scheduleMonth.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })}
+            </p>
+            <Button type="button" variant="outline" size="icon" className="h-10 w-10"
+              onClick={() => setScheduleMonth(new Date(scheduleMonth.getFullYear(), scheduleMonth.getMonth() + 1, 1))}>
+              <ChevronRight className="w-5 h-5" />
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-7 gap-1.5 text-center">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+              <div key={d} className="text-sm font-medium text-muted-foreground py-1.5">{d}</div>
+            ))}
+            {getMonthGrid(scheduleMonth).map(({ date, inCurrentMonth }, i) => {
+              const inTerm = inCurrentMonth && isWithinLoanTerm(date);
+              const paidAmount = inTerm ? paidAmountByDate.get(dateKey(date)) : undefined;
+              const isPaid = paidAmount !== undefined;
+              return (
+                <div
+                  key={i}
+                  className={`relative rounded-lg py-3 text-sm ${
+                    !inCurrentMonth ? 'text-muted-foreground/30' :
+                    isPaid ? 'bg-success/10 text-success font-medium' :
+                    inTerm ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'
+                  }`}
+                >
+                  {isPaid && <Check className="w-3 h-3 absolute top-1 right-1" />}
+                  <p className="text-base">{date.getDate()}</p>
+                  {isPaid ? (
+                    <p className="text-xs leading-tight mt-0.5">{formatCurrency(paidAmount)}</p>
+                  ) : inTerm ? (
+                    <p className="text-xs leading-tight mt-0.5">{formatCurrency(dailyAmount)}</p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setScheduleOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

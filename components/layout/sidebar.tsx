@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { navSections } from '@/lib/navigation';
 import { getRequiredPermission, hasPermission } from '@/lib/permissions';
 import { useAuth } from '@/lib/auth-context';
-import { Building2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
@@ -23,8 +24,8 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
       {/* Logo */}
       <div className="h-16 flex items-center px-4 border-b border-white/10 shrink-0">
         <Link href="/dashboard" className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-white/10 backdrop-blur flex items-center justify-center shrink-0">
-            <Building2 className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shrink-0 overflow-hidden">
+            <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={40} height={40} className="object-contain" />
           </div>
           {!collapsed && (
             <div className="min-w-0">

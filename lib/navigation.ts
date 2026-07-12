@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Building2,
   MapPin,
+  UserCheck,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -51,13 +52,14 @@ export const navSections: NavSection[] = [
       { label: 'Loans', href: '/loans', icon: Landmark },
       { label: 'Payments', href: '/payments', icon: Wallet },
       { label: 'Penalties', href: '/penalties', icon: AlertCircle },
-      { label: 'Receipts', href: '/receipts', icon: Receipt },
+      { label: 'Payment Reports', href: '/payment-reports', icon: Receipt },
     ],
   },
   {
     title: 'Human Resources',
     items: [
       { label: 'Employees', href: '/employees', icon: UserCog },
+      { label: 'Collectors', href: '/collectors', icon: UserCheck },
       { label: 'Payroll', href: '/payroll', icon: ScrollText },
       { label: 'Employee Loans', href: '/employee-loans', icon: Landmark },
       { label: 'Attendance', href: '/attendance', icon: ClipboardCheck },

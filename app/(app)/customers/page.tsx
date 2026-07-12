@@ -36,9 +36,16 @@ interface Customer {
   address: string | null;
   barangay: string | null;
   city: string | null;
+  province: string | null;
+  zip_code: string | null;
+  gender: string | null;
+  birth_date: string | null;
   status: string;
   max_loan_limit: number;
   government_id: string | null;
+  branch_id: string | null;
+  area_id: string | null;
+  collector_id: string | null;
   branches: { name: string } | null;
   areas: { name: string } | null;
   collectors: { profile_id: string } | null;
@@ -51,6 +58,7 @@ export default function CustomersPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [collectors, setCollectors] = useState<any[]>([]);
+  const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('all');
@@ -76,14 +84,25 @@ export default function CustomersPage() {
   }, [search, branchFilter, statusFilter, page]);
 
   async function loadOptions() {
-    const [b, a, c] = await Promise.all([
+    const [b, a, c, ac] = await Promise.all([
       supabase.from('branches').select('id, name').eq('status', 'active'),
-      supabase.from('areas').select('id, name, branch_id').eq('status', 'active'),
-      supabase.from('collectors').select('id, profile_id, profiles(full_name)').eq('status', 'active'),
+      supabase.from('areas').select('id, name, branch_id, max_loan_limit').eq('status', 'active'),
+      supabase.from('collectors').select('id, profile_id, branch_id, area_id, profiles(full_name)').eq('status', 'active'),
+      supabase.from('customers').select('id, area_id, max_loan_limit'),
     ]);
     setBranches(b.data ?? []);
     setAreas(a.data ?? []);
     setCollectors(c.data ?? []);
+    setAllCustomers(ac.data ?? []);
+  }
+
+  function getAreaPool(areaId: string, excludeCustomerId?: string) {
+    const area = areas.find((a) => a.id === areaId);
+    if (!area) return null;
+    const allocated = allCustomers
+      .filter((c) => c.area_id === areaId && c.id !== excludeCustomerId)
+      .reduce((sum, c) => sum + Number(c.max_loan_limit), 0);
+    return { total: Number(area.max_loan_limit), allocated, remaining: Number(area.max_loan_limit) - allocated };
   }
 
   async function loadCustomers() {
@@ -122,15 +141,31 @@ export default function CustomersPage() {
     setForm({
       first_name: c.first_name, last_name: c.last_name, middle_name: c.middle_name ?? '',
       phone: c.phone ?? '', email: c.email ?? '', address: c.address ?? '',
-      barangay: c.barangay ?? '', city: c.city ?? '', province: '', zip_code: '',
-      branch_id: '', area_id: '', collector_id: '', max_loan_limit: String(c.max_loan_limit),
-      status: c.status, gender: '', birth_date: '', government_id: c.government_id ?? '',
+      barangay: c.barangay ?? '', city: c.city ?? '', province: c.province ?? '', zip_code: c.zip_code ?? '',
+      branch_id: c.branch_id ?? '', area_id: c.area_id ?? '', collector_id: c.collector_id ?? '', max_loan_limit: String(c.max_loan_limit),
+      status: c.status, gender: c.gender ?? '', birth_date: c.birth_date ?? '', government_id: c.government_id ?? '',
     });
     setDialogOpen(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (form.area_id) {
+      const pool = getAreaPool(form.area_id, editing?.id);
+      const requested = Number(form.max_loan_limit) || 0;
+      if (pool && requested > pool.remaining) {
+        toast({
+          title: 'No loan limit available',
+          description: pool.remaining <= 0
+            ? 'This area\'s entire loan limit is already allocated to other customers.'
+            : `Only ${formatCurrency(pool.remaining)} is left to allocate for this area.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+
     setSaving(true);
     const payload = {
       first_name: form.first_name,
@@ -177,9 +212,15 @@ export default function CustomersPage() {
 
   async function handleDelete() {
     if (!deleteTarget) return;
-    const { error } = await supabase.from('customers').delete().eq('id', deleteTarget.id);
+    const { data, error } = await supabase.from('customers').delete().eq('id', deleteTarget.id).select();
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else if (!data || data.length === 0) {
+      toast({
+        title: 'Delete blocked',
+        description: 'Nothing was deleted — you may not have permission to delete customers (only Administrators can), or this record no longer exists.',
+        variant: 'destructive',
+      });
     } else {
       toast({ title: 'Success', description: 'Customer deleted' });
       setDeleteTarget(null);
@@ -396,6 +437,49 @@ export default function CustomersPage() {
                 <Label>Email</Label>
                 <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Branch</Label>
+                <Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v, area_id: '', collector_id: '' })}>
+                  <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
+                  <SelectContent>
+                    {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Area</Label>
+                <Select
+                  value={form.area_id}
+                  onValueChange={(v) => {
+                    const pool = getAreaPool(v, editing?.id);
+                    setForm({ ...form, area_id: v, collector_id: '', max_loan_limit: pool ? String(Math.max(0, pool.remaining)) : form.max_loan_limit });
+                  }}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select area" /></SelectTrigger>
+                  <SelectContent>
+                    {areas.filter(a => !form.branch_id || a.branch_id === form.branch_id).map(a => (
+                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Collector</Label>
+                <Select value={form.collector_id} onValueChange={(v) => setForm({ ...form, collector_id: v })} disabled={!form.branch_id}>
+                  <SelectTrigger><SelectValue placeholder={form.branch_id ? 'Select collector' : 'Select a branch first'} /></SelectTrigger>
+                  <SelectContent>
+                    {collectors
+                      .filter(c => c.branch_id === form.branch_id && (!form.area_id || c.area_id === form.area_id))
+                      .map(c => (
+                        <SelectItem key={c.id} value={c.id}>{c.profiles?.full_name ?? 'Unknown'}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Government ID</Label>
                 <Input value={form.government_id} onChange={(e) => setForm({ ...form, government_id: e.target.value })} placeholder="SSS / UMID / Driver's License" />
@@ -403,6 +487,15 @@ export default function CustomersPage() {
               <div className="space-y-2">
                 <Label>Max Loan Limit (₱)</Label>
                 <Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} />
+                {form.area_id && (() => {
+                  const pool = getAreaPool(form.area_id, editing?.id);
+                  if (!pool) return null;
+                  return pool.remaining <= 0 ? (
+                    <p className="text-xs text-destructive">No loan limit available — this area's full {formatCurrency(pool.total)} is already allocated to other customers.</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{formatCurrency(pool.remaining)} available to allocate (of {formatCurrency(pool.total)} total for this area)</p>
+                  );
+                })()}
               </div>
             </div>
             <div className="space-y-2">
@@ -421,39 +514,6 @@ export default function CustomersPage() {
               <div className="space-y-2">
                 <Label>Province</Label>
                 <Input value={form.province} onChange={(e) => setForm({ ...form, province: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>Branch</Label>
-                <Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
-                  <SelectContent>
-                    {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Area</Label>
-                <Select value={form.area_id} onValueChange={(v) => setForm({ ...form, area_id: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select area" /></SelectTrigger>
-                  <SelectContent>
-                    {areas.filter(a => !form.branch_id || a.branch_id === form.branch_id).map(a => (
-                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Collector</Label>
-                <Select value={form.collector_id} onValueChange={(v) => setForm({ ...form, collector_id: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select collector" /></SelectTrigger>
-                  <SelectContent>
-                    {collectors.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.profiles?.full_name ?? 'Unknown'}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
             </div>
             <DialogFooter>
