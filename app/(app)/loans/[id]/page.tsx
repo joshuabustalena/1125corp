@@ -40,6 +40,7 @@ export default function LoanDetailPage() {
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
   const isCashier = profile?.role_name === 'Cashier';
+  const isCollector = profile?.role_name === 'Collector';
   const [loan, setLoan] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [chainLoans, setChainLoans] = useState<any[]>([]);
@@ -403,19 +404,19 @@ export default function LoanDetailPage() {
             </Button>
           </Link>
         )}
-        {!isCashier && loan.status !== 'renewed' && (
-          <>
-            <Link href={`/payments?loan=${loan.id}`}>
-              <Button size="sm">
-                <Plus className="w-4 h-4 mr-2" />
-                Post Payment
-              </Button>
-            </Link>
-            <Button size="sm" variant="outline" onClick={openRenew} disabled={!canRenew}>
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Renew Loan
+        {!isCashier && loan.status !== 'renewed' && loan.status !== 'declined' && (
+          <Link href={`/payments?loan=${loan.id}`}>
+            <Button size="sm">
+              <Plus className="w-4 h-4 mr-2" />
+              Post Payment
             </Button>
-          </>
+          </Link>
+        )}
+        {!isCashier && !isCollector && loan.status !== 'renewed' && (
+          <Button size="sm" variant="outline" onClick={openRenew} disabled={!canRenew}>
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Renew Loan
+          </Button>
         )}
         {loan.status === 'pending' && canApprove && (
           <>
@@ -571,7 +572,7 @@ export default function LoanDetailPage() {
       </div>
 
       {/* Renewal info */}
-      {loan.status === 'active' && (
+      {loan.status === 'active' && !isCollector && (
         <Card className="glass-card border-border">
           <CardContent className="p-4">
             <div className="flex items-center gap-3">

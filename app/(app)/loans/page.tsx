@@ -65,6 +65,8 @@ export default function LoansPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  const isCollector = profile?.role_name === 'Collector';
+  const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -136,14 +138,28 @@ export default function LoansPage() {
 
   useEffect(() => {
     if (!profile) return;
+    async function loadMyCollector() {
+      if (profile?.role_name !== 'Collector') return;
+      const { data } = await supabase.from('collectors').select('id, branch_id, area_id').eq('profile_id', profile.id).maybeSingle();
+      setMyCollector(data);
+    }
+    loadMyCollector();
+  }, [profile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    if (isCollector && !myCollector) return;
     loadLoans();
     loadOptions();
-  }, [profile, search, statusFilter, customerFilter, areaFilter, page]);
+  }, [profile, myCollector, search, statusFilter, customerFilter, areaFilter, page]);
 
   async function loadOptions() {
     let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('first_name');
     let areaQuery = supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
-    if (!isAdmin) {
+    if (isCollector && myCollector) {
+      customerQuery = customerQuery.eq('collector_id', myCollector.id);
+      areaQuery = areaQuery.eq('id', myCollector.area_id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (!isAdmin) {
       customerQuery = customerQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
       areaQuery = areaQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     }
@@ -170,10 +186,16 @@ export default function LoansPage() {
     if (search) {
       query = query.or(`loan_number.ilike.%${search}%`);
     }
-    if (!isAdmin) {
+    if (isCollector) {
+      query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (!isAdmin) {
       query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     }
-    if (statusFilter !== 'all') query = query.eq('status', statusFilter);
+    if (isCollector) {
+      query = statusFilter === 'all' ? query.in('status', ['active', 'paid']) : query.eq('status', statusFilter);
+    } else if (statusFilter !== 'all') {
+      query = query.eq('status', statusFilter);
+    }
     if (customerFilter !== 'all') query = query.eq('customer_id', customerFilter);
     if (areaFilter !== 'all') query = query.eq('area_id', areaFilter);
 
@@ -361,7 +383,7 @@ export default function LoansPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        {profile?.role_name !== 'Cashier' && (
+        {profile?.role_name !== 'Cashier' && profile?.role_name !== 'Collector' && (
           <Button size="sm" onClick={() => { setExistingLoanBlock(null); setDialogOpen(true); }}>
             <Plus className="w-4 h-4 mr-2" />
             New Loan
@@ -425,14 +447,18 @@ export default function LoansPage() {
                           <ChevronDown className="w-3.5 h-3.5" />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="start">
-                          {[
+                          {(isCollector ? [
+                            ['all', 'All'],
+                            ['active', 'Active'],
+                            ['paid', 'Paid'],
+                          ] : [
                             ['all', 'All Status'],
                             ['pending', 'Pending'],
                             ['active', 'Active'],
                             ['declined', 'Declined'],
                             ['overdue', 'Overdue'],
                             ['paid', 'Paid'],
-                          ].map(([value, label]) => (
+                          ]).map(([value, label]) => (
                             <DropdownMenuItem key={value} onClick={() => { setStatusFilter(value); setPage(1); }} className="flex items-center justify-between">
                               {label}
                               {statusFilter === value && <Check className="w-4 h-4" />}

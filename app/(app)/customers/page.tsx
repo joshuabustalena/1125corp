@@ -57,6 +57,8 @@ export default function CustomersPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  const isCollector = profile?.role_name === 'Collector';
+  const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
@@ -83,14 +85,28 @@ export default function CustomersPage() {
 
   useEffect(() => {
     if (!profile) return;
+    async function loadMyCollector() {
+      if (profile?.role_name !== 'Collector') return;
+      const { data } = await supabase.from('collectors').select('id, branch_id, area_id').eq('profile_id', profile.id).maybeSingle();
+      setMyCollector(data);
+    }
+    loadMyCollector();
+  }, [profile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    if (isCollector && !myCollector) return;
     loadCustomers();
     loadOptions();
-  }, [profile, search, branchFilter, statusFilter, page]);
+  }, [profile, myCollector, search, branchFilter, statusFilter, page]);
 
   async function loadOptions() {
     let branchQuery = supabase.from('branches').select('id, name').eq('status', 'active');
     let areaQuery = supabase.from('areas').select('id, name, branch_id, max_loan_limit').eq('status', 'active');
-    if (!isAdmin && profile?.branch_id) {
+    if (isCollector && myCollector) {
+      branchQuery = branchQuery.eq('id', myCollector.branch_id ?? '00000000-0000-0000-0000-000000000000');
+      areaQuery = areaQuery.eq('branch_id', myCollector.branch_id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (!isAdmin && profile?.branch_id) {
       branchQuery = branchQuery.eq('id', profile.branch_id);
       areaQuery = areaQuery.eq('branch_id', profile.branch_id);
     }
@@ -124,7 +140,9 @@ export default function CustomersPage() {
     if (search) {
       query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,phone.ilike.%${search}%`);
     }
-    if (!isAdmin) {
+    if (isCollector) {
+      query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (!isAdmin) {
       query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     } else if (branchFilter !== 'all') {
       query = query.eq('branch_id', branchFilter);

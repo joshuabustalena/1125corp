@@ -31,6 +31,8 @@ import {
 export default function PaymentsPage() {
   const searchParams = useSearchParams();
   const { profile } = useAuth();
+  const isCollector = profile?.role_name === 'Collector';
+  const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const { toast } = useToast();
   const [payments, setPayments] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
@@ -118,9 +120,21 @@ export default function PaymentsPage() {
   });
 
   useEffect(() => {
+    if (!profile) return;
+    async function loadMyCollector() {
+      if (profile?.role_name !== 'Collector') return;
+      const { data } = await supabase.from('collectors').select('id, branch_id, area_id').eq('profile_id', profile.id).maybeSingle();
+      setMyCollector(data);
+    }
+    loadMyCollector();
+  }, [profile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    if (isCollector && !myCollector) return;
     loadPayments();
     loadLoans();
-  }, [search, page, customerFilter]);
+  }, [profile, myCollector, search, page, customerFilter]);
 
   const autoOpenedRef = useRef(false);
   useEffect(() => {
@@ -133,11 +147,15 @@ export default function PaymentsPage() {
   }, [loans]);
 
   async function loadLoans() {
-    const { data } = await supabase
+    let query = supabase
       .from('loans')
       .select('id, loan_number, remaining_balance, status, total_payable, term_days, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
       .in('status', ['active', 'overdue'])
       .order('loan_number');
+    if (isCollector) {
+      query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
+    }
+    const { data } = await query;
     setLoans(data ?? []);
   }
 
@@ -155,6 +173,9 @@ export default function PaymentsPage() {
 
     if (search) {
       query = query.or(`loans.loan_number.ilike.%${search}%`);
+    }
+    if (isCollector) {
+      query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
     }
     if (customerFilter !== 'all') {
       query = query.eq('customer_id', customerFilter);
