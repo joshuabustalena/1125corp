@@ -1,5 +1,0 @@
-export interface Database {
-  public: {
-    Tables: Record<string, { Row: Record<string, unknown>; Insert: Record<string, unknown>; Update: Record<string, unknown> }>;
-  };
-}
