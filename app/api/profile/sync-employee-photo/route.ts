@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { getSupabaseAdmin } from '@/lib/supabase/admin';
 
 // Narrow, self-service-only endpoint: updates ONLY the photo_url column,
 // and ONLY on the employee row linked to the caller's own account (via
@@ -9,6 +9,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 // still reach their HR record without loosening that table's security
 // for anything else.
 export async function POST(request: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin();
   const authHeader = request.headers.get('authorization') ?? '';
   const token = authHeader.replace(/^Bearer\s+/i, '');
   if (!token) {
