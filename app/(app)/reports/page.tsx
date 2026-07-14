@@ -32,21 +32,50 @@ export default function ReportsPage() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ total: 0, count: 0, average: 0 });
+  const [branches, setBranches] = useState<any[]>([]);
+  const [areas, setAreas] = useState<any[]>([]);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [areaFilter, setAreaFilter] = useState('all');
 
-  useEffect(() => { generateReport(); }, []);
+  useEffect(() => { loadFilterOptions(); generateReport(); }, []);
+
+  async function loadFilterOptions() {
+    const [b, a, c] = await Promise.all([
+      supabase.from('branches').select('id, name').eq('status', 'active').order('name'),
+      supabase.from('areas').select('id, name, branch_id').eq('status', 'active').order('name'),
+      supabase.from('customers').select('id, branch_id, area_id'),
+    ]);
+    setBranches(b.data ?? []);
+    setAreas(a.data ?? []);
+    setCustomers(c.data ?? []);
+  }
+
+  // Payments don't carry branch_id/area_id directly — resolve the filter down
+  // to a customer_id list first, same pattern as payment-reports/page.tsx.
+  function filteredCustomerIds(): string[] | null {
+    if (areaFilter !== 'all') return customers.filter(c => c.area_id === areaFilter).map(c => c.id);
+    if (branchFilter !== 'all') return customers.filter(c => c.branch_id === branchFilter).map(c => c.id);
+    return null;
+  }
 
   async function generateReport() {
     setLoading(true);
     let reportData: any[] = [];
+    const customerIds = filteredCustomerIds();
 
     switch (reportType) {
       case 'daily_collection': {
-        const { data } = await supabase.from('payments').select('amount_paid, payment_date, loans(loan_number, customers(first_name, last_name))').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date', { ascending: false });
+        let q = supabase.from('payments').select('amount_paid, payment_date, customer_id, loans(loan_number, customers(first_name, last_name))').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date', { ascending: false });
+        if (customerIds) q = q.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+        const { data } = await q;
         reportData = (data ?? []).map((p: any) => ({ Date: p.payment_date, Loan: p.loans?.loan_number ?? '', Customer: p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '', Amount: p.amount_paid }));
         break;
       }
       case 'weekly_collection': {
-        const { data } = await supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date');
+        let q = supabase.from('payments').select('amount_paid, payment_date, customer_id').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date');
+        if (customerIds) q = q.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+        const { data } = await q;
         const grouped: Record<string, number> = {};
         (data ?? []).forEach((p: any) => {
           const d = new Date(p.payment_date);
@@ -59,7 +88,9 @@ export default function ReportsPage() {
         break;
       }
       case 'monthly_collection': {
-        const { data } = await supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date');
+        let q = supabase.from('payments').select('amount_paid, payment_date, customer_id').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date');
+        if (customerIds) q = q.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+        const { data } = await q;
         const grouped: Record<string, number> = {};
         (data ?? []).forEach((p: any) => {
           const key = p.payment_date.substring(0, 7);
@@ -69,7 +100,9 @@ export default function ReportsPage() {
         break;
       }
       case 'collector_performance': {
-        const { data } = await supabase.from('payments').select('amount_paid, collectors(profiles(full_name))').gte('payment_date', startDate).lte('payment_date', endDate);
+        let q = supabase.from('payments').select('amount_paid, customer_id, collectors(profiles(full_name))').gte('payment_date', startDate).lte('payment_date', endDate);
+        if (customerIds) q = q.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+        const { data } = await q;
         const grouped: Record<string, number> = {};
         (data ?? []).forEach((p: any) => {
           const name = p.collectors?.profiles?.full_name ?? 'Unassigned';
@@ -79,10 +112,13 @@ export default function ReportsPage() {
         break;
       }
       case 'branch_performance': {
-        const { data } = await supabase.from('loans').select('amount, remaining_balance, branches(name)').gte('release_date', startDate).lte('release_date', endDate);
+        let q = supabase.from('loans').select('amount, remaining_balance, branch_id, area_id, branches(name), areas(name)').gte('release_date', startDate).lte('release_date', endDate);
+        if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
+        else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+        const { data } = await q;
         const grouped: Record<string, { loans: number; amount: number; balance: number }> = {};
         (data ?? []).forEach((l: any) => {
-          const name = l.branches?.name ?? 'Unassigned';
+          const name = areaFilter !== 'all' ? (l.areas?.name ?? 'Unassigned') : (l.branches?.name ?? 'Unassigned');
           if (!grouped[name]) grouped[name] = { loans: 0, amount: 0, balance: 0 };
           grouped[name].loans++;
           grouped[name].amount += Number(l.amount);
@@ -92,8 +128,90 @@ export default function ReportsPage() {
         break;
       }
       case 'loan_receivable': {
-        const { data } = await supabase.from('loans').select('loan_number, amount, remaining_balance, status, customers(first_name, last_name)').in('status', ['active', 'overdue']);
+        let q = supabase.from('loans').select('loan_number, amount, remaining_balance, status, branch_id, area_id, customers(first_name, last_name)').in('status', ['active', 'overdue']);
+        if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
+        else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+        const { data } = await q;
         reportData = (data ?? []).map((l: any) => ({ LoanNumber: l.loan_number, Customer: `${l.customers?.first_name} ${l.customers?.last_name}`, Amount: l.amount, Balance: l.remaining_balance, Status: l.status }));
+        break;
+      }
+      // A loan counts as overdue when it's still 'active' and past its due_date —
+      // same rule the dashboard uses (status is never persisted as 'overdue').
+      case 'overdue_amount': {
+        let q = supabase.from('loans').select('loan_number, remaining_balance, due_date, branch_id, area_id, customers(first_name, last_name), areas(name)').eq('status', 'active');
+        if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
+        else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+        const { data } = await q;
+        const today = new Date();
+        reportData = (data ?? [])
+          .filter((l: any) => l.due_date && new Date(l.due_date) < today)
+          .map((l: any) => ({
+            LoanNumber: l.loan_number,
+            Customer: `${l.customers?.first_name} ${l.customers?.last_name}`,
+            Area: l.areas?.name ?? 'Unassigned',
+            DueDate: l.due_date,
+            DaysOverdue: Math.floor((today.getTime() - new Date(l.due_date).getTime()) / 86400000),
+            OverdueAmount: l.remaining_balance,
+          }))
+          .sort((a: any, b: any) => b.DaysOverdue - a.DaysOverdue);
+        break;
+      }
+      case 'overdue_rate': {
+        let q = supabase.from('loans').select('status, due_date, branch_id, area_id, areas(name)').in('status', ['active', 'overdue']);
+        if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
+        else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+        const { data } = await q;
+        const today = new Date();
+        const grouped: Record<string, { total: number; overdue: number }> = {};
+        (data ?? []).forEach((l: any) => {
+          const name = l.areas?.name ?? 'Unassigned';
+          if (!grouped[name]) grouped[name] = { total: 0, overdue: 0 };
+          grouped[name].total++;
+          if (l.due_date && new Date(l.due_date) < today) grouped[name].overdue++;
+        });
+        reportData = Object.entries(grouped).map(([area, v]) => ({
+          Area: area, TotalLoans: v.total, OverdueLoans: v.overdue,
+          OverdueRate: v.total > 0 ? Math.round((v.overdue / v.total) * 1000) / 10 : 0,
+        }));
+        break;
+      }
+      case 'customers_per_area': {
+        let q = supabase.from('customers').select('area_id, branch_id, areas(name)').eq('status', 'active');
+        if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
+        else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+        const { data } = await q;
+        const grouped: Record<string, number> = {};
+        (data ?? []).forEach((c: any) => {
+          const name = c.areas?.name ?? 'Unassigned';
+          grouped[name] = (grouped[name] ?? 0) + 1;
+        });
+        reportData = Object.entries(grouped).map(([area, count]) => ({ Area: area, Customers: count }));
+        break;
+      }
+      // "Delayed" (1-7 days late) vs "Past Due" (8+ days late) is a common
+      // grace-period convention — adjust the 7-day cutoff below if your
+      // policy differs.
+      case 'delinquent_customers': {
+        let q = supabase.from('loans').select('loan_number, remaining_balance, due_date, branch_id, area_id, customers(first_name, last_name, phone), areas(name)').eq('status', 'active');
+        if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
+        else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+        const { data } = await q;
+        const today = new Date();
+        reportData = (data ?? [])
+          .filter((l: any) => l.due_date && new Date(l.due_date) < today)
+          .map((l: any) => {
+            const daysOverdue = Math.floor((today.getTime() - new Date(l.due_date).getTime()) / 86400000);
+            return {
+              LoanNumber: l.loan_number,
+              Customer: `${l.customers?.first_name} ${l.customers?.last_name}`,
+              Phone: l.customers?.phone ?? '—',
+              Area: l.areas?.name ?? 'Unassigned',
+              DaysOverdue: daysOverdue,
+              Bucket: daysOverdue <= 7 ? 'Delayed (1-7d)' : 'Past Due (8d+)',
+              Balance: l.remaining_balance,
+            };
+          })
+          .sort((a: any, b: any) => b.DaysOverdue - a.DaysOverdue);
         break;
       }
       case 'payroll': {
@@ -111,7 +229,9 @@ export default function ReportsPage() {
     }
 
     setData(reportData);
-    const total = reportData.reduce((s, r) => s + (r.Amount ?? r.TotalCollected ?? r.TotalAmount ?? r.NetPay ?? 0), 0);
+    const total = reportType === 'overdue_rate'
+      ? reportData.reduce((s, r) => s + (r.OverdueRate ?? 0), 0) / (reportData.length || 1)
+      : reportData.reduce((s, r) => s + (r.Amount ?? r.TotalCollected ?? r.TotalAmount ?? r.NetPay ?? r.OverdueAmount ?? r.Balance ?? r.Customers ?? 0), 0);
     setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0 });
     setLoading(false);
   }
@@ -127,8 +247,8 @@ export default function ReportsPage() {
   }
 
   const chartData = data.slice(0, 10).map((d, i) => ({
-    name: d.Collector ?? d.Branch ?? d.Month ?? d.Week ?? d.Date ?? `Row ${i + 1}`,
-    value: d.TotalCollected ?? d.TotalAmount ?? d.Amount ?? d.NetPay ?? 0,
+    name: d.Collector ?? d.Branch ?? d.Area ?? d.Month ?? d.Week ?? d.Date ?? `Row ${i + 1}`,
+    value: d.TotalCollected ?? d.TotalAmount ?? d.Amount ?? d.NetPay ?? d.OverdueAmount ?? d.OverdueRate ?? d.Customers ?? d.Balance ?? 0,
   }));
 
   return (
@@ -141,7 +261,29 @@ export default function ReportsPage() {
 
       {/* Report config */}
       <Card className="glass-card border-border">
-        <CardContent className="p-4">
+        <CardContent className="p-4 space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-end">
+            <div className="space-y-2 flex-1">
+              <Label>Branch</Label>
+              <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Branches</SelectItem>
+                  {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 flex-1">
+              <Label>Area</Label>
+              <Select value={areaFilter} onValueChange={setAreaFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Areas</SelectItem>
+                  {areas.filter(a => branchFilter === 'all' || a.branch_id === branchFilter).map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="space-y-2 flex-1">
               <Label>Report Type</Label>
@@ -154,6 +296,10 @@ export default function ReportsPage() {
                   <SelectItem value="collector_performance">Collector Performance</SelectItem>
                   <SelectItem value="branch_performance">Branch Performance</SelectItem>
                   <SelectItem value="loan_receivable">Loan Receivable</SelectItem>
+                  <SelectItem value="overdue_amount">Overdue Amount</SelectItem>
+                  <SelectItem value="overdue_rate">Overdue Rate</SelectItem>
+                  <SelectItem value="customers_per_area">Customers per Area</SelectItem>
+                  <SelectItem value="delinquent_customers">Delayed / Past-Due Customers</SelectItem>
                   <SelectItem value="payroll">Payroll</SelectItem>
                   <SelectItem value="attendance">Attendance</SelectItem>
                 </SelectContent>
@@ -174,9 +320,16 @@ export default function ReportsPage() {
 
       {/* Summary stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard title="Total" value={formatCurrency(stats.total)} icon={<TrendingUp className="w-5 h-5" />} variant="success" />
+        <StatCard
+          title={reportType === 'overdue_rate' ? 'Average Overdue Rate' : reportType === 'customers_per_area' ? 'Total Customers' : 'Total'}
+          value={reportType === 'overdue_rate' ? `${stats.total.toFixed(1)}%` : reportType === 'customers_per_area' ? stats.total.toString() : formatCurrency(stats.total)}
+          icon={<TrendingUp className="w-5 h-5" />}
+          variant="success"
+        />
         <StatCard title="Records" value={stats.count.toString()} icon={<FileBarChart className="w-5 h-5" />} />
-        <StatCard title="Average" value={formatCurrency(stats.average)} icon={<Wallet className="w-5 h-5" />} />
+        {reportType !== 'overdue_rate' && reportType !== 'customers_per_area' && (
+          <StatCard title="Average" value={formatCurrency(stats.average)} icon={<Wallet className="w-5 h-5" />} />
+        )}
       </div>
 
       {/* Chart */}
@@ -220,7 +373,9 @@ export default function ReportsPage() {
                         <TableCell key={key} className="text-sm">
                           {typeof val === 'number' && (key.includes('Amount') || key.includes('Pay') || key.includes('Balance') || key === 'TotalCollected' || key === 'TotalAmount')
                             ? formatCurrency(val)
-                            : String(val ?? '')}
+                            : key === 'OverdueRate' && typeof val === 'number'
+                              ? `${val}%`
+                              : String(val ?? '')}
                         </TableCell>
                       ))}
                     </TableRow>

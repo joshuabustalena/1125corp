@@ -284,10 +284,12 @@ export default function CustomersPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        <Button size="sm" onClick={openCreate}>
-          <Plus className="w-4 h-4 mr-2" />
-          Add Customer
-        </Button>
+        {isAdmin && (
+          <Button size="sm" onClick={openCreate}>
+            <Plus className="w-4 h-4 mr-2" />
+            Add Customer
+          </Button>
+        )}
       </PageHeader>
 
       {/* Filters */}

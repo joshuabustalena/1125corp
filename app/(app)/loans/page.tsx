@@ -372,6 +372,7 @@ export default function LoansPage() {
       case 'declined': return 'destructive';
       case 'paid': return 'secondary';
       case 'pending': return 'outline';
+      case 'approved': return 'outline';
       default: return 'secondary';
     }
   };
@@ -454,6 +455,7 @@ export default function LoansPage() {
                           ] : [
                             ['all', 'All Status'],
                             ['pending', 'Pending'],
+                            ['approved', 'Approved'],
                             ['active', 'Active'],
                             ['declined', 'Declined'],
                             ['overdue', 'Overdue'],

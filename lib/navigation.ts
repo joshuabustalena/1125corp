@@ -16,6 +16,8 @@ import {
   Building2,
   MapPin,
   UserCheck,
+  Banknote,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -70,6 +72,8 @@ export const navSections: NavSection[] = [
     title: 'Finance',
     items: [
       { label: 'Accounting', href: '/accounting', icon: Calculator },
+      { label: 'Cash Count', href: '/cash-count', icon: Banknote },
+      { label: 'Remittance', href: '/remittance', icon: ArrowRightLeft },
       { label: 'Reports', href: '/reports', icon: FileBarChart },
     ],
   },

@@ -43,6 +43,8 @@ ALTER TABLE employee_loans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cash_flow ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE loan_receivables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE remittances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cash_counts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
@@ -116,7 +118,7 @@ CREATE POLICY "collectors_delete" ON collectors FOR DELETE TO authenticated USIN
 DROP POLICY IF EXISTS "customers_select" ON customers;
 CREATE POLICY "customers_select" ON customers FOR SELECT TO authenticated USING (true);
 DROP POLICY IF EXISTS "customers_insert" ON customers;
-CREATE POLICY "customers_insert" ON customers FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "customers_insert" ON customers FOR INSERT TO authenticated WITH CHECK (is_admin());
 DROP POLICY IF EXISTS "customers_update" ON customers;
 CREATE POLICY "customers_update" ON customers FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 DROP POLICY IF EXISTS "customers_delete" ON customers;
@@ -156,19 +158,27 @@ AS $$
   WHERE p.id = auth.uid();
 $$;
 
--- Blocks status changes (approve/decline/renew) from anyone but Branch Manager/Administrator,
--- even if they can otherwise insert/update a loan row (e.g. Collector reapplying).
+-- Blocks status changes from anyone but the role responsible for that
+-- transition, even if they can otherwise insert/update a loan row (e.g.
+-- Collector reapplying): approve/decline -> Branch Manager/Admin;
+-- disburse (active)/renew -> Cashier/Admin.
 CREATE OR REPLACE FUNCTION enforce_loan_status_change()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-  IF NEW.status IS DISTINCT FROM OLD.status
-     AND NEW.status IN ('active', 'declined', 'renewed')
-     AND NOT is_admin()
-     AND current_role_name() IS DISTINCT FROM 'Branch Manager' THEN
-    RAISE EXCEPTION 'Only a Branch Manager or Administrator can approve, decline, or renew loans';
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    IF NEW.status IN ('approved', 'declined')
+       AND NOT is_admin()
+       AND current_role_name() IS DISTINCT FROM 'Branch Manager' THEN
+      RAISE EXCEPTION 'Only a Branch Manager or Administrator can approve or decline loans';
+    END IF;
+    IF NEW.status IN ('active', 'renewed')
+       AND NOT is_admin()
+       AND current_role_name() IS DISTINCT FROM 'Cashier' THEN
+      RAISE EXCEPTION 'Only a Cashier or Administrator can disburse or renew loans';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -182,7 +192,7 @@ CREATE POLICY "loans_insert" ON loans FOR INSERT TO authenticated
 DROP POLICY IF EXISTS "loans_update" ON loans;
 CREATE POLICY "loans_update" ON loans FOR UPDATE TO authenticated
   USING (true)
-  WITH CHECK (is_admin() OR current_role_name() IN ('Collector', 'Branch Manager'));
+  WITH CHECK (is_admin() OR current_role_name() IN ('Collector', 'Branch Manager', 'Cashier'));
 DROP POLICY IF EXISTS "loans_delete" ON loans;
 CREATE POLICY "loans_delete" ON loans FOR DELETE TO authenticated USING (is_admin());
 
@@ -190,6 +200,18 @@ DROP TRIGGER IF EXISTS loans_status_change_guard ON loans;
 CREATE TRIGGER loans_status_change_guard
 BEFORE UPDATE ON loans
 FOR EACH ROW EXECUTE FUNCTION enforce_loan_status_change();
+
+-- CASH VOUCHERS
+ALTER TABLE cash_vouchers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "cash_vouchers_select" ON cash_vouchers;
+CREATE POLICY "cash_vouchers_select" ON cash_vouchers FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "cash_vouchers_insert" ON cash_vouchers;
+CREATE POLICY "cash_vouchers_insert" ON cash_vouchers FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() = 'Cashier');
+DROP POLICY IF EXISTS "cash_vouchers_update" ON cash_vouchers;
+CREATE POLICY "cash_vouchers_update" ON cash_vouchers FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "cash_vouchers_delete" ON cash_vouchers;
+CREATE POLICY "cash_vouchers_delete" ON cash_vouchers FOR DELETE TO authenticated USING (is_admin());
 
 -- PAYMENTS
 DROP POLICY IF EXISTS "payments_select" ON payments;
@@ -332,6 +354,28 @@ DROP POLICY IF EXISTS "receivables_update" ON loan_receivables;
 CREATE POLICY "receivables_update" ON loan_receivables FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 DROP POLICY IF EXISTS "receivables_delete" ON loan_receivables;
 CREATE POLICY "receivables_delete" ON loan_receivables FOR DELETE TO authenticated USING (is_admin());
+
+-- REMITTANCES
+DROP POLICY IF EXISTS "remittances_select" ON remittances;
+CREATE POLICY "remittances_select" ON remittances FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "remittances_insert" ON remittances;
+CREATE POLICY "remittances_insert" ON remittances FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() = 'Cashier');
+DROP POLICY IF EXISTS "remittances_update" ON remittances;
+CREATE POLICY "remittances_update" ON remittances FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "remittances_delete" ON remittances;
+CREATE POLICY "remittances_delete" ON remittances FOR DELETE TO authenticated USING (is_admin());
+
+-- CASH_COUNTS
+DROP POLICY IF EXISTS "cash_counts_select" ON cash_counts;
+CREATE POLICY "cash_counts_select" ON cash_counts FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "cash_counts_insert" ON cash_counts;
+CREATE POLICY "cash_counts_insert" ON cash_counts FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() = 'Cashier');
+DROP POLICY IF EXISTS "cash_counts_update" ON cash_counts;
+CREATE POLICY "cash_counts_update" ON cash_counts FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "cash_counts_delete" ON cash_counts;
+CREATE POLICY "cash_counts_delete" ON cash_counts FOR DELETE TO authenticated USING (is_admin());
 
 -- AUDIT_LOGS
 DROP POLICY IF EXISTS "audit_select" ON audit_logs;

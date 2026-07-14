@@ -65,6 +65,12 @@ export function generateORNumber(): string {
   return `OR-${year}-${random}`;
 }
 
+export function generateVoucherNumber(): string {
+  const year = new Date().getFullYear();
+  const random = Math.floor(100000 + Math.random() * 900000);
+  return `CV-${year}-${random}`;
+}
+
 export function computeLoanDetails(
   amount: number,
   interestRate: number,

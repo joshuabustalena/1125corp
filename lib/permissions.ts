@@ -21,6 +21,8 @@ export const PAGE_PERMISSIONS: Record<string, string | null> = {
   '/attendance': 'attendance',
   '/collector-attendance': 'collector_attendance',
   '/accounting': 'accounting',
+  '/cash-count': 'cash_count',
+  '/remittance': 'remittance',
   '/reports': 'reports',
   '/notifications': 'notifications',
   '/audit-logs': 'audit_logs',

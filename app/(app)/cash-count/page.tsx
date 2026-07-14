@@ -1,0 +1,193 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { PageHeader } from '@/components/layout/page-header';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table';
+import { StatCard } from '@/components/dashboard/stat-card';
+import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/auth-context';
+import { supabase } from '@/lib/supabase/client';
+import { formatCurrency, formatDate } from '@/lib/format';
+import { Banknote, Loader2, TrendingUp, Scale } from 'lucide-react';
+
+export default function CashCountPage() {
+  const { toast } = useToast();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [branchId, setBranchId] = useState('');
+  const [expected, setExpected] = useState(0);
+  const [counted, setCounted] = useState('');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [history, setHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      loadBranches();
+    } else if (profile?.branch_id) {
+      setBranchId(profile.branch_id);
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    if (!branchId) return;
+    loadData();
+  }, [branchId, date]);
+
+  async function loadBranches() {
+    const { data } = await supabase.from('branches').select('id, name').eq('status', 'active').order('name');
+    setBranches(data ?? []);
+    if (data && data.length > 0 && !branchId) setBranchId(data[0].id);
+  }
+
+  async function loadData() {
+    setLoading(true);
+    const { data: collectors } = await supabase.from('collectors').select('id').eq('branch_id', branchId);
+    const collectorIds = (collectors ?? []).map(c => c.id);
+
+    const [{ data: rems }, { data: vouchers }, { data: hist }] = await Promise.all([
+      collectorIds.length > 0
+        ? supabase.from('remittances').select('amount').eq('remittance_date', date).in('collector_id', collectorIds)
+        : Promise.resolve({ data: [] as any[] }),
+      supabase.from('cash_vouchers').select('amount, voucher_date, loans(branch_id)').eq('voucher_date', date),
+      supabase.from('cash_counts').select('*').eq('branch_id', branchId).order('count_date', { ascending: false }).limit(30),
+    ]);
+
+    const remTotal = (rems ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0);
+    const voucherTotal = (vouchers ?? []).filter((v: any) => v.loans?.branch_id === branchId).reduce((s: number, v: any) => s + Number(v.amount), 0);
+    setExpected(remTotal - voucherTotal);
+    setHistory(hist ?? []);
+    setLoading(false);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!counted || !branchId) return;
+    setSaving(true);
+    const variance = Number(counted) - expected;
+    const { error } = await supabase.from('cash_counts').insert({
+      branch_id: branchId,
+      count_date: date,
+      expected_amount: expected,
+      counted_amount: Number(counted),
+      variance,
+      counted_by: profile?.id ?? null,
+      notes: notes || null,
+    });
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: 'Cash count recorded' });
+      setCounted('');
+      setNotes('');
+      loadData();
+    }
+    setSaving(false);
+  }
+
+  const variancePreview = counted ? Number(counted) - expected : null;
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title="Daily Cash Count" description="Reconcile counted cash against expected cash for the day">
+        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
+        {isAdmin && (
+          <Select value={branchId} onValueChange={setBranchId}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="Select branch" /></SelectTrigger>
+            <SelectContent>
+              {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
+      </PageHeader>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <StatCard title="Expected Cash" value={formatCurrency(expected)} icon={<TrendingUp className="w-5 h-5" />} subtitle="Remittances received minus loans disbursed today" />
+        <StatCard
+          title="Variance"
+          value={variancePreview !== null ? formatCurrency(variancePreview) : '—'}
+          icon={<Scale className="w-5 h-5" />}
+          variant={variancePreview === null ? 'default' : variancePreview === 0 ? 'success' : variancePreview > 0 ? 'warning' : 'danger'}
+        />
+      </div>
+
+      <Card className="glass-card border-border">
+        <CardHeader>
+          <CardTitle>Record Today's Count</CardTitle>
+          <CardDescription>Enter the physical cash counted for {formatDate(date)}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Counted Amount (₱) *</Label>
+                <Input type="number" required value={counted} onChange={(e) => setCounted(e.target.value)} placeholder="0.00" />
+              </div>
+              <div className="space-y-2">
+                <Label>Notes</Label>
+                <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={1} placeholder="Explain any variance" />
+              </div>
+            </div>
+            <Button type="submit" disabled={saving || loading || !branchId}>
+              {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Submit Count
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card border-border">
+        <CardHeader><CardTitle>History</CardTitle><CardDescription>Last 30 counts for this branch</CardDescription></CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
+          ) : history.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <Banknote className="w-12 h-12 text-muted-foreground/50 mb-3" />
+              <p className="text-sm text-muted-foreground">No cash counts recorded yet</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Expected</TableHead>
+                  <TableHead>Counted</TableHead>
+                  <TableHead>Variance</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {history.map(h => (
+                  <TableRow key={h.id}>
+                    <TableCell className="text-sm">{formatDate(h.count_date)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.expected_amount)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.counted_amount)}</TableCell>
+                    <TableCell className="text-sm">
+                      <Badge variant={Number(h.variance) === 0 ? 'default' : 'destructive'}>
+                        {Number(h.variance) === 0 ? 'Balanced' : formatCurrency(h.variance)}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
