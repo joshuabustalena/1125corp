@@ -19,6 +19,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials, exportToCSV } from '@/lib/format';
 import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye } from 'lucide-react';
@@ -27,6 +28,8 @@ import { useRouter } from 'next/navigation';
 export default function EmployeesPage() {
   const router = useRouter();
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
   const [employees, setEmployees] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
@@ -222,7 +225,9 @@ export default function EmployeesPage() {
     <div className="space-y-6">
       <PageHeader title="Employee Management" description="Manage employee profiles, departments, and status">
         <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
-        <Button size="sm" onClick={openCreate}><Plus className="w-4 h-4 mr-2" />Add Employee</Button>
+        {isAdmin && (
+          <Button size="sm" onClick={openCreate}><Plus className="w-4 h-4 mr-2" />Add Employee</Button>
+        )}
       </PageHeader>
 
       <Card className="glass-card border-border">

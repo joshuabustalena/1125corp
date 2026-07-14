@@ -17,12 +17,15 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
 import { Landmark, Plus, Download, Loader2, CheckCircle, XCircle } from 'lucide-react';
 
 export default function EmployeeLoansPage() {
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const [loans, setLoans] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -135,7 +138,7 @@ export default function EmployeeLoansPage() {
                     <TableCell><Badge variant={statusVariant(l.status)}>{l.status}</Badge></TableCell>
                     <TableCell className="text-sm">{formatDate(l.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {l.status === 'pending' && (
+                      {l.status === 'pending' && canApprove && (
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" onClick={() => updateStatus(l.id, 'active')}><CheckCircle className="w-4 h-4 text-success" /></Button>
                           <Button variant="ghost" size="icon" onClick={() => updateStatus(l.id, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>

@@ -272,6 +272,23 @@ DROP POLICY IF EXISTS "payroll_delete" ON payroll;
 CREATE POLICY "payroll_delete" ON payroll FOR DELETE TO authenticated USING (is_admin());
 
 -- EMPLOYEE_LOANS
+-- Blocks approve/reject status changes from anyone but Branch Manager/Administrator.
+CREATE OR REPLACE FUNCTION enforce_employee_loan_status_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NEW.status IN ('active', 'rejected')
+     AND NOT is_admin()
+     AND current_role_name() IS DISTINCT FROM 'Branch Manager' THEN
+    RAISE EXCEPTION 'Only a Branch Manager or Administrator can approve or reject employee loans';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
 DROP POLICY IF EXISTS "emp_loans_select" ON employee_loans;
 CREATE POLICY "emp_loans_select" ON employee_loans FOR SELECT TO authenticated USING (true);
 DROP POLICY IF EXISTS "emp_loans_insert" ON employee_loans;
@@ -280,6 +297,11 @@ DROP POLICY IF EXISTS "emp_loans_update" ON employee_loans;
 CREATE POLICY "emp_loans_update" ON employee_loans FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 DROP POLICY IF EXISTS "emp_loans_delete" ON employee_loans;
 CREATE POLICY "emp_loans_delete" ON employee_loans FOR DELETE TO authenticated USING (is_admin());
+
+DROP TRIGGER IF EXISTS emp_loans_status_change_guard ON employee_loans;
+CREATE TRIGGER emp_loans_status_change_guard
+BEFORE UPDATE ON employee_loans
+FOR EACH ROW EXECUTE FUNCTION enforce_employee_loan_status_change();
 
 -- CASH_FLOW
 DROP POLICY IF EXISTS "cash_flow_select" ON cash_flow;
