@@ -31,7 +31,7 @@ export default function CollectorsPage() {
     let query = supabase
       .from('employees')
       .select('id, first_name, last_name, phone, email, status, photo_url, branches(name), areas(name)')
-      .eq('position', 'Collector')
+      .eq('position', 'Branch Field Collector')
       .order('first_name');
 
     if (!isAdmin) {

@@ -22,6 +22,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, getInitials, exportToCSV } from '@/lib/format';
 import {
   Users, Plus, Search, Download, Pencil, Trash2, Eye, Loader2, Phone, Mail, MapPin,
+  CheckCircle2, Circle,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -57,7 +58,9 @@ export default function CustomersPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
-  const isCollector = profile?.role_name === 'Collector';
+  const isCashier = profile?.role_name === 'Cashier';
+  const canCreateCustomer = isAdmin || isCashier;
+  const isCollector = profile?.role_name === 'Branch Field Collector';
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -74,7 +77,17 @@ export default function CustomersPage() {
   const [editing, setEditing] = useState<Customer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
   const [saving, setSaving] = useState(false);
+  const [docUploadFor, setDocUploadFor] = useState<string | null>(null);
+  const [customerDocs, setCustomerDocs] = useState<any[]>([]);
+  const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
   const pageSize = 10;
+
+  const REQUIRED_DOCUMENTS = [
+    { type: 'valid_id', label: 'Valid Government ID' },
+    { type: 'clearance', label: 'Barangay Clearance' },
+    { type: 'proof_of_billing', label: 'Proof of Billing' },
+    { type: 'promissory_note', label: 'Promissory Note' },
+  ];
 
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', phone: '', email: '',
@@ -86,7 +99,7 @@ export default function CustomersPage() {
   useEffect(() => {
     if (!profile) return;
     async function loadMyCollector() {
-      if (profile?.role_name !== 'Collector') return;
+      if (profile?.role_name !== 'Branch Field Collector') return;
       const { data } = await supabase.from('collectors').select('id, branch_id, area_id').eq('profile_id', profile.id).maybeSingle();
       setMyCollector(data);
     }
@@ -230,16 +243,55 @@ export default function CustomersPage() {
         loadCustomers();
       }
     } else {
-      const { error } = await supabase.from('customers').insert(payload);
+      const { data, error } = await supabase.from('customers').insert(payload).select('id').single();
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
-        toast({ title: 'Success', description: 'Customer created successfully' });
-        setDialogOpen(false);
+        toast({ title: 'Success', description: 'Customer created — now attach their documents.' });
+        setCustomerDocs([]);
+        setDocUploadFor(data.id);
         loadCustomers();
       }
     }
     setSaving(false);
+  }
+
+  async function handleDocUpload(docType: string, file: File) {
+    if (!docUploadFor) return;
+    setUploadingDocType(docType);
+    const ext = file.name.split('.').pop();
+    const path = `${docUploadFor}/${docType}-${Date.now()}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage.from('customer-documents').upload(path, file, {
+      contentType: file.type,
+    });
+    if (uploadError) {
+      toast({ title: 'Upload failed', description: uploadError.message, variant: 'destructive' });
+      setUploadingDocType(null);
+      return;
+    }
+
+    const { data: urlData } = supabase.storage.from('customer-documents').getPublicUrl(path);
+    const { error: insertError } = await supabase.from('customer_documents').insert({
+      customer_id: docUploadFor,
+      document_type: docType,
+      file_name: file.name,
+      file_url: urlData.publicUrl,
+    });
+
+    if (insertError) {
+      toast({ title: 'Error', description: insertError.message, variant: 'destructive' });
+    } else {
+      const { data } = await supabase.from('customer_documents').select('*').eq('customer_id', docUploadFor);
+      setCustomerDocs(data ?? []);
+    }
+    setUploadingDocType(null);
+  }
+
+  function finishDocUpload() {
+    setDialogOpen(false);
+    setDocUploadFor(null);
+    setCustomerDocs([]);
   }
 
   async function handleDelete() {
@@ -284,7 +336,7 @@ export default function CustomersPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        {isAdmin && (
+        {canCreateCustomer && (
           <Button size="sm" onClick={openCreate}>
             <Plus className="w-4 h-4 mr-2" />
             Add Customer
@@ -343,10 +395,12 @@ export default function CustomersPage() {
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Users className="w-12 h-12 text-muted-foreground/50 mb-3" />
               <p className="text-sm text-muted-foreground">No customers found</p>
-              <Button size="sm" className="mt-4" onClick={openCreate}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add your first customer
-              </Button>
+              {canCreateCustomer && (
+                <Button size="sm" className="mt-4" onClick={openCreate}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add your first customer
+                </Button>
+              )}
             </div>
           ) : (
             <>
@@ -433,8 +487,57 @@ export default function CustomersPage() {
       </Card>
 
       {/* Create/Edit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) { setDocUploadFor(null); setCustomerDocs([]); } }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          {docUploadFor ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Attach Documents</DialogTitle>
+                <DialogDescription>
+                  Upload the required documents for this customer now, or finish and add them later from their profile.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                {REQUIRED_DOCUMENTS.map(rd => {
+                  const doc = customerDocs.find(d => d.document_type === rd.type);
+                  return (
+                    <div key={rd.type} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
+                      <div className="flex items-center gap-2">
+                        {doc ? <CheckCircle2 className="w-4 h-4 text-success" /> : <Circle className="w-4 h-4 text-muted-foreground" />}
+                        <div>
+                          <p className="text-sm font-medium">{rd.label}</p>
+                          {doc && <p className="text-xs text-muted-foreground">{doc.file_name}</p>}
+                        </div>
+                      </div>
+                      <input
+                        type="file"
+                        id={`cust-doc-upload-${rd.type}`}
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleDocUpload(rd.type, file);
+                          e.target.value = '';
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={uploadingDocType === rd.type}
+                        onClick={() => document.getElementById(`cust-doc-upload-${rd.type}`)?.click()}
+                      >
+                        {uploadingDocType === rd.type ? <Loader2 className="w-4 h-4 animate-spin" /> : doc ? 'Replace' : 'Upload'}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+              <DialogFooter>
+                <Button onClick={finishDocUpload}>Done</Button>
+              </DialogFooter>
+            </>
+          ) : (
+          <>
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit Customer' : 'Add New Customer'}</DialogTitle>
             <DialogDescription>
@@ -564,6 +667,8 @@ export default function CustomersPage() {
               </Button>
             </DialogFooter>
           </form>
+          </>
+          )}
         </DialogContent>
       </Dialog>
 

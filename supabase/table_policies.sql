@@ -37,12 +37,16 @@ ALTER TABLE penalties ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attendance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE leave_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE collector_attendance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payroll ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_loans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cash_flow ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE loan_receivables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chart_of_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal_entry_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE remittances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cash_counts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
@@ -118,7 +122,8 @@ CREATE POLICY "collectors_delete" ON collectors FOR DELETE TO authenticated USIN
 DROP POLICY IF EXISTS "customers_select" ON customers;
 CREATE POLICY "customers_select" ON customers FOR SELECT TO authenticated USING (true);
 DROP POLICY IF EXISTS "customers_insert" ON customers;
-CREATE POLICY "customers_insert" ON customers FOR INSERT TO authenticated WITH CHECK (is_admin());
+CREATE POLICY "customers_insert" ON customers FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() = 'Cashier');
 DROP POLICY IF EXISTS "customers_update" ON customers;
 CREATE POLICY "customers_update" ON customers FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 DROP POLICY IF EXISTS "customers_delete" ON customers;
@@ -145,8 +150,9 @@ DROP POLICY IF EXISTS "loan_types_delete" ON loan_types;
 CREATE POLICY "loan_types_delete" ON loan_types FOR DELETE TO authenticated USING (is_admin());
 
 -- LOANS
--- Helper: current user's role name (Collector requests loans, Branch Manager
--- approves/declines them, Cashier is view-only, Administrator can do everything)
+-- Helper: current user's role name (Branch Field Collector requests loans,
+-- Branch Manager approves/declines them, Cashier disburses approved ones,
+-- Administrator can do everything)
 CREATE OR REPLACE FUNCTION current_role_name()
 RETURNS text
 LANGUAGE sql
@@ -160,7 +166,7 @@ $$;
 
 -- Blocks status changes from anyone but the role responsible for that
 -- transition, even if they can otherwise insert/update a loan row (e.g.
--- Collector reapplying): approve/decline -> Branch Manager/Admin;
+-- Branch Field Collector reapplying): approve/decline -> Branch Manager/Admin;
 -- disburse (active)/renew -> Cashier/Admin.
 CREATE OR REPLACE FUNCTION enforce_loan_status_change()
 RETURNS trigger
@@ -188,11 +194,11 @@ DROP POLICY IF EXISTS "loans_select" ON loans;
 CREATE POLICY "loans_select" ON loans FOR SELECT TO authenticated USING (true);
 DROP POLICY IF EXISTS "loans_insert" ON loans;
 CREATE POLICY "loans_insert" ON loans FOR INSERT TO authenticated
-  WITH CHECK (is_admin() OR current_role_name() IN ('Collector', 'Branch Manager'));
+  WITH CHECK (is_admin() OR current_role_name() IN ('Branch Field Collector', 'Branch Manager'));
 DROP POLICY IF EXISTS "loans_update" ON loans;
 CREATE POLICY "loans_update" ON loans FOR UPDATE TO authenticated
   USING (true)
-  WITH CHECK (is_admin() OR current_role_name() IN ('Collector', 'Branch Manager', 'Cashier'));
+  WITH CHECK (is_admin() OR current_role_name() IN ('Branch Field Collector', 'Branch Manager', 'Cashier'));
 DROP POLICY IF EXISTS "loans_delete" ON loans;
 CREATE POLICY "loans_delete" ON loans FOR DELETE TO authenticated USING (is_admin());
 
@@ -212,6 +218,20 @@ DROP POLICY IF EXISTS "cash_vouchers_update" ON cash_vouchers;
 CREATE POLICY "cash_vouchers_update" ON cash_vouchers FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
 DROP POLICY IF EXISTS "cash_vouchers_delete" ON cash_vouchers;
 CREATE POLICY "cash_vouchers_delete" ON cash_vouchers FOR DELETE TO authenticated USING (is_admin());
+
+-- COLLATERAL
+ALTER TABLE collateral ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "collateral_select" ON collateral;
+CREATE POLICY "collateral_select" ON collateral FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "collateral_insert" ON collateral;
+CREATE POLICY "collateral_insert" ON collateral FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() = 'Cashier');
+DROP POLICY IF EXISTS "collateral_update" ON collateral;
+CREATE POLICY "collateral_update" ON collateral FOR UPDATE TO authenticated
+  USING (is_admin() OR current_role_name() = 'Cashier')
+  WITH CHECK (is_admin() OR current_role_name() = 'Cashier');
+DROP POLICY IF EXISTS "collateral_delete" ON collateral;
+CREATE POLICY "collateral_delete" ON collateral FOR DELETE TO authenticated USING (is_admin());
 
 -- PAYMENTS
 DROP POLICY IF EXISTS "payments_select" ON payments;
@@ -325,6 +345,37 @@ CREATE TRIGGER emp_loans_status_change_guard
 BEFORE UPDATE ON employee_loans
 FOR EACH ROW EXECUTE FUNCTION enforce_employee_loan_status_change();
 
+-- LEAVE_REQUESTS
+CREATE OR REPLACE FUNCTION enforce_leave_request_status_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NEW.status IN ('approved', 'rejected')
+     AND NOT is_admin()
+     AND current_role_name() IS DISTINCT FROM 'Branch Manager' THEN
+    RAISE EXCEPTION 'Only a Branch Manager or Administrator can approve or reject leave requests';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP POLICY IF EXISTS "leave_requests_select" ON leave_requests;
+CREATE POLICY "leave_requests_select" ON leave_requests FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "leave_requests_insert" ON leave_requests;
+CREATE POLICY "leave_requests_insert" ON leave_requests FOR INSERT TO authenticated WITH CHECK (true);
+DROP POLICY IF EXISTS "leave_requests_update" ON leave_requests;
+CREATE POLICY "leave_requests_update" ON leave_requests FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "leave_requests_delete" ON leave_requests;
+CREATE POLICY "leave_requests_delete" ON leave_requests FOR DELETE TO authenticated USING (is_admin());
+
+DROP TRIGGER IF EXISTS leave_requests_status_change_guard ON leave_requests;
+CREATE TRIGGER leave_requests_status_change_guard
+BEFORE UPDATE ON leave_requests
+FOR EACH ROW EXECUTE FUNCTION enforce_leave_request_status_change();
+
 -- CASH_FLOW
 DROP POLICY IF EXISTS "cash_flow_select" ON cash_flow;
 CREATE POLICY "cash_flow_select" ON cash_flow FOR SELECT TO authenticated USING (true);
@@ -354,6 +405,37 @@ DROP POLICY IF EXISTS "receivables_update" ON loan_receivables;
 CREATE POLICY "receivables_update" ON loan_receivables FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 DROP POLICY IF EXISTS "receivables_delete" ON loan_receivables;
 CREATE POLICY "receivables_delete" ON loan_receivables FOR DELETE TO authenticated USING (is_admin());
+
+-- CHART_OF_ACCOUNTS (structural — admin-managed, everyone can read to label entries)
+DROP POLICY IF EXISTS "coa_select" ON chart_of_accounts;
+CREATE POLICY "coa_select" ON chart_of_accounts FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "coa_insert" ON chart_of_accounts;
+CREATE POLICY "coa_insert" ON chart_of_accounts FOR INSERT TO authenticated WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "coa_update" ON chart_of_accounts;
+CREATE POLICY "coa_update" ON chart_of_accounts FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "coa_delete" ON chart_of_accounts;
+CREATE POLICY "coa_delete" ON chart_of_accounts FOR DELETE TO authenticated USING (is_admin());
+
+-- JOURNAL_ENTRIES / JOURNAL_ENTRY_LINES
+DROP POLICY IF EXISTS "journal_entries_select" ON journal_entries;
+CREATE POLICY "journal_entries_select" ON journal_entries FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "journal_entries_insert" ON journal_entries;
+CREATE POLICY "journal_entries_insert" ON journal_entries FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() IN ('Cashier', 'Accounting'));
+DROP POLICY IF EXISTS "journal_entries_update" ON journal_entries;
+CREATE POLICY "journal_entries_update" ON journal_entries FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "journal_entries_delete" ON journal_entries;
+CREATE POLICY "journal_entries_delete" ON journal_entries FOR DELETE TO authenticated USING (is_admin());
+
+DROP POLICY IF EXISTS "journal_entry_lines_select" ON journal_entry_lines;
+CREATE POLICY "journal_entry_lines_select" ON journal_entry_lines FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "journal_entry_lines_insert" ON journal_entry_lines;
+CREATE POLICY "journal_entry_lines_insert" ON journal_entry_lines FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() IN ('Cashier', 'Accounting'));
+DROP POLICY IF EXISTS "journal_entry_lines_update" ON journal_entry_lines;
+CREATE POLICY "journal_entry_lines_update" ON journal_entry_lines FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "journal_entry_lines_delete" ON journal_entry_lines;
+CREATE POLICY "journal_entry_lines_delete" ON journal_entry_lines FOR DELETE TO authenticated USING (is_admin());
 
 -- REMITTANCES
 DROP POLICY IF EXISTS "remittances_select" ON remittances;

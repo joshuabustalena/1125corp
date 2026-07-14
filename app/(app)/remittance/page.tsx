@@ -23,6 +23,7 @@ import { ArrowRightLeft, Loader2, Wallet } from 'lucide-react';
 export default function RemittancePage() {
   const { toast } = useToast();
   const { profile } = useAuth();
+  const isFieldCollector = profile?.role_name === 'Branch Field Collector';
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(true);
   const [collectors, setCollectors] = useState<any[]>([]);
@@ -32,12 +33,18 @@ export default function RemittancePage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ collector_id: '', amount: '', notes: '' });
 
-  useEffect(() => { loadData(); }, [date]);
+  useEffect(() => {
+    if (!profile) return;
+    loadData();
+  }, [date, profile]);
 
   async function loadData() {
     setLoading(true);
+    let colQuery = supabase.from('collectors').select('id, branch_id, profile_id, profiles(full_name)').eq('status', 'active');
+    if (isFieldCollector && profile) colQuery = colQuery.eq('profile_id', profile.id);
+
     const [{ data: cols }, { data: pays }, { data: rems }] = await Promise.all([
-      supabase.from('collectors').select('id, branch_id, profiles(full_name)').eq('status', 'active'),
+      colQuery,
       supabase.from('payments').select('collector_id, amount_paid').eq('payment_date', date),
       supabase.from('remittances').select('collector_id, amount').eq('remittance_date', date),
     ]);
@@ -102,7 +109,10 @@ export default function RemittancePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Collector Remittance" description="Cash collected by field collectors vs. what's been turned in">
+      <PageHeader
+        title={isFieldCollector ? 'My Remittance' : 'Collector Remittance'}
+        description={isFieldCollector ? 'How much of your collections you still need to turn in to the Cashier' : "Cash collected by field collectors vs. what's been turned in"}
+      >
         <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
       </PageHeader>
 
@@ -110,7 +120,7 @@ export default function RemittancePage() {
         <CardContent className="p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-muted-foreground">Total Still Owed to Cashier</p>
+              <p className="text-sm text-muted-foreground">{isFieldCollector ? 'Still Owed to Cashier' : 'Total Still Owed to Cashier'}</p>
               <p className="text-2xl font-bold">{formatCurrency(totalOwed)}</p>
             </div>
             <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-warning/10 text-warning">
@@ -137,7 +147,7 @@ export default function RemittancePage() {
                   <TableHead>Collected</TableHead>
                   <TableHead>Remitted</TableHead>
                   <TableHead>Balance Owed</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  {!isFieldCollector && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -149,11 +159,13 @@ export default function RemittancePage() {
                     <TableCell className="text-sm font-medium">
                       <Badge variant={r.owed > 0 ? 'destructive' : 'default'}>{formatCurrency(r.owed)}</Badge>
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id)}>
-                        Record Remittance
-                      </Button>
-                    </TableCell>
+                    {!isFieldCollector && (
+                      <TableCell className="text-right">
+                        <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id)}>
+                          Record Remittance
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>

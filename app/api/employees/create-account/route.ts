@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     // too — customers.collector_id references collectors(id), a separate
     // table from employees, so both must stay in sync.
     const { data: employee } = await supabaseAdmin.from('employees').select('position, area_id').eq('id', employee_id).maybeSingle();
-    if (employee?.position === 'Collector') {
+    if (employee?.position === 'Branch Field Collector') {
       const { data: existingCollector } = await supabaseAdmin.from('collectors').select('id').eq('profile_id', created.user.id).maybeSingle();
       const collectorPayload = { branch_id: branch_id || null, area_id: employee.area_id ?? null, status: 'active' };
       if (existingCollector) {

@@ -71,6 +71,12 @@ export function generateVoucherNumber(): string {
   return `CV-${year}-${random}`;
 }
 
+export function generateEntryNumber(): string {
+  const year = new Date().getFullYear();
+  const random = Math.floor(100000 + Math.random() * 900000);
+  return `JE-${year}-${random}`;
+}
+
 export function computeLoanDetails(
   amount: number,
   interestRate: number,

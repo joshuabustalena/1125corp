@@ -103,7 +103,7 @@ export default function EmployeesPage() {
     profileId: string,
     payload: { position: string | null; branch_id: string | null; area_id: string | null; status: string }
   ) {
-    if (payload.position !== 'Collector') {
+    if (payload.position !== 'Branch Field Collector') {
       await supabase.from('collectors').delete().eq('profile_id', profileId);
       return;
     }
@@ -123,7 +123,7 @@ export default function EmployeesPage() {
       first_name: form.first_name, last_name: form.last_name, middle_name: form.middle_name || null,
       department: form.department || null, position: form.position || null,
       branch_id: form.branch_id || null,
-      area_id: form.position === 'Collector' ? (form.area_id || null) : null,
+      area_id: form.position === 'Branch Field Collector' ? (form.area_id || null) : null,
       salary: Number(form.salary) || 0,
       status: form.status, hire_date: form.hire_date || null,
       phone: form.phone || null, email: form.email || null, address: form.address || null,
@@ -313,7 +313,7 @@ export default function EmployeesPage() {
               <div className="space-y-2"><Label>Department</Label><Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="e.g. Operations" /></div>
               <div className="space-y-2">
                 <Label>Position</Label>
-                <Select value={form.position} onValueChange={(v) => setForm({ ...form, position: v, area_id: v === 'Collector' ? form.area_id : '' })}>
+                <Select value={form.position} onValueChange={(v) => setForm({ ...form, position: v, area_id: v === 'Branch Field Collector' ? form.area_id : '' })}>
                   <SelectTrigger><SelectValue placeholder="Select position" /></SelectTrigger>
                   <SelectContent>{positions.map(p => <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>)}</SelectContent>
                 </Select>
@@ -325,7 +325,7 @@ export default function EmployeesPage() {
                   <SelectContent>{branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              {form.position === 'Collector' && (
+              {form.position === 'Branch Field Collector' && (
                 <div className="space-y-2">
                   <Label>Area</Label>
                   <Select value={form.area_id} onValueChange={(v) => setForm({ ...form, area_id: v })} disabled={!form.branch_id}>

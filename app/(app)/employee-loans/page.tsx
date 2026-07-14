@@ -28,13 +28,18 @@ export default function EmployeeLoansPage() {
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const [loans, setLoans] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
+  const [myEmployee, setMyEmployee] = useState<{ id: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [form, setForm] = useState({ employee_id: '', amount: '', deduction_amount: '', term_months: '6' });
 
-  useEffect(() => { load(); loadEmployees(); }, []);
+  useEffect(() => {
+    if (!profile) return;
+    load();
+    if (canApprove) loadEmployees();
+  }, [profile]);
 
   async function loadEmployees() {
     const { data } = await supabase.from('employees').select('id, first_name, last_name, salary').eq('status', 'active');
@@ -43,7 +48,15 @@ export default function EmployeeLoansPage() {
 
   async function load() {
     setLoading(true);
-    const { data } = await supabase.from('employee_loans').select('*, employees(first_name, last_name)').order('created_at', { ascending: false });
+    let empId: string | null = null;
+    if (!canApprove) {
+      const { data: emp } = await supabase.from('employees').select('id').eq('profile_id', profile?.id ?? '').maybeSingle();
+      setMyEmployee(emp);
+      empId = emp?.id ?? '00000000-0000-0000-0000-000000000000';
+    }
+    let q = supabase.from('employee_loans').select('*, employees(first_name, last_name)').order('created_at', { ascending: false });
+    if (empId) q = q.eq('employee_id', empId);
+    const { data } = await q;
     setLoans(data ?? []);
     setLoading(false);
   }
@@ -101,7 +114,14 @@ export default function EmployeeLoansPage() {
     <div className="space-y-6">
       <PageHeader title="Employee Loans" description="Manage employee loan applications (max ₱15,000, 2 active, 6 months)">
         <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
-        <Button size="sm" onClick={() => setDialogOpen(true)}><Plus className="w-4 h-4 mr-2" />Apply Loan</Button>
+        <Button
+          size="sm"
+          disabled={!canApprove && !myEmployee}
+          onClick={() => { setForm(f => ({ ...f, employee_id: canApprove ? f.employee_id : (myEmployee?.id ?? '') })); setDialogOpen(true); }}
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Apply Loan
+        </Button>
       </PageHeader>
 
       <Card className="glass-card border-border">
@@ -157,13 +177,15 @@ export default function EmployeeLoansPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>Apply Employee Loan</DialogTitle><DialogDescription>Max ₱15,000, max 2 active loans, 6 months repayment</DialogDescription></DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label>Employee *</Label>
-              <Select value={form.employee_id} onValueChange={(v) => setForm({ ...form, employee_id: v })} required>
-                <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
-                <SelectContent>{employees.map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
+            {canApprove && (
+              <div className="space-y-2">
+                <Label>Employee *</Label>
+                <Select value={form.employee_id} onValueChange={(v) => setForm({ ...form, employee_id: v })} required>
+                  <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
+                  <SelectContent>{employees.map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Amount (₱) *</Label><Input type="number" required max="15000" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="Max 15000" /></div>
               <div className="space-y-2"><Label>Term (Months)</Label><Input type="number" max="6" value={form.term_months} onChange={(e) => setForm({ ...form, term_months: e.target.value })} /></div>

@@ -65,7 +65,7 @@ export default function LoansPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
-  const isCollector = profile?.role_name === 'Collector';
+  const isCollector = profile?.role_name === 'Branch Field Collector';
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -139,7 +139,7 @@ export default function LoansPage() {
   useEffect(() => {
     if (!profile) return;
     async function loadMyCollector() {
-      if (profile?.role_name !== 'Collector') return;
+      if (profile?.role_name !== 'Branch Field Collector') return;
       const { data } = await supabase.from('collectors').select('id, branch_id, area_id').eq('profile_id', profile.id).maybeSingle();
       setMyCollector(data);
     }
@@ -384,7 +384,7 @@ export default function LoansPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        {(profile?.role_name === 'Collector' || profile?.role_name === 'Administrator') && (
+        {(profile?.role_name === 'Branch Field Collector' || profile?.role_name === 'Administrator') && (
           <Button size="sm" onClick={() => { setExistingLoanBlock(null); setDialogOpen(true); }}>
             <Plus className="w-4 h-4 mr-2" />
             New Loan

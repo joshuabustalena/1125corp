@@ -19,10 +19,11 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateLoanNumber, generateVoucherNumber, computeLoanDetails } from '@/lib/format';
+import { postJournalEntry } from '@/lib/ledger';
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
-  CheckCircle2, Circle, Upload, FileText, Banknote, Download,
+  CheckCircle2, Circle, FileText, Banknote, Download, ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -135,8 +136,9 @@ export default function LoanDetailPage() {
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const canDisburse = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
+  const canManageCollateral = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
   const isCashier = profile?.role_name === 'Cashier';
-  const isCollector = profile?.role_name === 'Collector';
+  const isCollector = profile?.role_name === 'Branch Field Collector';
   const [loan, setLoan] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [chainLoans, setChainLoans] = useState<any[]>([]);
@@ -151,7 +153,6 @@ export default function LoanDetailPage() {
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveDocs, setApproveDocs] = useState<any[]>([]);
   const [approveDocsLoading, setApproveDocsLoading] = useState(false);
-  const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState('');
@@ -172,6 +173,13 @@ export default function LoanDetailPage() {
   const [printingUndertaking, setPrintingUndertaking] = useState(false);
   const [downloadingUndertaking, setDownloadingUndertaking] = useState(false);
   const undertakingRef = useRef<HTMLDivElement>(null);
+  const [collateral, setCollateral] = useState<any[]>([]);
+  const [collateralDialogOpen, setCollateralDialogOpen] = useState(false);
+  const [savingCollateral, setSavingCollateral] = useState(false);
+  const [collateralForm, setCollateralForm] = useState({ collateral_type: 'orcr', reference_number: '', description: '', notes: '' });
+  const [releaseTarget, setReleaseTarget] = useState<any>(null);
+  const [releasedTo, setReleasedTo] = useState('');
+  const [releasingCollateral, setReleasingCollateral] = useState(false);
 
   async function loadLoan() {
     const id = params.id as string;
@@ -181,6 +189,9 @@ export default function LoanDetailPage() {
     ]);
     setLoan(l.data);
     setPayments(p.data ?? []);
+
+    const { data: collateralData } = await supabase.from('collateral').select('*').eq('loan_id', id).order('created_at', { ascending: false });
+    setCollateral(collateralData ?? []);
 
     // Walk backward through renewed_from_loan_id to build the full chain of
     // renewals for this customer, oldest first, so the calendar can show one
@@ -429,40 +440,6 @@ export default function LoanDetailPage() {
       .eq('customer_id', loan.customer_id);
     setApproveDocs(data ?? []);
     setApproveDocsLoading(false);
-  }
-
-  async function handleDocUpload(docType: string, file: File) {
-    setUploadingDocType(docType);
-    const ext = file.name.split('.').pop();
-    const path = `${loan.customer_id}/${docType}-${Date.now()}.${ext}`;
-
-    const { error: uploadError } = await supabase.storage.from('customer-documents').upload(path, file, {
-      contentType: file.type,
-    });
-    if (uploadError) {
-      toast({ title: 'Upload failed', description: uploadError.message, variant: 'destructive' });
-      setUploadingDocType(null);
-      return;
-    }
-
-    const { data: urlData } = supabase.storage.from('customer-documents').getPublicUrl(path);
-    const { error: insertError } = await supabase.from('customer_documents').insert({
-      customer_id: loan.customer_id,
-      document_type: docType,
-      file_name: file.name,
-      file_url: urlData.publicUrl,
-    });
-
-    if (insertError) {
-      toast({ title: 'Error', description: insertError.message, variant: 'destructive' });
-    } else {
-      const { data } = await supabase
-        .from('customer_documents')
-        .select('*')
-        .eq('customer_id', loan.customer_id);
-      setApproveDocs(data ?? []);
-    }
-    setUploadingDocType(null);
   }
 
   const missingDocs = REQUIRED_DOCUMENTS.filter(rd => !approveDocs.some(d => d.document_type === rd.type));
@@ -760,6 +737,22 @@ export default function LoanDetailPage() {
       setVoucherData(buildVoucherData(voucherNumber, now));
     }
 
+    // Auto-post to the general ledger: the full loan amount becomes
+    // receivable, cash goes out net of the service fee we keep as income.
+    postJournalEntry({
+      entryDate: now.split('T')[0],
+      description: `Loan disbursement — ${loan.loan_number}`,
+      reference: voucherNumber,
+      source: 'disbursement',
+      sourceId: loan.id,
+      createdBy: profile?.id ?? null,
+      lines: [
+        { accountCode: '1100', debit: Number(loan.amount), memo: 'Loans Receivable' },
+        { accountCode: '1000', credit: Number(loan.release_amount), memo: 'Cash released to borrower' },
+        { accountCode: '4010', credit: Number(loan.service_fee), memo: 'Service fee income' },
+      ],
+    });
+
     toast({ title: 'Loan disbursed', description: `${loan.loan_number} is now active.` });
     loadLoan();
     setDisbursing(false);
@@ -843,6 +836,54 @@ export default function LoanDetailPage() {
     }
     setDeclining(false);
   }
+
+  async function handleAddCollateral(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingCollateral(true);
+    const { error } = await supabase.from('collateral').insert({
+      loan_id: loan.id,
+      customer_id: loan.customer_id,
+      collateral_type: collateralForm.collateral_type,
+      reference_number: collateralForm.reference_number || null,
+      description: collateralForm.description || null,
+      notes: collateralForm.notes || null,
+      created_by: profile?.id ?? null,
+    });
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: 'Collateral item recorded' });
+      setCollateralDialogOpen(false);
+      setCollateralForm({ collateral_type: 'orcr', reference_number: '', description: '', notes: '' });
+      loadLoan();
+    }
+    setSavingCollateral(false);
+  }
+
+  function openRelease(item: any) {
+    setReleaseTarget(item);
+    setReleasedTo('');
+  }
+
+  async function handleConfirmRelease() {
+    if (!releaseTarget || !releasedTo.trim()) return;
+    setReleasingCollateral(true);
+    const { error } = await supabase.from('collateral').update({
+      status: 'released',
+      released_date: new Date().toISOString().split('T')[0],
+      released_to: releasedTo.trim(),
+    }).eq('id', releaseTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: 'Collateral marked as released' });
+      setReleaseTarget(null);
+      loadLoan();
+    }
+    setReleasingCollateral(false);
+  }
+
+  const collateralTypeLabel = (t: string) => t === 'orcr' ? 'ORCR' : t === 'bank_check' ? 'Bank Check' : 'Other';
 
   return (
     <div className="space-y-6">
@@ -1050,6 +1091,61 @@ export default function LoanDetailPage() {
         </Card>
       </div>
 
+      {/* Collateral */}
+      <Card className="glass-card border-border">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5" />
+              Collateral
+            </CardTitle>
+            <CardDescription>{collateral.length} item{collateral.length !== 1 ? 's' : ''} on file (ORCR / Bank Checks)</CardDescription>
+          </div>
+          {canManageCollateral && (
+            <Button size="sm" variant="outline" onClick={() => setCollateralDialogOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Add Collateral
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {collateral.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">No collateral recorded for this loan</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Reference #</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Held Date</TableHead>
+                  {canManageCollateral && <TableHead className="text-right">Actions</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {collateral.map(c => (
+                  <TableRow key={c.id}>
+                    <TableCell className="text-sm font-medium">{collateralTypeLabel(c.collateral_type)}</TableCell>
+                    <TableCell className="text-sm">{c.reference_number ?? '—'}</TableCell>
+                    <TableCell className="text-sm">{c.description ?? '—'}</TableCell>
+                    <TableCell><Badge variant={c.status === 'released' ? 'secondary' : 'default'} className="capitalize">{c.status}</Badge></TableCell>
+                    <TableCell className="text-sm">{formatDate(c.held_date)}</TableCell>
+                    {canManageCollateral && (
+                      <TableCell className="text-right">
+                        {c.status === 'held' && (
+                          <Button variant="outline" size="sm" onClick={() => openRelease(c)}>Release</Button>
+                        )}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Renewal info */}
       {loan.status === 'active' && !isCollector && (
         <Card className="glass-card border-border">
@@ -1247,37 +1343,15 @@ export default function LoanDetailPage() {
                         <p className="text-xs text-muted-foreground">Not uploaded yet</p>
                       )}
                     </div>
-                    <div>
-                      <input
-                        type="file"
-                        id={`doc-upload-${rd.type}`}
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleDocUpload(rd.type, file);
-                          e.target.value = '';
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={uploadingDocType === rd.type}
-                        onClick={() => document.getElementById(`doc-upload-${rd.type}`)?.click()}
-                      >
-                        {uploadingDocType === rd.type ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <>
-                            <Upload className="w-4 h-4 mr-1.5" />
-                            {doc ? 'Replace' : 'Upload'}
-                          </>
-                        )}
-                      </Button>
-                    </div>
                   </div>
                 );
               })}
+              {missingDocs.length > 0 && (
+                <Link href={`/customers/${loan.customer_id}`} className="text-sm text-primary hover:underline flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" />
+                  Upload missing documents from {loan.customers?.first_name}'s customer profile
+                </Link>
+              )}
             </div>
           )}
 
@@ -1742,6 +1816,73 @@ export default function LoanDetailPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Add collateral */}
+      <Dialog open={collateralDialogOpen} onOpenChange={setCollateralDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Collateral</DialogTitle>
+            <DialogDescription>Record an item held against {loan.customers?.first_name} {loan.customers?.last_name}'s loan</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddCollateral} className="space-y-4">
+            <div className="space-y-2">
+              <Label>Type *</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={collateralForm.collateral_type}
+                onChange={(e) => setCollateralForm({ ...collateralForm, collateral_type: e.target.value })}
+                required
+              >
+                <option value="orcr">ORCR</option>
+                <option value="bank_check">Bank Check</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Reference Number</Label>
+              <Input value={collateralForm.reference_number} onChange={(e) => setCollateralForm({ ...collateralForm, reference_number: e.target.value })} placeholder="e.g. plate/chassis number or check number" />
+            </div>
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Input value={collateralForm.description} onChange={(e) => setCollateralForm({ ...collateralForm, description: e.target.value })} placeholder="e.g. 2019 Honda Click 125i, red" />
+            </div>
+            <div className="space-y-2">
+              <Label>Notes</Label>
+              <Textarea value={collateralForm.notes} onChange={(e) => setCollateralForm({ ...collateralForm, notes: e.target.value })} rows={3} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCollateralDialogOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={savingCollateral}>
+                {savingCollateral && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Save
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Release collateral */}
+      <Dialog open={!!releaseTarget} onOpenChange={(open) => !open && setReleaseTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Release Collateral</DialogTitle>
+            <DialogDescription>
+              Confirm release of {releaseTarget ? collateralTypeLabel(releaseTarget.collateral_type) : ''} {releaseTarget?.reference_number ? `(${releaseTarget.reference_number})` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Released To *</Label>
+            <Input value={releasedTo} onChange={(e) => setReleasedTo(e.target.value)} placeholder="Name of person receiving the item" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReleaseTarget(null)}>Cancel</Button>
+            <Button disabled={!releasedTo.trim() || releasingCollateral} onClick={handleConfirmRelease}>
+              {releasingCollateral && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Confirm Release
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
 import {
@@ -26,6 +27,8 @@ import {
 
 export default function ReportsPage() {
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const isFieldCollector = profile?.role_name === 'Branch Field Collector';
   const [reportType, setReportType] = useState('daily_collection');
   const [startDate, setStartDate] = useState(new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -37,8 +40,26 @@ export default function ReportsPage() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [branchFilter, setBranchFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
+  const [myArea, setMyArea] = useState<{ id: string; name: string } | null>(null);
 
-  useEffect(() => { loadFilterOptions(); generateReport(); }, []);
+  useEffect(() => { loadFilterOptions(); }, []);
+
+  // Field Collectors are locked to their own assigned area — no company-wide
+  // visibility. Everyone else keeps the free Branch/Area filter dropdowns.
+  useEffect(() => {
+    if (!profile || !isFieldCollector) return;
+    supabase.from('collectors').select('area_id, areas(name)').eq('profile_id', profile.id).maybeSingle().then(({ data }) => {
+      if (data?.area_id) {
+        setAreaFilter(data.area_id);
+        setMyArea({ id: data.area_id, name: (data as any).areas?.name ?? 'Unassigned' });
+      }
+    });
+  }, [profile, isFieldCollector]);
+
+  useEffect(() => {
+    if (isFieldCollector && !myArea) return;
+    generateReport();
+  }, [myArea, isFieldCollector]);
 
   async function loadFilterOptions() {
     const [b, a, c] = await Promise.all([
@@ -262,28 +283,37 @@ export default function ReportsPage() {
       {/* Report config */}
       <Card className="glass-card border-border">
         <CardContent className="p-4 space-y-4">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
-            <div className="space-y-2 flex-1">
-              <Label>Branch</Label>
-              <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Branches</SelectItem>
-                  {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2 flex-1">
+          {isFieldCollector ? (
+            <div className="space-y-2">
               <Label>Area</Label>
-              <Select value={areaFilter} onValueChange={setAreaFilter}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Areas</SelectItem>
-                  {areas.filter(a => branchFilter === 'all' || a.branch_id === branchFilter).map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <div className="flex h-10 w-full max-w-xs items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
+                {myArea?.name ?? 'Loading your area…'}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex flex-col sm:flex-row gap-4 items-end">
+              <div className="space-y-2 flex-1">
+                <Label>Branch</Label>
+                <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Branches</SelectItem>
+                    {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 flex-1">
+                <Label>Area</Label>
+                <Select value={areaFilter} onValueChange={setAreaFilter}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Areas</SelectItem>
+                    {areas.filter(a => branchFilter === 'all' || a.branch_id === branchFilter).map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="space-y-2 flex-1">
               <Label>Report Type</Label>
@@ -293,15 +323,15 @@ export default function ReportsPage() {
                   <SelectItem value="daily_collection">Daily Collection</SelectItem>
                   <SelectItem value="weekly_collection">Weekly Collection</SelectItem>
                   <SelectItem value="monthly_collection">Monthly Collection</SelectItem>
-                  <SelectItem value="collector_performance">Collector Performance</SelectItem>
-                  <SelectItem value="branch_performance">Branch Performance</SelectItem>
+                  {!isFieldCollector && <SelectItem value="collector_performance">Collector Performance</SelectItem>}
+                  <SelectItem value="branch_performance">{isFieldCollector ? 'Release (My Area)' : 'Branch Performance'}</SelectItem>
                   <SelectItem value="loan_receivable">Loan Receivable</SelectItem>
                   <SelectItem value="overdue_amount">Overdue Amount</SelectItem>
                   <SelectItem value="overdue_rate">Overdue Rate</SelectItem>
-                  <SelectItem value="customers_per_area">Customers per Area</SelectItem>
+                  <SelectItem value="customers_per_area">{isFieldCollector ? 'All Customers' : 'Customers per Area'}</SelectItem>
                   <SelectItem value="delinquent_customers">Delayed / Past-Due Customers</SelectItem>
-                  <SelectItem value="payroll">Payroll</SelectItem>
-                  <SelectItem value="attendance">Attendance</SelectItem>
+                  {!isFieldCollector && <SelectItem value="payroll">Payroll</SelectItem>}
+                  {!isFieldCollector && <SelectItem value="attendance">Attendance</SelectItem>}
                 </SelectContent>
               </Select>
             </div>

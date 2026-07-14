@@ -18,6 +18,8 @@ import {
   UserCheck,
   Banknote,
   ArrowRightLeft,
+  CalendarClock,
+  BookOpen,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -64,6 +66,7 @@ export const navSections: NavSection[] = [
       { label: 'Collectors', href: '/collectors', icon: UserCheck },
       { label: 'Payroll', href: '/payroll', icon: ScrollText },
       { label: 'Employee Loans', href: '/employee-loans', icon: Landmark },
+      { label: 'Leave Requests', href: '/leave-requests', icon: CalendarClock },
       { label: 'Attendance', href: '/attendance', icon: ClipboardCheck },
       { label: 'Collector Attendance', href: '/collector-attendance', icon: ClipboardCheck },
     ],
@@ -72,6 +75,7 @@ export const navSections: NavSection[] = [
     title: 'Finance',
     items: [
       { label: 'Accounting', href: '/accounting', icon: Calculator },
+      { label: 'General Ledger', href: '/general-ledger', icon: BookOpen },
       { label: 'Cash Count', href: '/cash-count', icon: Banknote },
       { label: 'Remittance', href: '/remittance', icon: ArrowRightLeft },
       { label: 'Reports', href: '/reports', icon: FileBarChart },

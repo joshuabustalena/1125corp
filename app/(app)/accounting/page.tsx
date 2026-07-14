@@ -18,14 +18,17 @@ import {
 } from '@/components/ui/dialog';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
+import { postJournalEntry } from '@/lib/ledger';
 import {
   Calculator, Plus, Download, Loader2, TrendingUp, TrendingDown, Banknote, Wallet,
 } from 'lucide-react';
 
 export default function AccountingPage() {
   const { toast } = useToast();
+  const { profile } = useAuth();
   const [cashFlow, setCashFlow] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [receivables, setReceivables] = useState<any[]>([]);
@@ -71,13 +74,29 @@ export default function AccountingPage() {
       if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
       else { toast({ title: 'Success', description: 'Cash flow entry added' }); setDialogOpen(false); load(); }
     } else {
+      const expenseDate = form.expense_date || new Date().toISOString().split('T')[0];
       const { error } = await supabase.from('expenses').insert({
         category: form.expense_category, amount: Number(form.amount),
         description: form.description || null,
-        expense_date: form.expense_date || new Date().toISOString().split('T')[0],
+        expense_date: expenseDate,
       });
-      if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      else { toast({ title: 'Success', description: 'Expense added' }); setDialogOpen(false); load(); }
+      if (error) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      } else {
+        postJournalEntry({
+          entryDate: expenseDate,
+          description: `Expense — ${form.expense_category}`,
+          source: 'expense',
+          createdBy: profile?.id ?? null,
+          lines: [
+            { accountCode: '5000', debit: Number(form.amount), memo: form.description || form.expense_category },
+            { accountCode: '1000', credit: Number(form.amount), memo: 'Cash paid out' },
+          ],
+        });
+        toast({ title: 'Success', description: 'Expense added' });
+        setDialogOpen(false);
+        load();
+      }
     }
     setSaving(false);
   }

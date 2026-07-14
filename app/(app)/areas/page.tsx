@@ -76,7 +76,7 @@ export default function AreasPage() {
     const [areasRes, branchesRes, collectorsRes, customersRes] = await Promise.all([
       supabase.from('areas').select('*, branches(name)').order('name'),
       supabase.from('branches').select('id, name, max_loan_limit').eq('status', 'active').order('name'),
-      supabase.from('employees').select('id, area_id').eq('position', 'Collector'),
+      supabase.from('employees').select('id, area_id').eq('position', 'Branch Field Collector'),
       supabase.from('customers').select('id, area_id'),
     ]);
 
@@ -117,7 +117,7 @@ export default function AreasPage() {
     setViewTarget(a);
     setViewLoading(true);
     const [collectorsRes, customersRes] = await Promise.all([
-      supabase.from('employees').select('id, first_name, last_name, status').eq('area_id', a.id).eq('position', 'Collector').order('first_name'),
+      supabase.from('employees').select('id, first_name, last_name, status').eq('area_id', a.id).eq('position', 'Branch Field Collector').order('first_name'),
       supabase.from('customers').select('id, first_name, last_name, phone, status').eq('area_id', a.id).order('first_name'),
     ]);
     setViewCollectors(collectorsRes.data ?? []);

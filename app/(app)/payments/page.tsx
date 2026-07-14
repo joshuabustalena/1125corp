@@ -20,6 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateORNumber, exportToCSV } from '@/lib/format';
+import { postJournalEntry } from '@/lib/ledger';
 import {
   Wallet, Plus, Search, Download, Eye, Loader2, MapPin, Receipt, Calculator, ChevronDown, Check,
 } from 'lucide-react';
@@ -31,7 +32,7 @@ export default function PaymentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { profile } = useAuth();
-  const isCollector = profile?.role_name === 'Collector';
+  const isCollector = profile?.role_name === 'Branch Field Collector';
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const { toast } = useToast();
   const [payments, setPayments] = useState<any[]>([]);
@@ -122,7 +123,7 @@ export default function PaymentsPage() {
   useEffect(() => {
     if (!profile) return;
     async function loadMyCollector() {
-      if (profile?.role_name !== 'Collector') return;
+      if (profile?.role_name !== 'Branch Field Collector') return;
       const { data } = await supabase.from('collectors').select('id, branch_id, area_id').eq('profile_id', profile.id).maybeSingle();
       setMyCollector(data);
     }
@@ -269,6 +270,23 @@ export default function PaymentsPage() {
       remaining_balance: newBalance,
       status: newBalance === 0 ? 'paid' : selectedLoan?.status,
     }).eq('id', form.loan_id);
+
+    // Auto-post to the general ledger. Simplified: the whole payment reduces
+    // the receivable — the split into principal/interest/penalty isn't
+    // tracked at post time yet (those columns are always inserted as 0
+    // above), so this doesn't separately credit Interest/Penalty Income.
+    postJournalEntry({
+      entryDate: paymentDate,
+      description: `Payment received — ${selectedLoan?.loan_number ?? ''} (OR ${orNumber})`,
+      reference: orNumber,
+      source: 'payment',
+      sourceId: receipt.id,
+      createdBy: profile?.id ?? null,
+      lines: [
+        { accountCode: '1000', debit: Number(form.amount_paid), memo: 'Cash collected' },
+        { accountCode: '1100', credit: Number(form.amount_paid), memo: 'Loans Receivable reduced' },
+      ],
+    });
 
     toast({ title: 'Success', description: `Payment posted. OR: ${orNumber}` });
 
