@@ -306,7 +306,7 @@ export default function LoansPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Submitted for approval', description: `Loan ${loanNumber} is pending — a Cashier must approve it before it becomes active.` });
+      toast({ title: 'Submitted for approval', description: `Loan ${loanNumber} is pending — a Branch Manager must approve it before it becomes active.` });
       setDialogOpen(false);
       setForm({ ...form, customer_id: '', amount: '' });
       loadLoans();
@@ -383,7 +383,7 @@ export default function LoansPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        {profile?.role_name !== 'Cashier' && profile?.role_name !== 'Collector' && (
+        {(profile?.role_name === 'Collector' || profile?.role_name === 'Administrator') && (
           <Button size="sm" onClick={() => { setExistingLoanBlock(null); setDialogOpen(true); }}>
             <Plus className="w-4 h-4 mr-2" />
             New Loan

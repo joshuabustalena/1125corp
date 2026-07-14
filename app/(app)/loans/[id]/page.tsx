@@ -38,7 +38,7 @@ export default function LoanDetailPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { profile } = useAuth();
-  const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
+  const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const isCashier = profile?.role_name === 'Cashier';
   const isCollector = profile?.role_name === 'Collector';
   const [loan, setLoan] = useState<any>(null);
@@ -266,7 +266,7 @@ export default function LoanDetailPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Submitted for approval', description: `Renewal ${newLoanNumber} is pending — a Cashier must approve it before it becomes active.` });
+      toast({ title: 'Submitted for approval', description: `Renewal ${newLoanNumber} is pending — a Branch Manager must approve it before it becomes active.` });
       setRenewOpen(false);
       router.push('/loans');
     }
@@ -663,7 +663,7 @@ export default function LoanDetailPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Renew {loan.loan_number}</DialogTitle>
-            <DialogDescription>Submit a renewal for {loan.customers?.first_name} {loan.customers?.last_name} — a Cashier must approve it before it becomes active</DialogDescription>
+            <DialogDescription>Submit a renewal for {loan.customers?.first_name} {loan.customers?.last_name} — a Branch Manager must approve it before it becomes active</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmitRenew} className="space-y-4">
             <div className="space-y-2">

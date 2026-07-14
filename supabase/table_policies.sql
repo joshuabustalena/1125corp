@@ -143,14 +143,53 @@ DROP POLICY IF EXISTS "loan_types_delete" ON loan_types;
 CREATE POLICY "loan_types_delete" ON loan_types FOR DELETE TO authenticated USING (is_admin());
 
 -- LOANS
+-- Helper: current user's role name (Collector requests loans, Branch Manager
+-- approves/declines them, Cashier is view-only, Administrator can do everything)
+CREATE OR REPLACE FUNCTION current_role_name()
+RETURNS text
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT r.name FROM profiles p
+  JOIN roles r ON p.role_id = r.id
+  WHERE p.id = auth.uid();
+$$;
+
+-- Blocks status changes (approve/decline/renew) from anyone but Branch Manager/Administrator,
+-- even if they can otherwise insert/update a loan row (e.g. Collector reapplying).
+CREATE OR REPLACE FUNCTION enforce_loan_status_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NEW.status IN ('active', 'declined', 'renewed')
+     AND NOT is_admin()
+     AND current_role_name() IS DISTINCT FROM 'Branch Manager' THEN
+    RAISE EXCEPTION 'Only a Branch Manager or Administrator can approve, decline, or renew loans';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
 DROP POLICY IF EXISTS "loans_select" ON loans;
 CREATE POLICY "loans_select" ON loans FOR SELECT TO authenticated USING (true);
 DROP POLICY IF EXISTS "loans_insert" ON loans;
-CREATE POLICY "loans_insert" ON loans FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "loans_insert" ON loans FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() IN ('Collector', 'Branch Manager'));
 DROP POLICY IF EXISTS "loans_update" ON loans;
-CREATE POLICY "loans_update" ON loans FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "loans_update" ON loans FOR UPDATE TO authenticated
+  USING (true)
+  WITH CHECK (is_admin() OR current_role_name() IN ('Collector', 'Branch Manager'));
 DROP POLICY IF EXISTS "loans_delete" ON loans;
 CREATE POLICY "loans_delete" ON loans FOR DELETE TO authenticated USING (is_admin());
+
+DROP TRIGGER IF EXISTS loans_status_change_guard ON loans;
+CREATE TRIGGER loans_status_change_guard
+BEFORE UPDATE ON loans
+FOR EACH ROW EXECUTE FUNCTION enforce_loan_status_change();
 
 -- PAYMENTS
 DROP POLICY IF EXISTS "payments_select" ON payments;

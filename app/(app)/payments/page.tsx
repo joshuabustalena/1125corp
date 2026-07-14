@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -29,6 +28,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export default function PaymentsPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { profile } = useAuth();
   const isCollector = profile?.role_name === 'Collector';
@@ -169,7 +169,7 @@ export default function PaymentsPage() {
     setLoading(true);
     let query = supabase
       .from('payments')
-      .select('*, loans(loan_number, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)', { count: 'exact' });
+      .select('*, loans(loan_number, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
 
     if (search) {
       query = query.or(`loans.loan_number.ilike.%${search}%`);
@@ -181,12 +181,26 @@ export default function PaymentsPage() {
       query = query.eq('customer_id', customerFilter);
     }
 
-    query = query.range((page - 1) * pageSize, page * pageSize - 1).order('payment_date', { ascending: false });
-    const { data, count } = await query;
-    setPayments(data ?? []);
-    setTotal(count ?? 0);
+    query = query.order('created_at', { ascending: false });
+    const { data } = await query;
+
+    // Collapse to one row per loan (its most recent payment) — the full
+    // history for a loan is available by clicking into its row.
+    const seenLoans = new Set<string>();
+    const latestPerLoan: any[] = [];
+    for (const p of data ?? []) {
+      if (p.loan_id) {
+        if (seenLoans.has(p.loan_id)) continue;
+        seenLoans.add(p.loan_id);
+      }
+      latestPerLoan.push(p);
+    }
+
+    setTotal(latestPerLoan.length);
+    setPayments(latestPerLoan.slice((page - 1) * pageSize, page * pageSize));
     setLoading(false);
   }
+
 
   const customerOptions = Array.from(
     new Map(
@@ -385,7 +399,7 @@ export default function PaymentsPage() {
                 </TableRow>
               ) : (
                 payments.map(p => (
-                  <TableRow key={p.id} className="hover:bg-secondary/50">
+                  <TableRow key={p.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/payments/${p.loan_id}`)}>
                     <TableCell className="text-sm">{formatDate(p.payment_date)}</TableCell>
                     <TableCell className="font-medium text-sm">{p.loans?.loan_number ?? '—'}</TableCell>
                     <TableCell className="text-sm">{p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—'}</TableCell>
@@ -397,18 +411,21 @@ export default function PaymentsPage() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => setReceiptData({
-                          orNumber: p.receipts?.or_number ?? '—',
-                          loanNumber: p.loans?.loan_number ?? '—',
-                          customerName: p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—',
-                          customerPhone: p.loans?.customers?.phone ?? null,
-                          branchName: p.loans?.branches?.name ?? null,
-                          areaName: p.loans?.areas?.name ?? null,
-                          collectorName: p.collectors?.profiles?.full_name ?? null,
-                          amount: Number(p.amount_paid),
-                          remainingBalance: Number(p.remaining_balance),
-                          date: p.payment_date,
-                        })}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setReceiptData({
+                            orNumber: p.receipts?.or_number ?? '—',
+                            loanNumber: p.loans?.loan_number ?? '—',
+                            customerName: p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—',
+                            customerPhone: p.loans?.customers?.phone ?? null,
+                            branchName: p.loans?.branches?.name ?? null,
+                            areaName: p.loans?.areas?.name ?? null,
+                            collectorName: p.collectors?.profiles?.full_name ?? null,
+                            amount: Number(p.amount_paid),
+                            remainingBalance: Number(p.remaining_balance),
+                            date: p.payment_date,
+                          });
+                        }}
                       >
                         <Receipt className="w-4 h-4" />
                       </Button>
