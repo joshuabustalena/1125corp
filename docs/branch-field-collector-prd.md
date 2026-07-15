@@ -1,6 +1,6 @@
 # Branch Field Collector (Field Manager) — Product Requirements Document
 
-Status: In progress — Phase 1 done
+Status: All 3 phases built — pending one SQL script to run live
 Owner: Joshua Bustalena
 Last updated: 2026-07-14
 
@@ -8,7 +8,7 @@ Last updated: 2026-07-14
 
 - ✅ **Phase 1** — Granted `receipts` and `remittance` permissions. `/reports` now locks Field Collectors to their own assigned area (hides Branch/Area dropdowns, shows a read-only "My Area" label instead) and hides Payroll/Attendance/Collector Performance report types (not relevant/appropriate for this role to see). `/remittance` now shows only the logged-in collector's own collected/remitted/owed numbers and hides the "Record Remittance" action (that stays a Cashier-only action, by design — a collector shouldn't be able to self-report that cash was received).
 - ✅ **Phase 2** — Employee self-service leave/loan is done (see `docs/cashier-prd.md` Phase 7 for the build details — same system, shared across all three roles). Field Collector granted `employee_loans` and `leave_requests` permissions; both pages auto-scope to their own record.
-- ⬜ Phase 3 (Acknowledgement Receipt format) — not started, waiting on a reference image if one exists.
+- ✅ **Phase 3** — Kept the existing auto-generated receipt design and added the fields requested: Time (next to Date), Loan's Release Date and Due Date, and Current Address. The address uses the same GPS + free reverse-geocoding (Nominatim/OSM) pattern already used by Attendance — captured automatically the moment "Post Collection" is opened, shown live in the form, and saved on the payment record. The receipt also shows a "View on Map" link from the raw coordinates. Applies to whoever posts the payment (any role except Cashier, who doesn't post payments). **DB migration pending** — run `supabase/add_payment_location_address.sql`.
 
 ## 1. Background
 

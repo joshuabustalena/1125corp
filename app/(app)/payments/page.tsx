@@ -19,7 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateORNumber, exportToCSV } from '@/lib/format';
+import { formatCurrency, formatDate, formatTime, generateORNumber, exportToCSV } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
 import {
   Wallet, Plus, Search, Download, Eye, Loader2, MapPin, Receipt, Calculator, ChevronDown, Check,
@@ -49,7 +49,49 @@ export default function PaymentsPage() {
   const [generatingInvoice, setGeneratingInvoice] = useState(false);
   const [printingReceipt, setPrintingReceipt] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
+  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationAddress, setLocationAddress] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
   const pageSize = 10;
+
+  // Same GPS + reverse-geocode pattern as Attendance — captures where the
+  // payment was actually collected, using the free Nominatim (OSM) API.
+  function requestLocation() {
+    if (!navigator.geolocation) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setLocation(coords);
+        const address = await reverseGeocode(coords.lat, coords.lng);
+        setLocationAddress(address);
+        setLocating(false);
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }
+
+  async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+        { headers: { 'Accept-Language': 'en' } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.display_name ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function openPostCollection() {
+    setLocation(null);
+    setLocationAddress(null);
+    requestLocation();
+    setDialogOpen(true);
+  }
 
   async function handlePrintReceipt() {
     if (!receiptRef.current) return;
@@ -150,7 +192,7 @@ export default function PaymentsPage() {
   async function loadLoans() {
     let query = supabase
       .from('loans')
-      .select('id, loan_number, remaining_balance, status, total_payable, term_days, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
+      .select('id, loan_number, remaining_balance, status, total_payable, term_days, release_date, due_date, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
       .in('status', ['active', 'overdue'])
       .order('loan_number');
     if (isCollector) {
@@ -170,7 +212,7 @@ export default function PaymentsPage() {
     setLoading(true);
     let query = supabase
       .from('payments')
-      .select('*, loans(loan_number, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
+      .select('*, loans(loan_number, release_date, due_date, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
 
     if (search) {
       query = query.or(`loans.loan_number.ilike.%${search}%`);
@@ -254,8 +296,9 @@ export default function PaymentsPage() {
       remaining_balance: newBalance,
       payment_date: paymentDate,
       payment_time: now.toTimeString().split(' ')[0],
-      gps_lat: null,
-      gps_lng: null,
+      gps_lat: location?.lat ?? null,
+      gps_lng: location?.lng ?? null,
+      location_address: locationAddress ?? null,
       notes: form.notes || null,
     });
 
@@ -298,14 +341,20 @@ export default function PaymentsPage() {
     setReceiptData({
       orNumber,
       loanNumber: selectedLoan?.loan_number,
+      releaseDate: selectedLoan?.release_date ?? null,
+      dueDate: selectedLoan?.due_date ?? null,
       customerName: selectedLoan ? `${selectedLoan.customers?.first_name} ${selectedLoan.customers?.last_name}` : '',
       customerPhone: selectedLoan?.customers?.phone ?? null,
+      currentAddress: locationAddress,
+      gpsLat: location?.lat ?? null,
+      gpsLng: location?.lng ?? null,
       branchName: selectedLoan?.branches?.name ?? null,
       areaName: selectedLoan?.areas?.name ?? null,
       collectorName: selectedLoan?.collectors?.profiles?.full_name ?? null,
       amount: amountPaidNum,
       remainingBalance: newBalance,
       date: paymentDate,
+      time: now.toTimeString().split(' ')[0],
       dailyDue,
       daysCovered,
       advanceCredit,
@@ -344,7 +393,7 @@ export default function PaymentsPage() {
           Export
         </Button>
         {profile?.role_name !== 'Cashier' && (
-          <Button size="sm" onClick={() => setDialogOpen(true)}>
+          <Button size="sm" onClick={openPostCollection}>
             <Plus className="w-4 h-4 mr-2" />
             Post Collection
           </Button>
@@ -434,14 +483,20 @@ export default function PaymentsPage() {
                           setReceiptData({
                             orNumber: p.receipts?.or_number ?? '—',
                             loanNumber: p.loans?.loan_number ?? '—',
+                            releaseDate: p.loans?.release_date ?? null,
+                            dueDate: p.loans?.due_date ?? null,
                             customerName: p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—',
                             customerPhone: p.loans?.customers?.phone ?? null,
+                            currentAddress: p.location_address ?? null,
+                            gpsLat: p.gps_lat ?? null,
+                            gpsLng: p.gps_lng ?? null,
                             branchName: p.loans?.branches?.name ?? null,
                             areaName: p.loans?.areas?.name ?? null,
                             collectorName: p.collectors?.profiles?.full_name ?? null,
                             amount: Number(p.amount_paid),
                             remainingBalance: Number(p.remaining_balance),
                             date: p.payment_date,
+                            time: p.payment_time ?? null,
                           });
                         }}
                       >
@@ -513,6 +568,11 @@ export default function PaymentsPage() {
               </div>
             </div>
 
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <MapPin className="w-3.5 h-3.5 shrink-0" />
+              {locating ? 'Capturing current location…' : locationAddress ? locationAddress : 'Location not captured — the receipt will be generated without it.'}
+            </div>
+
             {form.amount_paid && selectedLoan && (
               <div className="p-3 rounded-lg bg-primary/5 border border-border">
                 <div className="flex items-center gap-2 text-sm font-medium text-primary mb-1">
@@ -568,10 +628,30 @@ export default function PaymentsPage() {
               <div className="text-sm space-y-1.5 py-4">
                 <div className="flex justify-between"><span style={{ color: '#6B7280' }}>OR Number:</span><span className="font-mono font-bold">{receiptData.orNumber}</span></div>
                 <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Date:</span><span>{formatDate(receiptData.date)}</span></div>
+                {receiptData.time && (
+                  <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Time:</span><span>{formatTime(new Date(`${receiptData.date}T${receiptData.time}`))}</span></div>
+                )}
                 <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Loan #:</span><span>{receiptData.loanNumber}</span></div>
+                {receiptData.releaseDate && (
+                  <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Release Date:</span><span>{formatDate(receiptData.releaseDate)}</span></div>
+                )}
+                {receiptData.dueDate && (
+                  <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Due Date:</span><span>{formatDate(receiptData.dueDate)}</span></div>
+                )}
                 <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Customer:</span><span className="font-medium">{receiptData.customerName}</span></div>
                 {receiptData.customerPhone && (
                   <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Phone:</span><span>{receiptData.customerPhone}</span></div>
+                )}
+                {receiptData.currentAddress && (
+                  <div className="flex justify-between gap-3"><span style={{ color: '#6B7280', whiteSpace: 'nowrap' }}>Current Address:</span><span className="text-right">{receiptData.currentAddress}</span></div>
+                )}
+                {receiptData.gpsLat && receiptData.gpsLng && (
+                  <div className="flex justify-between">
+                    <span style={{ color: '#6B7280' }}>Location:</span>
+                    <a href={`https://www.google.com/maps?q=${receiptData.gpsLat},${receiptData.gpsLng}`} target="_blank" rel="noreferrer" style={{ color: '#2563EB' }}>
+                      View on Map
+                    </a>
+                  </div>
                 )}
                 {receiptData.branchName && (
                   <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Branch:</span><span>{receiptData.branchName}</span></div>
