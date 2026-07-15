@@ -1072,7 +1072,7 @@ CREATE POLICY "holidays_delete" ON holidays FOR DELETE TO authenticated USING (i
 -- ============ SEED DATA ============
 INSERT INTO roles (name, description, permissions) VALUES
   ('Administrator', 'Full system access', '["*"]'::jsonb),
-  ('Branch Manager', 'Manage branch operations', '["customers","loans","payments","reports","attendance","employee_loans","accounting","collectors","leave_requests"]'::jsonb),
+  ('Branch Manager', 'Manage branch operations', '["customers","loans","payments","reports","attendance","employee_loans","accounting","collectors","leave_requests","cash_count"]'::jsonb),
   ('Cashier', 'Payments only', '["payments","receipts","customers_read","loans","attendance","reports","accounting","cash_count","remittance","employee_loans","leave_requests","general_ledger"]'::jsonb),
   ('Branch Field Collector', 'Collections, attendance, customer accounts', '["collections","attendance","customers","reports","payments","loans","receipts","remittance","employee_loans","leave_requests"]'::jsonb),
   ('Accounting', 'Accounting and reports', '["accounting","reports","cash_flow","expenses","general_ledger"]'::jsonb),

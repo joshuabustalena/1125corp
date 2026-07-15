@@ -25,11 +25,14 @@ export default function CashCountPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  const canRecordCount = isAdmin || profile?.role_name === 'Cashier';
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
   const [expected, setExpected] = useState(0);
-  const [counted, setCounted] = useState('');
+  const [vaultAmount, setVaultAmount] = useState('');
+  const [bankAmount, setBankAmount] = useState('');
+  const [pettyCashAmount, setPettyCashAmount] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -76,14 +79,18 @@ export default function CashCountPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!counted || !branchId) return;
+    const counted = Number(vaultAmount || 0) + Number(bankAmount || 0) + Number(pettyCashAmount || 0);
+    if (!branchId || counted <= 0) return;
     setSaving(true);
-    const variance = Number(counted) - expected;
+    const variance = counted - expected;
     const { error } = await supabase.from('cash_counts').insert({
       branch_id: branchId,
       count_date: date,
       expected_amount: expected,
-      counted_amount: Number(counted),
+      counted_amount: counted,
+      vault_amount: Number(vaultAmount || 0),
+      bank_amount: Number(bankAmount || 0),
+      petty_cash_amount: Number(pettyCashAmount || 0),
       variance,
       counted_by: profile?.id ?? null,
       notes: notes || null,
@@ -92,14 +99,17 @@ export default function CashCountPage() {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
       toast({ title: 'Success', description: 'Cash count recorded' });
-      setCounted('');
+      setVaultAmount('');
+      setBankAmount('');
+      setPettyCashAmount('');
       setNotes('');
       loadData();
     }
     setSaving(false);
   }
 
-  const variancePreview = counted ? Number(counted) - expected : null;
+  const countedTotal = Number(vaultAmount || 0) + Number(bankAmount || 0) + Number(pettyCashAmount || 0);
+  const variancePreview = (vaultAmount || bankAmount || pettyCashAmount) ? countedTotal - expected : null;
 
   return (
     <div className="space-y-6">
@@ -125,30 +135,43 @@ export default function CashCountPage() {
         />
       </div>
 
-      <Card className="glass-card border-border">
-        <CardHeader>
-          <CardTitle>Record Today's Count</CardTitle>
-          <CardDescription>Enter the physical cash counted for {formatDate(date)}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Counted Amount (₱) *</Label>
-                <Input type="number" required value={counted} onChange={(e) => setCounted(e.target.value)} placeholder="0.00" />
+      {canRecordCount && (
+        <Card className="glass-card border-border">
+          <CardHeader>
+            <CardTitle>Record Today's Count</CardTitle>
+            <CardDescription>Enter the physical cash counted for {formatDate(date)}, broken down by where it's held</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label>Cash in Vault (₱)</Label>
+                  <Input type="number" value={vaultAmount} onChange={(e) => setVaultAmount(e.target.value)} placeholder="0.00" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Cash in Bank (₱)</Label>
+                  <Input type="number" value={bankAmount} onChange={(e) => setBankAmount(e.target.value)} placeholder="0.00" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Petty Cash Fund (₱)</Label>
+                  <Input type="number" value={pettyCashAmount} onChange={(e) => setPettyCashAmount(e.target.value)} placeholder="0.00" />
+                </div>
               </div>
               <div className="space-y-2">
                 <Label>Notes</Label>
                 <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={1} placeholder="Explain any variance" />
               </div>
-            </div>
-            <Button type="submit" disabled={saving || loading || !branchId}>
-              {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Submit Count
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Total Counted: <span className="font-medium text-foreground">{formatCurrency(countedTotal)}</span></p>
+                <Button type="submit" disabled={saving || loading || !branchId || countedTotal <= 0}>
+                  {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Submit Count
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="glass-card border-border">
         <CardHeader><CardTitle>History</CardTitle><CardDescription>Last 30 counts for this branch</CardDescription></CardHeader>
@@ -165,6 +188,9 @@ export default function CashCountPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
+                  <TableHead>Vault</TableHead>
+                  <TableHead>Bank</TableHead>
+                  <TableHead>Petty Cash</TableHead>
                   <TableHead>Expected</TableHead>
                   <TableHead>Counted</TableHead>
                   <TableHead>Variance</TableHead>
@@ -174,6 +200,9 @@ export default function CashCountPage() {
                 {history.map(h => (
                   <TableRow key={h.id}>
                     <TableCell className="text-sm">{formatDate(h.count_date)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.vault_amount ?? 0)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.bank_amount ?? 0)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.petty_cash_amount ?? 0)}</TableCell>
                     <TableCell className="text-sm">{formatCurrency(h.expected_amount)}</TableCell>
                     <TableCell className="text-sm">{formatCurrency(h.counted_amount)}</TableCell>
                     <TableCell className="text-sm">

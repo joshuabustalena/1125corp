@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
+import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 
 interface DashboardStats {
   totalCustomers: number;
@@ -43,6 +44,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    checkDueDateAlerts();
     async function load() {
       const today = new Date().toISOString().split('T')[0];
       const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];

@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/table';
 import { supabase } from '@/lib/supabase/client';
 import { formatDateTime } from '@/lib/format';
+import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 import { Bell, Loader2, Mail, MessageSquare, Send } from 'lucide-react';
 
 export default function NotificationsPage() {
@@ -20,6 +21,7 @@ export default function NotificationsPage() {
 
   async function load() {
     setLoading(true);
+    await checkDueDateAlerts();
     const { data } = await supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(50);
     setNotifications(data ?? []);
     setLoading(false);
