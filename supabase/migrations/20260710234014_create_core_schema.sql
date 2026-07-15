@@ -453,6 +453,24 @@ INSERT INTO chart_of_accounts (code, name, account_type) VALUES
   ('5010', 'Salaries Expense', 'expense')
 ON CONFLICT (code) DO NOTHING;
 
+-- ============ SHAREHOLDERS ============
+-- Informational registry of shareholder capital and ownership % — kept
+-- separate from the double-entry ledger for now (adding a shareholder here
+-- does not auto-post a journal entry to Owner's Equity). See the
+-- Accounting Dept PRD Phase 4 notes if this needs to become a real
+-- sub-ledger later.
+CREATE TABLE IF NOT EXISTS shareholders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  capital_contributed numeric(14,2) NOT NULL DEFAULT 0,
+  ownership_percent numeric(5,2) NOT NULL DEFAULT 0,
+  date_invested date,
+  notes text,
+  created_by uuid REFERENCES profiles(id) ON DELETE SET NULL,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
 -- ============ REMITTANCES ============
 -- Cash a field Collector turns in to the branch Cashier after collecting
 -- customer payments. "Balance owed" for a collector on a given day = sum of
@@ -585,6 +603,7 @@ ALTER TABLE loan_receivables ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chart_of_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_entry_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shareholders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE remittances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cash_counts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
@@ -976,6 +995,19 @@ DROP POLICY IF EXISTS "journal_entry_lines_update" ON journal_entry_lines;
 CREATE POLICY "journal_entry_lines_update" ON journal_entry_lines FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
 DROP POLICY IF EXISTS "journal_entry_lines_delete" ON journal_entry_lines;
 CREATE POLICY "journal_entry_lines_delete" ON journal_entry_lines FOR DELETE TO authenticated USING (is_admin());
+
+-- SHAREHOLDERS
+DROP POLICY IF EXISTS "shareholders_select" ON shareholders;
+CREATE POLICY "shareholders_select" ON shareholders FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "shareholders_insert" ON shareholders;
+CREATE POLICY "shareholders_insert" ON shareholders FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() = 'Accounting');
+DROP POLICY IF EXISTS "shareholders_update" ON shareholders;
+CREATE POLICY "shareholders_update" ON shareholders FOR UPDATE TO authenticated
+  USING (is_admin() OR current_role_name() = 'Accounting')
+  WITH CHECK (is_admin() OR current_role_name() = 'Accounting');
+DROP POLICY IF EXISTS "shareholders_delete" ON shareholders;
+CREATE POLICY "shareholders_delete" ON shareholders FOR DELETE TO authenticated USING (is_admin());
 
 -- REMITTANCES
 DROP POLICY IF EXISTS "remittances_select" ON remittances;

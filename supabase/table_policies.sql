@@ -47,6 +47,7 @@ ALTER TABLE loan_receivables ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chart_of_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_entry_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shareholders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE remittances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cash_counts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
@@ -436,6 +437,19 @@ DROP POLICY IF EXISTS "journal_entry_lines_update" ON journal_entry_lines;
 CREATE POLICY "journal_entry_lines_update" ON journal_entry_lines FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
 DROP POLICY IF EXISTS "journal_entry_lines_delete" ON journal_entry_lines;
 CREATE POLICY "journal_entry_lines_delete" ON journal_entry_lines FOR DELETE TO authenticated USING (is_admin());
+
+-- SHAREHOLDERS
+DROP POLICY IF EXISTS "shareholders_select" ON shareholders;
+CREATE POLICY "shareholders_select" ON shareholders FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "shareholders_insert" ON shareholders;
+CREATE POLICY "shareholders_insert" ON shareholders FOR INSERT TO authenticated
+  WITH CHECK (is_admin() OR current_role_name() = 'Accounting');
+DROP POLICY IF EXISTS "shareholders_update" ON shareholders;
+CREATE POLICY "shareholders_update" ON shareholders FOR UPDATE TO authenticated
+  USING (is_admin() OR current_role_name() = 'Accounting')
+  WITH CHECK (is_admin() OR current_role_name() = 'Accounting');
+DROP POLICY IF EXISTS "shareholders_delete" ON shareholders;
+CREATE POLICY "shareholders_delete" ON shareholders FOR DELETE TO authenticated USING (is_admin());
 
 -- REMITTANCES
 DROP POLICY IF EXISTS "remittances_select" ON remittances;
