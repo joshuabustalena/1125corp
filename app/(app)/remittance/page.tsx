@@ -24,6 +24,7 @@ export default function RemittancePage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
+  const canRecordRemittance = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(true);
   const [collectors, setCollectors] = useState<any[]>([]);
@@ -147,7 +148,7 @@ export default function RemittancePage() {
                   <TableHead>Collected</TableHead>
                   <TableHead>Remitted</TableHead>
                   <TableHead>Balance Owed</TableHead>
-                  {!isFieldCollector && <TableHead className="text-right">Actions</TableHead>}
+                  {canRecordRemittance && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -159,7 +160,7 @@ export default function RemittancePage() {
                     <TableCell className="text-sm font-medium">
                       <Badge variant={r.owed > 0 ? 'destructive' : 'default'}>{formatCurrency(r.owed)}</Badge>
                     </TableCell>
-                    {!isFieldCollector && (
+                    {canRecordRemittance && (
                       <TableCell className="text-right">
                         <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id)}>
                           Record Remittance

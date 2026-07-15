@@ -1043,7 +1043,8 @@ INSERT INTO roles (name, description, permissions) VALUES
   ('Branch Manager', 'Manage branch operations', '["customers","loans","payments","reports","attendance","employee_loans","accounting","collectors","leave_requests"]'::jsonb),
   ('Cashier', 'Payments only', '["payments","receipts","customers_read","loans","attendance","reports","accounting","cash_count","remittance","employee_loans","leave_requests","general_ledger"]'::jsonb),
   ('Branch Field Collector', 'Collections, attendance, customer accounts', '["collections","attendance","customers","reports","payments","loans","receipts","remittance","employee_loans","leave_requests"]'::jsonb),
-  ('Accounting', 'Accounting and reports', '["accounting","reports","cash_flow","expenses","general_ledger"]'::jsonb)
+  ('Accounting', 'Accounting and reports', '["accounting","reports","cash_flow","expenses","general_ledger"]'::jsonb),
+  ('Branch Proxy Collector', 'Supervisor covering collections across all areas', '["customers","payments","receipts","loans","reports","remittance","employee_loans","leave_requests","attendance"]'::jsonb)
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO loan_types (name, interest_rate, term_days) VALUES
