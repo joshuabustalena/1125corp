@@ -21,8 +21,9 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatTime, generateORNumber, exportToCSV } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
+import { connectThermalPrinter, buildPaymentReceiptLines, buildReceiptBytes, writeToPrinter } from '@/lib/thermal-printer';
 import {
-  Wallet, Plus, Search, Download, Eye, Loader2, MapPin, Receipt, Calculator, ChevronDown, Check,
+  Wallet, Plus, Search, Download, Eye, Loader2, MapPin, Receipt, Calculator, ChevronDown, Check, Bluetooth,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -48,16 +49,22 @@ export default function PaymentsPage() {
   const [downloadingReceipt, setDownloadingReceipt] = useState(false);
   const [generatingInvoice, setGeneratingInvoice] = useState(false);
   const [printingReceipt, setPrintingReceipt] = useState(false);
+  const [printingThermal, setPrintingThermal] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const pageSize = 10;
 
   // Same GPS + reverse-geocode pattern as Attendance — captures where the
   // payment was actually collected, using the free Nominatim (OSM) API.
   function requestLocation() {
-    if (!navigator.geolocation) return;
+    setLocationError(null);
+    if (!navigator.geolocation) {
+      setLocationError('This browser does not support location capture.');
+      return;
+    }
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
@@ -67,7 +74,16 @@ export default function PaymentsPage() {
         setLocationAddress(address);
         setLocating(false);
       },
-      () => setLocating(false),
+      (err) => {
+        setLocating(false);
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocationError('Location permission denied — enable it in your browser\'s site settings to include location on receipts.');
+        } else if (err.code === err.TIMEOUT) {
+          setLocationError('Location request timed out. Try again.');
+        } else {
+          setLocationError('Could not determine your location.');
+        }
+      },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }
@@ -75,12 +91,16 @@ export default function PaymentsPage() {
   async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
     try {
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&addressdetails=1`,
         { headers: { 'Accept-Language': 'en' } }
       );
       if (!res.ok) return null;
       const data = await res.json();
-      return data.display_name ?? null;
+      const addr = data.address ?? {};
+      const city = addr.city ?? addr.town ?? addr.municipality ?? addr.village ?? addr.city_district ?? null;
+      const province = addr.province ?? addr.state ?? addr.state_district ?? addr.county ?? null;
+      const parts = [city, province].filter(Boolean);
+      return parts.length > 0 ? parts.join(', ') : (data.display_name ?? null);
     } catch {
       return null;
     }
@@ -120,6 +140,36 @@ export default function PaymentsPage() {
       toast({ title: 'Print failed', description: err?.message ?? 'Could not generate receipt for printing', variant: 'destructive' });
     }
     setPrintingReceipt(false);
+  }
+
+  async function handlePrintThermal() {
+    if (!receiptData) return;
+    setPrintingThermal(true);
+    try {
+      const characteristic = await connectThermalPrinter();
+      const lines = buildPaymentReceiptLines({
+        orNumber: receiptData.orNumber,
+        dateText: formatDate(receiptData.date),
+        timeText: receiptData.time ? formatTime(new Date(`${receiptData.date}T${receiptData.time}`)) : undefined,
+        loanNumber: receiptData.loanNumber,
+        releaseDateText: receiptData.releaseDate ? formatDate(receiptData.releaseDate) : undefined,
+        dueDateText: receiptData.dueDate ? formatDate(receiptData.dueDate) : undefined,
+        customerName: receiptData.customerName,
+        branchName: receiptData.branchName ?? undefined,
+        locationText: receiptData.currentAddress ?? undefined,
+        collectorName: receiptData.collectorName ?? undefined,
+        amountPaid: formatCurrency(receiptData.amount),
+        daysCoveredText: receiptData.daysCovered > 0
+          ? `Covers ${receiptData.daysCovered} day${receiptData.daysCovered > 1 ? 's' : ''} of payment`
+          : undefined,
+        remainingBalance: formatCurrency(receiptData.remainingBalance),
+      });
+      await writeToPrinter(characteristic, buildReceiptBytes(lines));
+      toast({ title: 'Sent to printer', description: 'Receipt sent to the Bluetooth thermal printer.' });
+    } catch (err: any) {
+      toast({ title: 'Bluetooth print failed', description: err?.message ?? 'Could not print to the Bluetooth printer', variant: 'destructive' });
+    }
+    setPrintingThermal(false);
   }
 
   async function handleDownloadReceipt() {
@@ -184,15 +234,23 @@ export default function PaymentsPage() {
     const loanId = searchParams.get('loan');
     if (loanId && loans.length > 0 && !autoOpenedRef.current) {
       autoOpenedRef.current = true;
-      handleLoanSelect(loanId);
-      setDialogOpen(true);
+      if (loans.some(l => l.id === loanId)) {
+        handleLoanSelect(loanId);
+        setDialogOpen(true);
+      } else {
+        toast({
+          title: 'Loan not ready for payment',
+          description: 'This loan must be disbursed by a Cashier before payments can be posted.',
+          variant: 'destructive',
+        });
+      }
     }
   }, [loans]);
 
   async function loadLoans() {
     let query = supabase
       .from('loans')
-      .select('id, loan_number, remaining_balance, status, total_payable, term_days, release_date, due_date, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
+      .select('id, loan_number, remaining_balance, status, total_payable, term_days, daily_payment, release_date, due_date, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
       .in('status', ['active', 'overdue'])
       .order('loan_number');
     if (isCollector) {
@@ -204,7 +262,11 @@ export default function PaymentsPage() {
 
   function handleLoanSelect(loanId: string) {
     const loan = loans.find(l => l.id === loanId);
-    const dailyAmount = loan && loan.term_days > 0 ? Math.round((loan.total_payable / loan.term_days) * 100) / 100 : 0;
+    const dailyAmount = loan
+      ? (loan.daily_payment != null && Number(loan.daily_payment) > 0
+          ? Number(loan.daily_payment)
+          : (loan.term_days > 0 ? Math.round((loan.total_payable / loan.term_days) * 100) / 100 : 0))
+      : 0;
     setForm({ ...form, loan_id: loanId, amount_paid: dailyAmount ? String(dailyAmount) : '' });
   }
 
@@ -258,7 +320,7 @@ export default function PaymentsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.loan_id || !form.amount_paid) return;
+    if (!form.loan_id || !form.amount_paid || !locationAddress) return;
     setSaving(true);
 
     const orNumber = generateORNumber();
@@ -333,7 +395,11 @@ export default function PaymentsPage() {
 
     toast({ title: 'Success', description: `Payment posted. OR: ${orNumber}` });
 
-    const dailyDue = selectedLoan && selectedLoan.term_days > 0 ? selectedLoan.total_payable / selectedLoan.term_days : 0;
+    const dailyDue = selectedLoan
+      ? (selectedLoan.daily_payment != null && Number(selectedLoan.daily_payment) > 0
+          ? Number(selectedLoan.daily_payment)
+          : (selectedLoan.term_days > 0 ? selectedLoan.total_payable / selectedLoan.term_days : 0))
+      : 0;
     const amountPaidNum = Number(form.amount_paid);
     const daysCovered = dailyDue > 0 ? Math.floor((amountPaidNum + 0.001) / dailyDue) : 0;
     const advanceCredit = dailyDue > 0 ? Math.round((amountPaidNum - daysCovered * dailyDue) * 100) / 100 : 0;
@@ -560,7 +626,7 @@ export default function PaymentsPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Date</Label>
-                <Input type="date" value={form.payment_date} onChange={(e) => setForm({ ...form, payment_date: e.target.value })} />
+                <Input type="date" value={form.payment_date} disabled className="bg-muted" />
               </div>
               <div className="space-y-2">
                 <Label>Time</Label>
@@ -568,9 +634,16 @@ export default function PaymentsPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className={`flex items-center gap-2 text-xs ${locationError ? 'text-destructive' : 'text-muted-foreground'}`}>
               <MapPin className="w-3.5 h-3.5 shrink-0" />
-              {locating ? 'Capturing current location…' : locationAddress ? locationAddress : 'Location not captured — the receipt will be generated without it.'}
+              <span className="flex-1">
+                {locating ? 'Capturing current location…' : locationAddress ? locationAddress : (locationError ?? 'Location is required before posting a payment.')}
+              </span>
+              {!locating && (
+                <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs shrink-0" onClick={requestLocation}>
+                  Retry
+                </Button>
+              )}
             </div>
 
             {form.amount_paid && selectedLoan && (
@@ -584,7 +657,7 @@ export default function PaymentsPage() {
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving || !form.loan_id || !form.amount_paid}>
+              <Button type="submit" disabled={saving || !form.loan_id || !form.amount_paid || !locationAddress}>
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Post & Generate Receipt
               </Button>
@@ -626,6 +699,9 @@ export default function PaymentsPage() {
               <div className="border-t border-dashed" style={{ borderColor: '#D1D5DB' }} />
 
               <div className="text-sm space-y-1.5 py-4">
+                {receiptData.branchName && (
+                  <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Branch:</span><span>{receiptData.branchName}</span></div>
+                )}
                 <div className="flex justify-between"><span style={{ color: '#6B7280' }}>OR Number:</span><span className="font-mono font-bold">{receiptData.orNumber}</span></div>
                 <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Date:</span><span>{formatDate(receiptData.date)}</span></div>
                 {receiptData.time && (
@@ -643,21 +719,7 @@ export default function PaymentsPage() {
                   <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Phone:</span><span>{receiptData.customerPhone}</span></div>
                 )}
                 {receiptData.currentAddress && (
-                  <div className="flex justify-between gap-3"><span style={{ color: '#6B7280', whiteSpace: 'nowrap' }}>Current Address:</span><span className="text-right">{receiptData.currentAddress}</span></div>
-                )}
-                {receiptData.gpsLat && receiptData.gpsLng && (
-                  <div className="flex justify-between">
-                    <span style={{ color: '#6B7280' }}>Location:</span>
-                    <a href={`https://www.google.com/maps?q=${receiptData.gpsLat},${receiptData.gpsLng}`} target="_blank" rel="noreferrer" style={{ color: '#2563EB' }}>
-                      View on Map
-                    </a>
-                  </div>
-                )}
-                {receiptData.branchName && (
-                  <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Branch:</span><span>{receiptData.branchName}</span></div>
-                )}
-                {receiptData.areaName && (
-                  <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Area:</span><span>{receiptData.areaName}</span></div>
+                  <div className="flex justify-between gap-3"><span style={{ color: '#6B7280', whiteSpace: 'nowrap' }}>Location:</span><span className="text-right">{receiptData.currentAddress}</span></div>
                 )}
                 {receiptData.collectorName && (
                   <div className="flex justify-between"><span style={{ color: '#6B7280' }}>Collector:</span><span>{receiptData.collectorName}</span></div>
@@ -685,20 +747,24 @@ export default function PaymentsPage() {
               <p className="text-center text-xs pt-4" style={{ color: '#6B7280' }}>Thank you for your payment!</p>
               <p className="text-center text-[10px]" style={{ color: '#9CA3AF' }}>This is a system-generated receipt and is valid without a signature.</p>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={handlePrintReceipt} disabled={printingReceipt}>
+            <DialogFooter className="flex-row flex-wrap justify-center gap-2 space-x-0 sm:justify-center">
+              <Button variant="outline" size="sm" onClick={handlePrintReceipt} disabled={printingReceipt}>
                 {printingReceipt && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Print
               </Button>
-              <Button variant="outline" onClick={handleDownloadReceipt} disabled={downloadingReceipt}>
+              <Button variant="outline" size="sm" onClick={handlePrintThermal} disabled={printingThermal}>
+                {printingThermal ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Bluetooth className="w-4 h-4 mr-2" />}
+                Bluetooth
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleDownloadReceipt} disabled={downloadingReceipt}>
                 {downloadingReceipt ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
                 Download
               </Button>
-              <Button variant="outline" onClick={handleDownloadInvoice} disabled={generatingInvoice}>
+              <Button variant="outline" size="sm" onClick={handleDownloadInvoice} disabled={generatingInvoice}>
                 {generatingInvoice ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Receipt className="w-4 h-4 mr-2" />}
                 Invoice
               </Button>
-              <Button onClick={() => setReceiptData(null)}>Close</Button>
+              <Button size="sm" onClick={() => setReceiptData(null)}>Close</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
