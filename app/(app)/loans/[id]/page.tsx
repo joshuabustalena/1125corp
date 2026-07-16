@@ -23,7 +23,7 @@ import { postJournalEntry } from '@/lib/ledger';
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
-  CheckCircle2, Circle, FileText, Banknote, Download, ShieldCheck,
+  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -55,79 +55,45 @@ function formatLongDate(date: string | Date | null | undefined): string {
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
-const REQUIRED_DOCUMENTS = [
-  { type: 'valid_id', label: 'Valid Government ID' },
-  { type: 'clearance', label: 'Barangay Clearance' },
-  { type: 'proof_of_billing', label: 'Proof of Billing' },
-  { type: 'promissory_note', label: 'Promissory Note' },
+// Loan Agreement & Disclosure Statement clauses — the exact 8-clause wording
+// provided. Clause 8 is followed by a trailing unnumbered closing paragraph
+// (AGREEMENT_CLOSING_PARAGRAPH) rendered right after the numbered list.
+const AGREEMENT_CLAUSES = [
+  {
+    n: 1, title: 'Disclosure of Loan Terms',
+    en: 'The Borrower certifies that prior to the release of the loan proceeds, the Borrower was fully informed and provided with the following information: a. Principal loan amount; b. Interest rate and method of computation; c. Service fees, processing fees, and other charges, if any; d. Documentary Stamp Tax and other government charges, if applicable; e. Penalty charges and surcharges for late payment; f. Payment schedule and maturity date; g. Total amount payable during the loan term; h. Net loan proceeds actually receivable by the Borrower. The Borrower confirms that the foregoing disclosures comply with the requirements of Republic Act No. 3765, otherwise known as the Truth in Lending Act.',
+  },
+  {
+    n: 2, title: 'Receipt of Loan Proceeds',
+    en: 'The Borrower acknowledges having personally received the net loan proceeds stated in the Cash Voucher and other loan documents. The Borrower certifies that the amount received is complete, correct, and satisfactory. The Cash Voucher, Loan Agreement, Kasunduan, and related loan documents shall constitute sufficient proof of the release and receipt of the loan proceeds.',
+  },
+  {
+    n: 3, title: 'Verification of Amount Received',
+    en: 'The Borrower agrees to immediately verify the amount of cash received upon release thereof. Upon signing the Cash Voucher and related loan documents, the Borrower confirms that no shortage, deficiency, or discrepancy exists in the amount received.',
+  },
+  {
+    n: 4, title: 'Waiver of False or Fraudulent Claims',
+    en: 'The Borrower agrees not to make any false, fraudulent, or misleading claim against the Corporation concerning the release, receipt, or amount of the loan proceeds after the execution of the loan documents. Any claim of non-receipt, shortage, or deficiency made after the signing of the loan documents shall be presumed invalid unless supported by clear and convincing evidence of fraud, bad faith, or willful misconduct on the part of the Corporation or its authorized representatives.',
+  },
+  {
+    n: 5, title: 'Authority of Collectors and Representatives',
+    en: 'The Borrower acknowledges that only duly authorized employees, collectors, or representatives of the Corporation may release loan proceeds and receive payments on behalf of the Corporation. The Borrower agrees to transact only with authorized personnel and to request official receipts or payment records for every payment made with existing VALID COMPANY ID.',
+  },
+  {
+    n: 6, title: "Borrower's Duty to Keep Records",
+    en: 'The Borrower agrees to keep copies of the Loan Agreement, Cash Voucher, Kasunduan, Acknowledgement Receipts, and other loan documents for future reference.',
+  },
+  {
+    n: 7, title: 'Voluntary Execution',
+    en: 'The Borrower certifies that the Borrower has read and understood the contents of the loan documents, had the opportunity to ask questions regarding the loan transaction, and voluntarily signed the same without force, intimidation, or undue influence.',
+  },
+  {
+    n: 8, title: 'Entire Agreement',
+    en: 'The Borrower acknowledges that the Loan Agreement, Cash Voucher, Kasunduan, and related documents constitute the complete agreement between the parties concerning the loan transaction.',
+  },
 ];
 
-// Borrower's Undertaking clauses — fixed legal text, English + Tagalog.
-// Three closings are marked "[…]" because the source screenshots cut off
-// mid-sentence at those exact points in both overlapping crops — the true
-// wording was never visible to transcribe.
-const UNDERTAKING_CLAUSES = [
-  {
-    n: 1, title: 'Manner and Payment of Loans / Pagbabayad ng Loan',
-    en: "I understand that all my payments shall be recorded in the official records and payment ledger of the Company. I may request my amortization schedule, statement of account, or payment history from the field collector or branch manager.",
-    tl: '(Nauunawaan ko na ang lahat ng aking mga bayad ay itatala sa opisyal na records ng kompanya at sa aking ledger o payment records. Maaari akong humiling ng amortization schedule, statement of account, o history of payments mula sa aking field collector o branch manager.)',
-  },
-  {
-    n: 2, title: 'Official Payment Records / Mga Resibo at Katibayan ng Bayad',
-    en: 'Every payment made by the Borrower shall be supported by an Acknowledgment Receipt, Official Receipt, or other proof of payment issued by the designated branch employee of the Lending Company.',
-    tl: '(Ang bawat bayad na aking gagawin ay dapat may kaukulang Acknowledgment Receipt, Official Receipt, o iba pang katibayan ng pagbabayad na ibibigay ng awtorisadong kinatawan ng kompanya.)',
-  },
-  {
-    n: 3, title: 'Disclosure of Loan Terms',
-    en: 'I certify that prior to the release of the loan, the principal amount, interest rate, charges, penalties, payment schedule, and net loan proceeds were disclosed and explained to me in accordance with the Truth in Lending Act.',
-    tl: '(Pinatutunayan ko na bago ang pagpapalabas ng loan ay ipinaliwanag sa akin ang principal amount, interest rate, charges, penalties, payment schedule, at net loan proceeds alinsunod sa Truth in Lending Act.)',
-  },
-  {
-    n: 4, title: 'Collateral Loan',
-    en: 'This loan is secured by personal property or appliances voluntarily offered by the Borrower as collateral, subject to a separate collateral agreement.',
-    tl: '(Ang loan na ito ay may kaakibat na collateral na personal property o appliances na kusang inilahad ng borrower bilang collateral, alinsunod sa hiwalay na kasunduan o dokumento ng […])',
-  },
-  {
-    n: 5, title: 'Loan Renewal',
-    en: 'Loan renewal is not automatic and shall remain subject to the evaluation and approval of the Company. Delinquent accounts or irregular payments may affect approval.',
-    tl: '(Ang renewal ng loan ay hindi awtomatiko at nananatiling subject to evaluation at approval ng kompanya. Ang pagkakaroon ng past due account o hindi regular na paghuhulog ay maaaring maging dahilan ng hindi pag-apruba ng renewal.)',
-  },
-  {
-    n: 6, title: 'Deliquency / Pagpalya sa Pagbabayad',
-    en: 'In the event of delayed or missed payments, I agree to cooperate with the Company for the proper settlement of my account. Any action involving collateral or collection shall be undertaken only in accordance with applicable laws and the corresponding agreements.',
-    tl: '(Sa pagkakataong magkaroon ng pagkaantala o hindi pagbabayad ng obligasyon, sumasang-ayon akong makipagtulungan sa kompanya para sa maayos na pagresolba ng aking account. Anumang hakbang ukol sa collateral o collection ay isasagawa lamang alinsunod sa batas at sa mga […])',
-  },
-  {
-    n: 7, title: 'Third-Party Use / Paggamit ng Account ng ibang tao',
-    en: "I understand that the loan account is my personal obligation and may not be transferred or assigned to another person without the Company's consent. I shall remain liable for all obligations arising from the loan application and documents I personally signed.",
-    tl: '(Nauunawaan ko na ang loan account ay personal na obligasyon ko bilang borrower at hindi maaaring ilipat o ipagamit sa ibang tao nang walang pahintulot ng kompanya. Mananatili akong responsable sa lahat ng obligasyon na may kaugnayan sa loan na aking inapplyan at […])',
-  },
-  {
-    n: 8, title: 'Penalty on Overdue Accounts / Penalty Charges',
-    en: 'In the event of an overdue balance, the Company may impose a penalty charge of four percent (4%) per month on the overdue amount.',
-    tl: '(Kung magkaroon ng overdue balance, sumasang-ayon ako na maaaring magpataw ang kompanya ng penalty charge na apat na porsiyento (4%) kada buwan sa overdue […])',
-  },
-  {
-    n: 9, title: 'Installment Payments / Pagbabayad ng Hulog sa Loan',
-    en: 'I understand my payment schedule and agree to make my payments on the prescribed dates to avoid penalties and lawful collection actions and that my daily payments imposed by me covers the whole amount payable for the Loan and shall be fully paid depending on outstanding balance and not the number of installment payments.',
-    tl: '(Nauunawaan ko ang aking payment schedule at sumasang-ayon akong magbayad ng aking mga obligasyon sa itinakdang mga petsa upang maiwasan ang penalties at collection actions na pinahihintulutan ng batas at nauunawaan ko na ang arawang hulog ay para sa kabuuang Loan na dapat bayaran at hindi naka-depende sa bilang ng hulog.)',
-  },
-  {
-    n: 10, title: 'Mode of Payment / Paraan ng Pagbabayad',
-    en: "Payments shall only be made to authorized collectors, the Company's office, or other payment channels officially designated by 1125 Lending Corporation.",
-    tl: "(Ang mga bayad ay dapat gawin lamang sa mga awtorisadong collector, opisina ng kompanya, o iba pang payment channels na opisyal na pinahihintulutan ng 1125 Lending Corporation.)",
-  },
-  {
-    n: 11, title: 'Receipt of Loan Proceeds / Pagtanggap ng Loan',
-    en: 'I certify that I personally received the net loan proceeds and that all applicable charges and obligations have been explained to me.',
-    tl: '(Pinatutunayan ko na personal kong natanggap na halaga ng aking loan at naipaliwanag sa akin ang lahat ng kaukulang singil at obligasyon.)',
-  },
-  {
-    n: 12, title: 'Voluntary Execution',
-    en: 'I certify that I have read, understood, and voluntarily signed this Agreement without force, intimidation, or fraud.',
-    tl: '(Pinatutunayan ko na aking nabasa, naunawaan, at kusang-loob na nilagdaan ang kasunduang ito nang walang pamimilit, pananakot, o panlilinlang.)',
-  },
-];
+const AGREEMENT_CLOSING_PARAGRAPH = 'The Borrower affirms that all information and documents submitted to the Corporation are true and correct. Any material misrepresentation or falsification shall constitute a ground for acceleration of the loan and the exercise of all legal remedies available to the Corporation. I acknowledge that my signature herein constitutes my conformity to all the terms and conditions stated in the loan documents and serves as evidence of my receipt of the loan proceeds and disclosure of all applicable charges and obligations.';
 
 export default function LoanDetailPage() {
   const params = useParams();
@@ -151,9 +117,8 @@ export default function LoanDetailPage() {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleMonth, setScheduleMonth] = useState(new Date());
   const [approveOpen, setApproveOpen] = useState(false);
-  const [approveDocs, setApproveDocs] = useState<any[]>([]);
-  const [approveDocsLoading, setApproveDocsLoading] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [bumpingLimit, setBumpingLimit] = useState(false);
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState('');
   const [declining, setDeclining] = useState(false);
@@ -168,11 +133,13 @@ export default function LoanDetailPage() {
   const [agreementData, setAgreementData] = useState<any>(null);
   const [printingAgreement, setPrintingAgreement] = useState(false);
   const [downloadingAgreement, setDownloadingAgreement] = useState(false);
-  const agreementRef = useRef<HTMLDivElement>(null);
+  const agreementPage1Ref = useRef<HTMLDivElement>(null);
+  const agreementPage2Ref = useRef<HTMLDivElement>(null);
   const [undertakingData, setUndertakingData] = useState<any>(null);
   const [printingUndertaking, setPrintingUndertaking] = useState(false);
   const [downloadingUndertaking, setDownloadingUndertaking] = useState(false);
-  const undertakingRef = useRef<HTMLDivElement>(null);
+  const undertakingPage1Ref = useRef<HTMLDivElement>(null);
+  const undertakingPage2Ref = useRef<HTMLDivElement>(null);
   const [collateral, setCollateral] = useState<any[]>([]);
   const [collateralDialogOpen, setCollateralDialogOpen] = useState(false);
   const [savingCollateral, setSavingCollateral] = useState(false);
@@ -238,7 +205,9 @@ export default function LoanDetailPage() {
 
   const offsetRequired = loan.total_payable * 0.40;
   const canRenew = loan.remaining_balance <= offsetRequired && loan.status === 'active';
-  const dailyAmount = loan.term_days > 0 ? loan.total_payable / loan.term_days : 0;
+  const dailyAmount = loan.daily_payment != null && Number(loan.daily_payment) > 0
+    ? Number(loan.daily_payment)
+    : (loan.term_days > 0 ? loan.total_payable / loan.term_days : 0);
 
   const chainPaidAmountByDate = new Map<string, number>();
   for (const p of chainPayments) {
@@ -289,40 +258,70 @@ export default function LoanDetailPage() {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  // Walks every loan in the renewal chain (oldest first) day-by-day. A
-  // shortfall on a day rolls forward and compounds onto the next day's due
-  // amount, and that carry crosses directly from one loan's last day into
-  // the next renewal's release date — even across the gap where the old
-  // loan already ended and the new one hadn't started yet. Conversely, a
-  // lump-sum payment bigger than one day's due rolls forward as credit,
-  // marking as many following days as it covers as Paid.
+  // Walks every loan in the renewal chain (oldest first) day-by-day.
+  //
+  // Each collection day is scheduled at the flat daily payment amount; the
+  // LAST collection day of a segment absorbs whatever balance is left, so if
+  // the daily amount doesn't divide the total evenly the final day settles
+  // the remainder (however large). Sundays are not collection days (shown as
+  // "No collection") but still count toward the term.
+  //
+  // Stacking ("patong") only happens for genuinely MISSED past days: an
+  // unpaid past day rolls its shortfall onto the next day. Future days always
+  // show the flat scheduled amount — they don't pre-stack. Any accumulated
+  // past debt lands on today (the first day that isn't already in the past).
   function computeDayStatuses() {
-    const map = new Map<string, { status: 'paid' | 'unpaid' | 'due'; amount: number }>();
+    const map = new Map<string, { status: 'paid' | 'unpaid' | 'due' | 'nocollect'; amount: number }>();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    let carry = 0; // positive = still owed rolling forward; negative = credit rolling forward
+    let carry = 0; // positive = missed debt rolling forward; negative = credit rolling forward
     for (const segment of chainLoans) {
       if (!segment.release_date || !segment.due_date) continue;
-      const segDaily = segment.term_days > 0 ? segment.total_payable / segment.term_days : 0;
+      const segDaily = segment.daily_payment != null && Number(segment.daily_payment) > 0
+        ? Number(segment.daily_payment)
+        : (segment.term_days > 0 ? segment.total_payable / segment.term_days : 0);
+      const total = Number(segment.total_payable) || 0;
       const end = new Date(segment.due_date);
       end.setHours(0, 0, 0, 0);
 
+      // Collection days = every day in [release, due] except Sundays.
+      const collectionDays: Date[] = [];
       for (let d = new Date(segment.release_date); d <= end; d.setDate(d.getDate() + 1)) {
         const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        if (day.getDay() === 0) {
+          map.set(dateKey(day), { status: 'nocollect', amount: 0 });
+        } else {
+          collectionDays.push(day);
+        }
+      }
+
+      let scheduledRemaining = total;
+      collectionDays.forEach((day, i) => {
+        const isLast = i === collectionDays.length - 1;
+        const scheduled = isLast ? Math.max(0, scheduledRemaining) : Math.min(segDaily, scheduledRemaining);
+        scheduledRemaining = Math.max(0, scheduledRemaining - scheduled);
+
         const key = dateKey(day);
         const paid = chainPaidAmountByDate.get(key) ?? 0;
-        const expected = segDaily + carry;
 
+        if (day > today) {
+          // Future day: always show the flat scheduled amount, never pre-stacked.
+          map.set(key, { status: 'due', amount: scheduled });
+          return;
+        }
+
+        // Today or past: apply carry so missed days stack forward.
+        const expected = scheduled + carry;
         if (paid >= expected) {
-          map.set(key, { status: 'paid', amount: segDaily });
-          carry = expected - paid;
+          map.set(key, { status: 'paid', amount: scheduled });
+          carry = expected - paid; // negative = credit rolling forward
         } else {
           const remainingDue = expected - paid;
           map.set(key, { status: day < today ? 'unpaid' : 'due', amount: remainingDue });
           carry = remainingDue;
         }
-      }
+      });
     }
     return map;
   }
@@ -345,16 +344,6 @@ export default function LoanDetailPage() {
       toast({
         title: 'Cannot renew',
         description: `Remaining balance must be at most 40% of the total payable (₱${offsetRequired.toFixed(2)}). Current balance: ₱${loan.remaining_balance.toFixed(2)}`,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    const maxLimit = loan.customers?.max_loan_limit;
-    if (maxLimit != null && Number(renewForm.amount) > maxLimit) {
-      toast({
-        title: 'Loan amount exceeds limit',
-        description: `${loan.customers?.first_name} ${loan.customers?.last_name}'s max loan limit is ${formatCurrency(maxLimit)}.`,
         variant: 'destructive',
       });
       return;
@@ -413,6 +402,7 @@ export default function LoanDetailPage() {
       total_payable: loan.total_payable,
       remaining_balance: loan.total_payable,
       term_days: loan.term_days,
+      daily_payment: loan.daily_payment ?? null,
       collector_id: loan.collector_id,
       branch_id: loan.branch_id,
       area_id: loan.area_id,
@@ -431,18 +421,29 @@ export default function LoanDetailPage() {
     setReapplying(false);
   }
 
-  async function openApprove() {
+  function openApprove() {
     setApproveOpen(true);
-    setApproveDocsLoading(true);
-    const { data } = await supabase
-      .from('customer_documents')
-      .select('*')
-      .eq('customer_id', loan.customer_id);
-    setApproveDocs(data ?? []);
-    setApproveDocsLoading(false);
   }
 
-  const missingDocs = REQUIRED_DOCUMENTS.filter(rd => !approveDocs.some(d => d.document_type === rd.type));
+  const overLimit = loan.customers?.max_loan_limit != null && Number(loan.amount) > Number(loan.customers.max_loan_limit);
+
+  async function handleBumpLimit() {
+    setBumpingLimit(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch('/api/customers/bump-loan-limit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+      body: JSON.stringify({ customer_id: loan.customer_id, new_limit: Number(loan.amount) }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      toast({ title: 'Error', description: result.error ?? 'Failed to update max loan limit', variant: 'destructive' });
+    } else {
+      toast({ title: 'Max loan limit updated', description: `${loan.customers?.first_name}'s max loan limit is now ${formatCurrency(Number(loan.amount))}.` });
+      await loadLoan();
+    }
+    setBumpingLimit(false);
+  }
 
   // Builds the Loan Agreement & Disclosure Statement. "Collection Charges
   // (2%/month)" and the resulting "Total Amount Payable" are computed here
@@ -455,7 +456,10 @@ export default function LoanDetailPage() {
     const previousLoan = isRenewal ? chainLoans[chainLoans.length - 2] : null;
     const actualBalance = previousLoan ? Number(previousLoan.remaining_balance) : 0;
     const offsetBalance = Number(loan.offset_balance) || 0;
-    const firstPayment = isRenewal ? actualBalance - offsetBalance : 0;
+    // First Payment = the day-one collection, auto-settled out of the loan
+    // proceeds at release. For a new loan that's the daily payment amount;
+    // for a renewal it's the carried-over balance from the previous loan.
+    const firstPayment = isRenewal ? actualBalance - offsetBalance : (Number(loan.daily_payment) || 0);
     const serviceFee = Number(loan.service_fee) || 0;
 
     const termMonths = Math.round((loan.term_days / 30) * 10) / 10;
@@ -463,7 +467,7 @@ export default function LoanDetailPage() {
     const collectionCharges = Math.round(Number(loan.amount) * (collectionChargeRate / 100) * termMonths * 100) / 100;
     const totalAmountPayable = Number(loan.amount) + Number(loan.interest_amount) + collectionCharges;
     const totalDeduction = firstPayment + serviceFee + offsetBalance;
-    const loanProceeds = Number(loan.release_amount) - offsetBalance - firstPayment;
+    const loanProceeds = Number(loan.amount) - totalDeduction;
 
     const addressParts = [loan.customers?.address, loan.customers?.barangay, loan.customers?.city, loan.customers?.province].filter(Boolean);
     const fullAddress = addressParts.join(', ');
@@ -498,12 +502,16 @@ export default function LoanDetailPage() {
   }
 
   async function handlePrintAgreement() {
-    if (!agreementRef.current) return;
+    const refs = [agreementPage1Ref, agreementPage2Ref].filter(r => r.current);
+    if (refs.length === 0) return;
     setPrintingAgreement(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(agreementRef.current, { backgroundColor: '#ffffff', scale: 2 });
-      const dataUrl = canvas.toDataURL('image/png');
+      const dataUrls: string[] = [];
+      for (const ref of refs) {
+        const canvas = await html2canvas(ref.current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
+        dataUrls.push(canvas.toDataURL('image/png'));
+      }
       const printWindow = window.open('', '_blank', 'width=900,height=1000');
       if (!printWindow) {
         toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the agreement', variant: 'destructive' });
@@ -514,7 +522,7 @@ export default function LoanDetailPage() {
         <html>
           <head><title>Loan Agreement ${loan.loan_number}</title></head>
           <body style="margin:0;padding:0;background:#fff;">
-            <img src="${dataUrl}" style="width:100%;display:block;" />
+            ${dataUrls.map((url, i) => `<img src="${url}" style="width:100%;display:block;${i < dataUrls.length - 1 ? 'page-break-after:always;' : ''}" />`).join('')}
           </body>
         </html>
       `);
@@ -528,34 +536,24 @@ export default function LoanDetailPage() {
   }
 
   async function handleDownloadAgreement() {
-    if (!agreementRef.current) return;
+    const refs = [agreementPage1Ref, agreementPage2Ref].filter(r => r.current);
+    if (refs.length === 0) return;
     setDownloadingAgreement(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
-      const scale = 2;
-      const canvas = await html2canvas(agreementRef.current, { backgroundColor: '#ffffff', scale, width: 780, windowWidth: 780 });
-      const imgData = canvas.toDataURL('image/png');
-      const pxToPt = 0.75;
-      const contentWidthPt = (canvas.width / scale) * pxToPt;
-      const contentHeightPt = (canvas.height / scale) * pxToPt;
-
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
+      const pxToPt = 0.75;
 
-      let heightLeft = imgHeight;
-      let position = margin;
-      pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
-      heightLeft -= usableHeight;
-      while (heightLeft > 0) {
-        pdf.addPage();
-        position = margin - (imgHeight - heightLeft);
-        pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
-        heightLeft -= usableHeight;
+      for (let i = 0; i < refs.length; i++) {
+        const canvas = await html2canvas(refs[i].current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const imgWidth = usableWidth;
+        const imgHeight = ((canvas.height / 2) * pxToPt / ((canvas.width / 2) * pxToPt)) * imgWidth;
+        if (i > 0) pdf.addPage();
+        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
       }
       pdf.save(`loan-agreement-${loan.loan_number}.pdf`);
     } catch (err: any) {
@@ -573,6 +571,9 @@ export default function LoanDetailPage() {
       date: approvedAtIso,
       borrowerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),
       residenceAddress: addressParts.join(', '),
+      branchManagerName: loan.approved_by_profile?.full_name ?? '',
+      branchName: loan.branches?.name ?? '',
+      collectorName: loan.collectors?.profiles?.full_name ?? '',
     };
   }
 
@@ -581,12 +582,16 @@ export default function LoanDetailPage() {
   }
 
   async function handlePrintUndertaking() {
-    if (!undertakingRef.current) return;
+    const refs = [undertakingPage1Ref, undertakingPage2Ref].filter(r => r.current);
+    if (refs.length === 0) return;
     setPrintingUndertaking(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(undertakingRef.current, { backgroundColor: '#ffffff', scale: 2 });
-      const dataUrl = canvas.toDataURL('image/png');
+      const dataUrls: string[] = [];
+      for (const ref of refs) {
+        const canvas = await html2canvas(ref.current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
+        dataUrls.push(canvas.toDataURL('image/png'));
+      }
       const printWindow = window.open('', '_blank', 'width=900,height=1000');
       if (!printWindow) {
         toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the undertaking', variant: 'destructive' });
@@ -597,7 +602,7 @@ export default function LoanDetailPage() {
         <html>
           <head><title>Borrower's Undertaking ${loan.loan_number}</title></head>
           <body style="margin:0;padding:0;background:#fff;">
-            <img src="${dataUrl}" style="width:100%;display:block;" />
+            ${dataUrls.map((url, i) => `<img src="${url}" style="width:100%;display:block;${i < dataUrls.length - 1 ? 'page-break-after:always;' : ''}" />`).join('')}
           </body>
         </html>
       `);
@@ -611,34 +616,24 @@ export default function LoanDetailPage() {
   }
 
   async function handleDownloadUndertaking() {
-    if (!undertakingRef.current) return;
+    const refs = [undertakingPage1Ref, undertakingPage2Ref].filter(r => r.current);
+    if (refs.length === 0) return;
     setDownloadingUndertaking(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
-      const scale = 2;
-      const canvas = await html2canvas(undertakingRef.current, { backgroundColor: '#ffffff', scale, width: 780, windowWidth: 780 });
-      const imgData = canvas.toDataURL('image/png');
-      const pxToPt = 0.75;
-      const contentWidthPt = (canvas.width / scale) * pxToPt;
-      const contentHeightPt = (canvas.height / scale) * pxToPt;
-
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
+      const pxToPt = 0.75;
 
-      let heightLeft = imgHeight;
-      let position = margin;
-      pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
-      heightLeft -= usableHeight;
-      while (heightLeft > 0) {
-        pdf.addPage();
-        position = margin - (imgHeight - heightLeft);
-        pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
-        heightLeft -= usableHeight;
+      for (let i = 0; i < refs.length; i++) {
+        const canvas = await html2canvas(refs[i].current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const imgWidth = usableWidth;
+        const imgHeight = ((canvas.height / 2) * pxToPt / ((canvas.width / 2) * pxToPt)) * imgWidth;
+        if (i > 0) pdf.addPage();
+        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
       }
       pdf.save(`borrowers-undertaking-${loan.loan_number}.pdf`);
     } catch (err: any) {
@@ -648,7 +643,7 @@ export default function LoanDetailPage() {
   }
 
   async function handleConfirmApprove() {
-    if (missingDocs.length > 0) return;
+    if (overLimit) return;
     setApproving(true);
     const now = new Date().toISOString();
     const { error } = await supabase.from('loans').update({
@@ -660,6 +655,34 @@ export default function LoanDetailPage() {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
       toast({ title: 'Loan approved', description: `${loan.loan_number} is awaiting disbursement by a Cashier.` });
+      setApproveOpen(false);
+      setAgreementData(buildAgreementData(now, profile?.full_name ?? ''));
+      loadLoan();
+    }
+    setApproving(false);
+  }
+
+  async function handleApproveAtLimit() {
+    if (!loan.customers?.max_loan_limit) return;
+    setApproving(true);
+    const now = new Date().toISOString();
+    const newAmount = Number(loan.customers.max_loan_limit);
+    const details = computeLoanDetails(newAmount, Number(loan.interest_rate), Number(loan.term_days));
+    const { error } = await supabase.from('loans').update({
+      amount: newAmount,
+      interest_amount: details.interestAmount,
+      service_fee: details.serviceFee,
+      release_amount: details.releaseAmount,
+      total_payable: details.totalPayable,
+      remaining_balance: details.totalPayable,
+      status: 'approved',
+      approved_by: profile?.id ?? null,
+      approved_at: now,
+    }).eq('id', loan.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Loan approved at max limit', description: `Loan amount adjusted to ${formatCurrency(newAmount)} and approved.` });
       setApproveOpen(false);
       setAgreementData(buildAgreementData(now, profile?.full_name ?? ''));
       loadLoan();
@@ -985,7 +1008,7 @@ export default function LoanDetailPage() {
             )}
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Loan Type:</span>
-              <span className="font-medium">{loan.loan_types?.name ?? '—'}</span>
+              <span className="font-medium">{loan.loan_types?.name ?? 'Custom'}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Principal:</span>
@@ -998,6 +1021,10 @@ export default function LoanDetailPage() {
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Service Fee:</span>
               <span className="font-medium text-warning">{formatCurrency(loan.service_fee)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">First Payment (deducted):</span>
+              <span className="font-medium text-warning">{formatCurrency(dailyAmount)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Release Amount:</span>
@@ -1022,6 +1049,10 @@ export default function LoanDetailPage() {
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Term:</span>
               <span>{loan.term_days} days</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Daily Payment:</span>
+              <span className="font-medium">{formatCurrency(dailyAmount)}</span>
             </div>
           </CardContent>
         </Card>
@@ -1219,7 +1250,9 @@ export default function LoanDetailPage() {
                 >
                   {info?.status === 'paid' && <Check className="w-3 h-3 absolute top-1 right-1" />}
                   <p className="text-base">{date.getDate()}</p>
-                  {info && (
+                  {info?.status === 'nocollect' ? (
+                    <p className="text-[10px] leading-tight mt-0.5">No collection</p>
+                  ) : info && (
                     <p className="text-xs leading-tight mt-0.5">{formatCurrency(info.amount)}</p>
                   )}
                 </div>
@@ -1298,7 +1331,7 @@ export default function LoanDetailPage() {
               <Button type="button" variant="outline" onClick={() => setRenewOpen(false)}>Cancel</Button>
               <Button
                 type="submit"
-                disabled={renewing || !renewForm.amount || (loan.customers?.max_loan_limit != null && Number(renewForm.amount) > loan.customers.max_loan_limit)}
+                disabled={renewing || !renewForm.amount}
               >
                 {renewing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Submit for Approval
@@ -1308,58 +1341,43 @@ export default function LoanDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Approve loan — requires KYC documents on file */}
+      {/* Approve loan — simple confirmation, with a max-loan-limit check */}
       <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Approve {loan.loan_number}</DialogTitle>
             <DialogDescription>
-              All required documents for {loan.customers?.first_name} {loan.customers?.last_name} must be on file before this loan can be approved.
+              Are you sure you want to approve this loan for {loan.customers?.first_name} {loan.customers?.last_name}?
             </DialogDescription>
           </DialogHeader>
 
-          {approveDocsLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {REQUIRED_DOCUMENTS.map(rd => {
-                const doc = approveDocs.find(d => d.document_type === rd.type);
-                return (
-                  <div key={rd.type} className="flex items-center gap-3 p-3 rounded-lg bg-secondary/50">
-                    {doc ? (
-                      <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
-                    ) : (
-                      <Circle className="w-5 h-5 text-muted-foreground shrink-0" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">{rd.label}</p>
-                      {doc ? (
-                        <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
-                          <FileText className="w-3 h-3" /> {doc.file_name ?? 'View file'}
-                        </a>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">Not uploaded yet</p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-              {missingDocs.length > 0 && (
-                <Link href={`/customers/${loan.customer_id}`} className="text-sm text-primary hover:underline flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5" />
-                  Upload missing documents from {loan.customers?.first_name}'s customer profile
-                </Link>
-              )}
+          {overLimit && (
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
+              <AlertTriangle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0 space-y-2">
+                <p className="text-sm text-destructive">
+                  This loan ({formatCurrency(loan.amount)}) exceeds {loan.customers?.first_name}'s max loan limit of {formatCurrency(loan.customers?.max_loan_limit ?? 0)}.
+                  Either raise the customer's limit to match, or approve the loan capped at their current limit instead.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="outline" disabled={bumpingLimit || approving} onClick={handleBumpLimit}>
+                    {bumpingLimit && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Set max loan limit to {formatCurrency(loan.amount)}
+                  </Button>
+                  <Button type="button" size="sm" disabled={bumpingLimit || approving} onClick={handleApproveAtLimit}>
+                    {approving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Approve at max limit ({formatCurrency(loan.customers?.max_loan_limit ?? 0)})
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
-            <Button type="button" disabled={missingDocs.length > 0 || approveDocsLoading || approving} onClick={handleConfirmApprove}>
+            <Button type="button" disabled={overLimit || approving} onClick={handleConfirmApprove}>
               {approving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {missingDocs.length > 0 ? `${missingDocs.length} document${missingDocs.length > 1 ? 's' : ''} missing` : 'Approve Loan'}
+              Approve Loan
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1590,7 +1608,7 @@ export default function LoanDetailPage() {
 
         return (
           <Dialog open={!!agreementData} onOpenChange={(open) => !open && setAgreementData(null)}>
-            <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <FileText className="w-5 h-5" />
@@ -1599,8 +1617,8 @@ export default function LoanDetailPage() {
                 <DialogDescription>Generated automatically when a Branch Manager approves the loan</DialogDescription>
               </DialogHeader>
 
-              <div className="flex justify-center bg-secondary/30 p-4 rounded-lg">
-                <div ref={agreementRef} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
+              <div className="flex flex-col items-center gap-4 bg-secondary/30 p-4 rounded-lg overflow-x-auto">
+                <div ref={agreementPage1Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
                   <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
                     <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>1125 LENDING CORPORATION</div>
                     <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>NATIONAL HIWAY, LAYAC, DINALUPIHAN, BATAAN</div>
@@ -1684,40 +1702,22 @@ export default function LoanDetailPage() {
 
                   <p style={{ fontWeight: 700, marginTop: 16, marginBottom: 6 }}>The Borrower hereby represents, warrants, acknowledges, and agrees as follows:</p>
 
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 8, color: '#666' }}>
-                    [1. — text not visible in the source screenshots]
-                  </p>
+                  {AGREEMENT_CLAUSES.slice(0, 4).map(c => (
+                    <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
+                      <strong>{c.n}. {c.title}</strong> - {c.en}
+                    </p>
+                  ))}
+                </div>
 
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 8 }}>
-                    <strong>2.</strong> […] and provided with the following information: a. Principal loan amount; b. Interest rate and method of computation; c. Service fees, Voucher and other loan documents. The Borrower certifies that the amount received is complete, correct, and satisfactory. The Cash Voucher, Loan Agreement, Kasunduan, and related loan documents shall constitute sufficient proof of the release and receipt of the loan proceeds.
-                  </p>
+                <div ref={agreementPage2Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
+                  {AGREEMENT_CLAUSES.slice(4).map(c => (
+                    <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
+                      <strong>{c.n}. {c.title}</strong> - {c.en}
+                    </p>
+                  ))}
 
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 8 }}>
-                    <strong>3. Verification of Amount Received</strong> - The Borrower agrees to immediately verify the amount of cash received upon release thereof. Upon signing the Cash Voucher and related loan documents, the Borrower confirms that no shortage, deficiency, or discrepancy exists in the amount received.
-                  </p>
-
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 8 }}>
-                    <strong>4. Waiver of False or Fraudulent Claims</strong> - The Borrower agrees not to make any false, fraudulent, or misleading claim against the Corporation concerning the release, receipt, or amount of the loan proceeds after the execution of the loan documents. Any claim of non-receipt, shortage, or deficiency made after the signing of the loan documents shall be presumed invalid unless supported by clear and convincing evidence of fraud, bad faith, or willful misconduct on the part of the Corporation or its authorized representatives.
-                  </p>
-
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 8 }}>
-                    <strong>5. Authority of Collectors and Representatives</strong> - The Borrower acknowledges that only duly authorized employees, collectors, or representatives of the Corporation may release loan proceeds and receive payments on behalf of the Corporation. The Borrower agrees to transact only with authorized personnel and to request official receipts or payment records for every payment made with existing VALID COMPANY ID.
-                  </p>
-
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 8 }}>
-                    <strong>6. Borrower's Duty to Keep Records</strong> - The Borrower agrees to keep copies of the Loan Agreement, Cash Voucher, Kasunduan, Acknowledgement Receipts, and other loan documents for future reference.
-                  </p>
-
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 8 }}>
-                    <strong>7.</strong> […] the opportunity to ask questions regarding the loan transaction, and voluntarily signed the same without force, intimidation, or undue influence.
-                  </p>
-
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 12 }}>
-                    <strong>8. Entire Agreement</strong> - The Borrower acknowledges that the Loan Agreement, Cash Voucher, Kasunduan, and related documents constitute the complete agreement between the parties concerning the loan transaction.
-                  </p>
-
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginBottom: 24 }}>
-                    The Borrower affirms that all information and documents submitted to the Corporation are true and correct. Any material misrepresentation or falsification shall constitute a ground for acceleration of the loan and the exercise of all legal remedies available to the Corporation. I acknowledge that my signature herein constitutes my conformity to all the terms and conditions stated in the loan documents and serves as evidence of my receipt of the loan proceeds and disclosure of all applicable charges and obligations.
+                  <p style={{ textAlign: 'justify', fontSize: 12, marginTop: 4, marginBottom: 40 }}>
+                    {AGREEMENT_CLOSING_PARAGRAPH}
                   </p>
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', textAlign: 'center', fontSize: 12 }}>
@@ -1756,7 +1756,7 @@ export default function LoanDetailPage() {
       {/* Borrower's Undertaking */}
       {undertakingData && (
         <Dialog open={!!undertakingData} onOpenChange={(open) => !open && setUndertakingData(null)}>
-          <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <FileText className="w-5 h-5" />
@@ -1765,8 +1765,8 @@ export default function LoanDetailPage() {
               <DialogDescription>Kasunduan sa Pagkakautang bilang Borrower</DialogDescription>
             </DialogHeader>
 
-            <div className="flex justify-center bg-secondary/30 p-4 rounded-lg">
-              <div ref={undertakingRef} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
+            <div className="flex flex-col items-center gap-4 bg-secondary/30 p-4 rounded-lg">
+              <div ref={undertakingPage1Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
                 <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
                   <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>1125 LENDING CORPORATION</div>
                   <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>NATIONAL HIWAY, LAYAC, DINALUPIHAN, BATAAN</div>
@@ -1781,23 +1781,41 @@ export default function LoanDetailPage() {
                   <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span> voluntarily agree to the following terms and conditions as a borrower of 1125 Lending Corporation.
                 </p>
 
-                {UNDERTAKING_CLAUSES.map(c => (
+                {AGREEMENT_CLAUSES.slice(0, 5).map(c => (
                   <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
-                    <strong>{c.n}. {c.title}</strong> - {c.en} <em style={{ color: '#333' }}>{c.tl}</em>
+                    <strong>{c.n}. {c.title}</strong> - {c.en}
+                  </p>
+                ))}
+              </div>
+
+              <div ref={undertakingPage2Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
+                {AGREEMENT_CLAUSES.slice(5).map(c => (
+                  <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
+                    <strong>{c.n}. {c.title}</strong> - {c.en}
                   </p>
                 ))}
 
                 <p style={{ textAlign: 'justify', fontSize: 12, marginTop: 4, marginBottom: 20 }}>
-                  I hereby authorize 1125 Lending Corporation to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act of 2012.
+                  {AGREEMENT_CLOSING_PARAGRAPH}
                 </p>
 
-                <p style={{ fontSize: 13, marginBottom: 24 }}>
-                  IN WITNESS WHEREOF, I hereunto affix my signature this <span style={{ textDecoration: 'underline' }}>{formatLongDate(undertakingData.date)}</span>
+                <p style={{ fontSize: 13, marginBottom: 32 }}>
+                  IN WITNESS WHEREOF, the parties hereunto affix their signatures this <span style={{ textDecoration: 'underline' }}>{formatLongDate(undertakingData.date)}</span>
                 </p>
 
-                <div style={{ width: 260, textAlign: 'center' }}>
-                  <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.borrowerName}</div>
-                  <div style={{ fontStyle: 'italic' }}>Borrower</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+                  <div style={{ width: 200, textAlign: 'center' }}>
+                    <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.branchManagerName || '—'}</div>
+                    <div style={{ fontStyle: 'italic', fontSize: 12 }}>Branch Manager{undertakingData.branchName ? ` - ${undertakingData.branchName} Branch` : ''}</div>
+                  </div>
+                  <div style={{ width: 200, textAlign: 'center' }}>
+                    <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.collectorName || '—'}</div>
+                    <div style={{ fontStyle: 'italic', fontSize: 12 }}>Assigned Collector</div>
+                  </div>
+                  <div style={{ width: 200, textAlign: 'center' }}>
+                    <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.borrowerName}</div>
+                    <div style={{ fontStyle: 'italic', fontSize: 12 }}>Borrower</div>
+                  </div>
                 </div>
               </div>
             </div>

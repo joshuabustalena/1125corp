@@ -98,6 +98,7 @@ export default function LoansPage() {
     branch_id: '',
     area_id: '',
     release_date: new Date().toISOString().split('T')[0],
+    custom_daily_payment: '',
   });
 
   async function checkExistingLoans(customerId: string): Promise<string | null> {
@@ -191,9 +192,7 @@ export default function LoansPage() {
     } else if (!isAdmin) {
       query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     }
-    if (isCollector) {
-      query = statusFilter === 'all' ? query.in('status', ['active', 'paid']) : query.eq('status', statusFilter);
-    } else if (statusFilter !== 'all') {
+    if (statusFilter !== 'all') {
       query = query.eq('status', statusFilter);
     }
     if (customerFilter !== 'all') query = query.eq('customer_id', customerFilter);
@@ -210,6 +209,51 @@ export default function LoansPage() {
   const computed = form.amount ? computeLoanDetails(Number(form.amount), Number(form.interest_rate), Number(form.term_days)) : null;
   const dueDate = form.release_date ? new Date(new Date(form.release_date).getTime() + Number(form.term_days) * 86400000).toISOString().split('T')[0] : '';
   const dailyAmount = computed && Number(form.term_days) > 0 ? computed.totalPayable / Number(form.term_days) : 0;
+
+  // Collection days = every day in the term except Sunday. Sunday still
+  // counts toward term_days/due date — it's just not a collection day.
+  const collectionDays: Date[] = (() => {
+    if (!form.release_date || !dueDate) return [];
+    const start = new Date(form.release_date);
+    const end = new Date(dueDate);
+    const days: Date[] = [];
+    const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    const endD = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+    while (cur <= endD) {
+      if (cur.getDay() !== 0) days.push(new Date(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    return days;
+  })();
+  const customDaily = Number(form.custom_daily_payment) || 0;
+  const regularDaily = customDaily > 0 ? customDaily : dailyAmount;
+
+  // Day-by-day schedule: each collection day pays min(regularDaily, whatever
+  // is still owed) — except the last collection day of the term, which
+  // always absorbs whatever balance remains, however large or small. That
+  // way an early payoff shows the rest of the term as "Fully paid", while a
+  // daily amount that's too small to keep pace still gets settled in full
+  // by the last day instead of trailing off into the next loan.
+  const schedule: { date: Date; amount: number }[] = (() => {
+    if (!computed) return [];
+    let remaining = computed.totalPayable;
+    return collectionDays.map((date, idx) => {
+      const isLast = idx === collectionDays.length - 1;
+      const amount = isLast ? Math.max(0, remaining) : Math.max(0, Math.min(regularDaily, remaining));
+      remaining = Math.max(0, remaining - amount);
+      return { date, amount };
+    });
+  })();
+  const firstDayAmount = schedule.length > 0 ? schedule[0].amount : 0;
+  const adjustedReleaseAmount = computed ? Math.max(0, computed.releaseAmount - firstDayAmount) : 0;
+
+  function findScheduleEntry(date: Date) {
+    return schedule.find(s =>
+      s.date.getFullYear() === date.getFullYear() &&
+      s.date.getMonth() === date.getMonth() &&
+      s.date.getDate() === date.getDate()
+    );
+  }
 
   function openSchedule() {
     setScheduleMonth(form.release_date ? new Date(form.release_date) : new Date());
@@ -261,16 +305,6 @@ export default function LoansPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    const selectedCustomer = customers.find(c => c.id === form.customer_id);
-    if (selectedCustomer && Number(form.amount) > selectedCustomer.max_loan_limit) {
-      toast({
-        title: 'Loan amount exceeds limit',
-        description: `${selectedCustomer.first_name} ${selectedCustomer.last_name}'s max loan limit is ${formatCurrency(selectedCustomer.max_loan_limit)}.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-
     const blockMessage = await checkExistingLoans(form.customer_id);
     if (blockMessage) {
       setExistingLoanBlock(blockMessage);
@@ -290,10 +324,11 @@ export default function LoansPage() {
       interest_rate: Number(form.interest_rate),
       interest_amount: details.interestAmount,
       service_fee: details.serviceFee,
-      release_amount: details.releaseAmount,
+      release_amount: adjustedReleaseAmount,
       total_payable: details.totalPayable,
       remaining_balance: details.totalPayable,
       term_days: Number(form.term_days),
+      daily_payment: regularDaily,
       collector_id: form.collector_id || null,
       branch_id: form.branch_id || null,
       area_id: form.area_id || null,
@@ -308,7 +343,7 @@ export default function LoansPage() {
     } else {
       toast({ title: 'Submitted for approval', description: `Loan ${loanNumber} is pending — a Branch Manager must approve it before it becomes active.` });
       setDialogOpen(false);
-      setForm({ ...form, customer_id: '', amount: '' });
+      setForm({ ...form, customer_id: '', amount: '', custom_daily_payment: '' });
       loadLoans();
     }
     setSaving(false);
@@ -448,11 +483,7 @@ export default function LoansPage() {
                           <ChevronDown className="w-3.5 h-3.5" />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="start">
-                          {(isCollector ? [
-                            ['all', 'All'],
-                            ['active', 'Active'],
-                            ['paid', 'Paid'],
-                          ] : [
+                          {[
                             ['all', 'All Status'],
                             ['pending', 'Pending'],
                             ['approved', 'Approved'],
@@ -460,7 +491,7 @@ export default function LoansPage() {
                             ['declined', 'Declined'],
                             ['overdue', 'Overdue'],
                             ['paid', 'Paid'],
-                          ]).map(([value, label]) => (
+                          ].map(([value, label]) => (
                             <DropdownMenuItem key={value} onClick={() => { setStatusFilter(value); setPage(1); }} className="flex items-center justify-between">
                               {label}
                               {statusFilter === value && <Check className="w-4 h-4" />}
@@ -615,6 +646,16 @@ export default function LoansPage() {
                 <Label>Release Date</Label>
                 <Input type="date" value={form.release_date} onChange={(e) => setForm({ ...form, release_date: e.target.value })} />
               </div>
+              <div className="space-y-2">
+                <Label>Daily Payment (₱)</Label>
+                <Input
+                  type="number"
+                  value={form.custom_daily_payment}
+                  onChange={(e) => setForm({ ...form, custom_daily_payment: e.target.value })}
+                  placeholder={dailyAmount ? `Auto: ${formatCurrency(dailyAmount)}` : '0.00'}
+                />
+                <p className="text-xs text-muted-foreground">How much the customer will pay per collection day. Leave blank to split evenly — the last day absorbs any remaining balance.</p>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
@@ -653,12 +694,16 @@ export default function LoansPage() {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Principal:</span><span className="font-medium">{formatCurrency(Number(form.amount))}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Interest:</span><span className="font-medium">{formatCurrency(computed.interestAmount)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">{formatCurrency(computed.serviceFee)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Release:</span><span className="font-medium text-success">{formatCurrency(computed.releaseAmount)}</span></div>
-                  <div className="flex justify-between col-span-2 pt-2 border-t border-border"><span className="text-muted-foreground">Total Payable:</span><span className="font-bold text-primary">{formatCurrency(computed.totalPayable)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Daily Payment:</span><span className="font-medium">{formatCurrency(dailyAmount)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">-{formatCurrency(computed.serviceFee)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">First Day Payment:</span><span className="font-medium text-warning">-{formatCurrency(firstDayAmount)}</span></div>
+                  <div className="flex justify-between col-span-2 pt-2 border-t border-border"><span className="text-muted-foreground">Release:</span><span className="font-bold text-success">{formatCurrency(adjustedReleaseAmount)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Total Payable:</span><span className="font-bold text-primary">{formatCurrency(computed.totalPayable)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Daily Payment:</span><span className="font-medium">{formatCurrency(regularDaily)}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Due Date:</span><span className="font-medium">{formatDate(dueDate)}</span></div>
                 </div>
+                <p className="text-xs text-muted-foreground pt-1">
+                  Release = Principal - Service Fee - First Day Payment (auto-settled, so it won't show as due on the calendar).
+                </p>
               </div>
             )}
 
@@ -679,7 +724,7 @@ export default function LoansPage() {
           <DialogHeader>
             <DialogTitle className="text-xl">Daily Payment Schedule</DialogTitle>
             <DialogDescription className="text-base">
-              {formatCurrency(dailyAmount)} per day, from {formatDate(form.release_date)} to {formatDate(dueDate)}
+              {formatCurrency(regularDaily)} per day, from {formatDate(form.release_date)} to {formatDate(dueDate)} (no collection on Sundays)
             </DialogDescription>
           </DialogHeader>
 
@@ -703,16 +748,23 @@ export default function LoansPage() {
             ))}
             {getMonthGrid(scheduleMonth).map(({ date, inCurrentMonth }, i) => {
               const inTerm = inCurrentMonth && isWithinLoanTerm(date);
+              const isSunday = date.getDay() === 0;
+              const entry = inTerm && !isSunday ? findScheduleEntry(date) : undefined;
+              const isFirstDay = !!entry && schedule.length > 0 &&
+                entry.date.getTime() === schedule[0].date.getTime();
               return (
                 <div
                   key={i}
                   className={`rounded-lg py-3 text-sm ${
                     !inCurrentMonth ? 'text-muted-foreground/30' :
-                    inTerm ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'
+                    inTerm && !isSunday ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'
                   }`}
                 >
                   <p className="text-base">{date.getDate()}</p>
-                  {inTerm && <p className="text-xs leading-tight mt-0.5">{formatCurrency(dailyAmount)}</p>}
+                  {isFirstDay && <p className="text-[10px] leading-tight mt-0.5 text-success">Paid at release</p>}
+                  {entry && !isFirstDay && entry.amount > 0 && <p className="text-xs leading-tight mt-0.5">{formatCurrency(entry.amount)}</p>}
+                  {entry && !isFirstDay && entry.amount === 0 && <p className="text-[10px] leading-tight mt-0.5 text-success">Fully paid</p>}
+                  {inTerm && isSunday && <p className="text-[10px] leading-tight mt-0.5">No collection</p>}
                 </div>
               );
             })}

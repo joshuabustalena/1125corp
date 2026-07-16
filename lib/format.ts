@@ -87,7 +87,7 @@ export function computeLoanDetails(
   const months = termDays / 30;
   const interestAmount = amount * (interestRate / 100) * months;
   const totalPayable = amount + interestAmount;
-  const serviceFee = amount >= 10000 ? amount * 0.03 : 300;
+  const serviceFee = amount > 10000 ? amount * 0.03 : 300;
   const releaseAmount = amount - serviceFee;
   return {
     interestAmount: Math.round(interestAmount * 100) / 100,

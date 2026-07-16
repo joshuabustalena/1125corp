@@ -683,7 +683,7 @@ DROP POLICY IF EXISTS "customers_insert" ON customers;
 CREATE POLICY "customers_insert" ON customers FOR INSERT TO authenticated
   WITH CHECK (is_admin() OR current_role_name() = 'Cashier');
 DROP POLICY IF EXISTS "customers_update" ON customers;
-CREATE POLICY "customers_update" ON customers FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "customers_update" ON customers FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
 DROP POLICY IF EXISTS "customers_delete" ON customers;
 CREATE POLICY "customers_delete" ON customers FOR DELETE TO authenticated USING (is_admin());
 

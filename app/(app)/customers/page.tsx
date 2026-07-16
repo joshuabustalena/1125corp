@@ -15,6 +15,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useToast } from '@/hooks/use-toast';
@@ -85,9 +86,15 @@ export default function CustomersPage() {
   const REQUIRED_DOCUMENTS = [
     { type: 'valid_id', label: 'Valid Government ID' },
     { type: 'clearance', label: 'Barangay Clearance' },
-    { type: 'proof_of_billing', label: 'Proof of Billing' },
-    { type: 'promissory_note', label: 'Promissory Note' },
+    { type: 'photo_2x2', label: '2x2 Picture' },
   ];
+  const [extraDocRows, setExtraDocRows] = useState<{ id: string; label: string }[]>([]);
+  const [activeTab, setActiveTab] = useState<'info' | 'documents'>('info');
+  const [docsStepStarted, setDocsStepStarted] = useState(false);
+  const [pendingRequired, setPendingRequired] = useState<Record<string, File>>({});
+  const [pendingExtra, setPendingExtra] = useState<{ id: string; label: string; file: File }[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [renamingDocId, setRenamingDocId] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', phone: '', email: '',
@@ -172,6 +179,13 @@ export default function CustomersPage() {
 
   function openCreate() {
     setEditing(null);
+    setDocUploadFor(null);
+    setCustomerDocs([]);
+    setExtraDocRows([]);
+    setActiveTab('info');
+    setDocsStepStarted(false);
+    setPendingRequired({});
+    setPendingExtra([]);
     setForm({
       first_name: '', last_name: '', middle_name: '', phone: '', email: '',
       address: '', barangay: '', city: '', province: '', zip_code: '',
@@ -181,7 +195,7 @@ export default function CustomersPage() {
     setDialogOpen(true);
   }
 
-  function openEdit(c: Customer) {
+  async function openEdit(c: Customer) {
     setEditing(c);
     setForm({
       first_name: c.first_name, last_name: c.last_name, middle_name: c.middle_name ?? '',
@@ -190,29 +204,19 @@ export default function CustomersPage() {
       branch_id: c.branch_id ?? '', area_id: c.area_id ?? '', collector_id: c.collector_id ?? '', max_loan_limit: String(c.max_loan_limit),
       status: c.status, gender: c.gender ?? '', birth_date: c.birth_date ?? '', government_id: c.government_id ?? '',
     });
+    setDocUploadFor(c.id);
+    setExtraDocRows([]);
+    setActiveTab('info');
+    setDocsStepStarted(false);
+    setPendingRequired({});
+    setPendingExtra([]);
     setDialogOpen(true);
+    const { data } = await supabase.from('customer_documents').select('*').eq('customer_id', c.id);
+    setCustomerDocs(data ?? []);
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-
-    if (form.area_id) {
-      const pool = getAreaPool(form.area_id, editing?.id);
-      const requested = Number(form.max_loan_limit) || 0;
-      if (pool && requested > pool.remaining) {
-        toast({
-          title: 'No loan limit available',
-          description: pool.remaining <= 0
-            ? 'This area\'s entire loan limit is already allocated to other customers.'
-            : `Only ${formatCurrency(pool.remaining)} is left to allocate for this area.`,
-          variant: 'destructive',
-        });
-        return;
-      }
-    }
-
-    setSaving(true);
-    const payload = {
+  function buildCustomerPayload() {
+    return {
       first_name: form.first_name,
       last_name: form.last_name,
       middle_name: form.middle_name || null,
@@ -232,9 +236,33 @@ export default function CustomersPage() {
       birth_date: form.birth_date || null,
       government_id: form.government_id || null,
     };
+  }
+
+  function checkAreaLimit(): boolean {
+    if (form.area_id) {
+      const pool = getAreaPool(form.area_id, editing?.id);
+      const requested = Number(form.max_loan_limit) || 0;
+      if (pool && requested > pool.remaining) {
+        toast({
+          title: 'No loan limit available',
+          description: pool.remaining <= 0
+            ? 'This area\'s entire loan limit is already allocated to other customers.'
+            : `Only ${formatCurrency(pool.remaining)} is left to allocate for this area.`,
+          variant: 'destructive',
+        });
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!checkAreaLimit()) return;
 
     if (editing) {
-      const { error } = await supabase.from('customers').update(payload).eq('id', editing.id);
+      setSaving(true);
+      const { error } = await supabase.from('customers').update(buildCustomerPayload()).eq('id', editing.id);
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
@@ -242,18 +270,69 @@ export default function CustomersPage() {
         setDialogOpen(false);
         loadCustomers();
       }
+      setSaving(false);
     } else {
-      const { data, error } = await supabase.from('customers').insert(payload).select('id').single();
-      if (error) {
-        toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      } else {
-        toast({ title: 'Success', description: 'Customer created — now attach their documents.' });
-        setCustomerDocs([]);
-        setDocUploadFor(data.id);
-        loadCustomers();
-      }
+      // Don't create the customer yet — move to the Documents step first.
+      // The record is only inserted once required documents are attached.
+      setDocsStepStarted(true);
+      setActiveTab('documents');
     }
-    setSaving(false);
+  }
+
+  async function uploadDocForCustomer(customerId: string, docType: string, file: File) {
+    const ext = file.name.split('.').pop();
+    const path = `${customerId}/${docType}-${Date.now()}.${ext}`;
+    const { error: uploadError } = await supabase.storage.from('customer-documents').upload(path, file, { contentType: file.type });
+    if (uploadError) return;
+    const { data: urlData } = supabase.storage.from('customer-documents').getPublicUrl(path);
+    await supabase.from('customer_documents').insert({
+      customer_id: customerId,
+      document_type: docType,
+      file_name: file.name,
+      file_url: urlData.publicUrl,
+    });
+  }
+
+  async function handleCreateCustomer() {
+    const missing = REQUIRED_DOCUMENTS.filter(rd => !pendingRequired[rd.type]);
+    if (missing.length > 0) {
+      toast({
+        title: 'Missing required documents',
+        description: `Please upload: ${missing.map(m => m.label).join(', ')}`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setCreating(true);
+    const { data, error } = await supabase.from('customers').insert(buildCustomerPayload()).select('id').single();
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      setCreating(false);
+      return;
+    }
+
+    const customerId = data.id;
+    for (const rd of REQUIRED_DOCUMENTS) {
+      const file = pendingRequired[rd.type];
+      if (file) await uploadDocForCustomer(customerId, rd.type, file);
+    }
+    for (const p of pendingExtra) {
+      await uploadDocForCustomer(customerId, p.label, p.file);
+    }
+
+    toast({ title: 'Success', description: 'Customer added successfully' });
+    setCreating(false);
+    setDialogOpen(false);
+    setEditing(null);
+    setDocUploadFor(null);
+    setCustomerDocs([]);
+    setExtraDocRows([]);
+    setPendingRequired({});
+    setPendingExtra([]);
+    setDocsStepStarted(false);
+    setActiveTab('info');
+    loadCustomers();
   }
 
   async function handleDocUpload(docType: string, file: File) {
@@ -290,8 +369,61 @@ export default function CustomersPage() {
 
   function finishDocUpload() {
     setDialogOpen(false);
+    setEditing(null);
     setDocUploadFor(null);
     setCustomerDocs([]);
+    setExtraDocRows([]);
+    setActiveTab('info');
+    loadCustomers();
+  }
+
+  async function handleDeleteDoc(doc: any) {
+    const { error } = await supabase.from('customer_documents').delete().eq('id', doc.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      setCustomerDocs(prev => prev.filter(d => d.id !== doc.id));
+    }
+  }
+
+  async function handleDocReplace(doc: any, file: File) {
+    if (!docUploadFor) return;
+    setUploadingDocType(doc.document_type);
+    const ext = file.name.split('.').pop();
+    const path = `${docUploadFor}/${doc.document_type}-${Date.now()}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage.from('customer-documents').upload(path, file, {
+      contentType: file.type,
+    });
+    if (uploadError) {
+      toast({ title: 'Upload failed', description: uploadError.message, variant: 'destructive' });
+      setUploadingDocType(null);
+      return;
+    }
+
+    const { data: urlData } = supabase.storage.from('customer-documents').getPublicUrl(path);
+    const { error: updateError } = await supabase.from('customer_documents')
+      .update({ file_name: file.name, file_url: urlData.publicUrl })
+      .eq('id', doc.id);
+
+    if (updateError) {
+      toast({ title: 'Error', description: updateError.message, variant: 'destructive' });
+    } else {
+      const { data } = await supabase.from('customer_documents').select('*').eq('customer_id', docUploadFor);
+      setCustomerDocs(data ?? []);
+    }
+    setUploadingDocType(null);
+  }
+
+  async function handleDocRename(doc: any, newLabel: string) {
+    setRenamingDocId(null);
+    if (!newLabel.trim() || newLabel.trim() === doc.document_type) return;
+    const { error } = await supabase.from('customer_documents').update({ document_type: newLabel.trim() }).eq('id', doc.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      setCustomerDocs(prev => prev.map(d => d.id === doc.id ? { ...d, document_type: newLabel.trim() } : d));
+    }
   }
 
   async function handleDelete() {
@@ -328,6 +460,132 @@ export default function CustomersPage() {
   }
 
   const totalPages = Math.ceil(total / pageSize);
+
+  const infoFormContent = (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>First Name *</Label>
+          <Input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} />
+        </div>
+        <div className="space-y-2">
+          <Label>Last Name *</Label>
+          <Input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} />
+        </div>
+        <div className="space-y-2">
+          <Label>Middle Name</Label>
+          <Input value={form.middle_name} onChange={(e) => setForm({ ...form, middle_name: e.target.value })} />
+        </div>
+        <div className="space-y-2">
+          <Label>Gender</Label>
+          <Select value={form.gender} onValueChange={(v) => setForm({ ...form, gender: v })}>
+            <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="male">Male</SelectItem>
+              <SelectItem value="female">Female</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Phone</Label>
+          <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="09XX XXX XXXX" />
+        </div>
+        <div className="space-y-2">
+          <Label>Email</Label>
+          <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div className="space-y-2">
+          <Label>Branch</Label>
+          <Select
+            value={form.branch_id}
+            onValueChange={(v) => setForm({ ...form, branch_id: v, area_id: '', collector_id: '' })}
+            disabled={!isAdmin}
+          >
+            <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
+            <SelectContent>
+              {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Area</Label>
+          <Select
+            value={form.area_id}
+            onValueChange={(v) => {
+              const pool = getAreaPool(v, editing?.id);
+              setForm({ ...form, area_id: v, collector_id: '', max_loan_limit: pool ? String(Math.max(0, pool.remaining)) : form.max_loan_limit });
+            }}
+          >
+            <SelectTrigger><SelectValue placeholder="Select area" /></SelectTrigger>
+            <SelectContent>
+              {areas.filter(a => !form.branch_id || a.branch_id === form.branch_id).map(a => (
+                <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Collector</Label>
+          <Select value={form.collector_id} onValueChange={(v) => setForm({ ...form, collector_id: v })} disabled={!form.branch_id}>
+            <SelectTrigger><SelectValue placeholder={form.branch_id ? 'Select collector' : 'Select a branch first'} /></SelectTrigger>
+            <SelectContent>
+              {collectors
+                .filter(c => c.branch_id === form.branch_id && (!form.area_id || c.area_id === form.area_id))
+                .map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.profiles?.full_name ?? 'Unknown'}</SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Government ID</Label>
+          <Input value={form.government_id} onChange={(e) => setForm({ ...form, government_id: e.target.value })} placeholder="SSS / UMID / Driver's License" />
+        </div>
+        <div className="space-y-2">
+          <Label>Max Loan Limit (₱)</Label>
+          <Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} />
+          {form.area_id && (() => {
+            const pool = getAreaPool(form.area_id, editing?.id);
+            if (!pool) return null;
+            return pool.remaining <= 0 ? (
+              <p className="text-xs text-destructive">No loan limit available — this area's full {formatCurrency(pool.total)} is already allocated to other customers.</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">{formatCurrency(pool.remaining)} available to allocate (of {formatCurrency(pool.total)} total for this area)</p>
+            );
+          })()}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label>Address</Label>
+        <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Street address" />
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div className="space-y-2">
+          <Label>Barangay</Label>
+          <Input value={form.barangay} onChange={(e) => setForm({ ...form, barangay: e.target.value })} />
+        </div>
+        <div className="space-y-2">
+          <Label>City</Label>
+          <Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+        </div>
+        <div className="space-y-2">
+          <Label>Province</Label>
+          <Input value={form.province} onChange={(e) => setForm({ ...form, province: e.target.value })} />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+        <Button type="submit" disabled={saving}>
+          {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+          {editing ? 'Update Customer' : 'Next'}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
 
   return (
     <div className="space-y-6">
@@ -454,12 +712,16 @@ export default function CustomersPage() {
                           <Button variant="ghost" size="icon" onClick={() => router.push(`/customers/${c.id}`)}>
                             <Eye className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(c)}>
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(c)}>
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
+                          {isAdmin && (
+                            <>
+                              <Button variant="ghost" size="icon" onClick={() => openEdit(c)}>
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(c)}>
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -487,26 +749,46 @@ export default function CustomersPage() {
       </Card>
 
       {/* Create/Edit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) { setDocUploadFor(null); setCustomerDocs([]); } }}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => {
+        setDialogOpen(open);
+        if (!open) {
+          setEditing(null);
+          setDocUploadFor(null);
+          setCustomerDocs([]);
+          setExtraDocRows([]);
+          setActiveTab('info');
+          setDocsStepStarted(false);
+          setPendingRequired({});
+          setPendingExtra([]);
+        }
+      }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          {docUploadFor ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>Attach Documents</DialogTitle>
-                <DialogDescription>
-                  Upload the required documents for this customer now, or finish and add them later from their profile.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-3">
+          <DialogHeader>
+            <DialogTitle>{editing ? 'Edit Customer' : 'Add New Customer'}</DialogTitle>
+            <DialogDescription>
+              {editing ? 'Update customer information or documents' : (docUploadFor || docsStepStarted) ? 'A customer is only created once the required documents are attached.' : 'Register a new borrower'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {(docUploadFor || docsStepStarted) ? (
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'info' | 'documents')}>
+              <TabsList className="grid grid-cols-2 w-full">
+                <TabsTrigger value="info">Info</TabsTrigger>
+                <TabsTrigger value="documents">Documents</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="documents" className="space-y-3 pt-2">
                 {REQUIRED_DOCUMENTS.map(rd => {
                   const doc = customerDocs.find(d => d.document_type === rd.type);
+                  const pendingFile = pendingRequired[rd.type];
+                  const hasDoc = !!doc || !!pendingFile;
                   return (
                     <div key={rd.type} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
                       <div className="flex items-center gap-2">
-                        {doc ? <CheckCircle2 className="w-4 h-4 text-success" /> : <Circle className="w-4 h-4 text-muted-foreground" />}
+                        {hasDoc ? <CheckCircle2 className="w-4 h-4 text-success" /> : <Circle className="w-4 h-4 text-muted-foreground" />}
                         <div>
                           <p className="text-sm font-medium">{rd.label}</p>
-                          {doc && <p className="text-xs text-muted-foreground">{doc.file_name}</p>}
+                          {hasDoc && <p className="text-xs text-muted-foreground">{doc?.file_name ?? pendingFile?.name}</p>}
                         </div>
                       </div>
                       <input
@@ -515,7 +797,13 @@ export default function CustomersPage() {
                         className="hidden"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
-                          if (file) handleDocUpload(rd.type, file);
+                          if (file) {
+                            if (docUploadFor) {
+                              if (doc) handleDocReplace(doc, file); else handleDocUpload(rd.type, file);
+                            } else {
+                              setPendingRequired(prev => ({ ...prev, [rd.type]: file }));
+                            }
+                          }
                           e.target.value = '';
                         }}
                       />
@@ -526,148 +814,166 @@ export default function CustomersPage() {
                         disabled={uploadingDocType === rd.type}
                         onClick={() => document.getElementById(`cust-doc-upload-${rd.type}`)?.click()}
                       >
-                        {uploadingDocType === rd.type ? <Loader2 className="w-4 h-4 animate-spin" /> : doc ? 'Replace' : 'Upload'}
+                        {uploadingDocType === rd.type ? <Loader2 className="w-4 h-4 animate-spin" /> : hasDoc ? 'Replace' : 'Upload'}
                       </Button>
                     </div>
                   );
                 })}
-              </div>
-              <DialogFooter>
-                <Button onClick={finishDocUpload}>Done</Button>
-              </DialogFooter>
-            </>
-          ) : (
-          <>
-          <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Customer' : 'Add New Customer'}</DialogTitle>
-            <DialogDescription>
-              {editing ? 'Update customer information' : 'Register a new borrower'}
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>First Name *</Label>
-                <Input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Last Name *</Label>
-                <Input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Middle Name</Label>
-                <Input value={form.middle_name} onChange={(e) => setForm({ ...form, middle_name: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Gender</Label>
-                <Select value={form.gender} onValueChange={(v) => setForm({ ...form, gender: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="male">Male</SelectItem>
-                    <SelectItem value="female">Female</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Phone</Label>
-                <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="09XX XXX XXXX" />
-              </div>
-              <div className="space-y-2">
-                <Label>Email</Label>
-                <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>Branch</Label>
-                <Select
-                  value={form.branch_id}
-                  onValueChange={(v) => setForm({ ...form, branch_id: v, area_id: '', collector_id: '' })}
-                  disabled={!isAdmin}
+
+                {customerDocs
+                  .filter(d => !REQUIRED_DOCUMENTS.some(rd => rd.type === d.document_type))
+                  .map(doc => (
+                    <div key={doc.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          {renamingDocId === doc.id ? (
+                            <Input
+                              autoFocus
+                              defaultValue={doc.document_type}
+                              onBlur={(e) => handleDocRename(doc, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                              className="h-7 text-sm"
+                            />
+                          ) : (
+                            <p className="text-sm font-medium">{doc.document_type}</p>
+                          )}
+                          <p className="text-xs text-muted-foreground">{doc.file_name}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button type="button" variant="ghost" size="icon" onClick={() => setRenamingDocId(doc.id)}>
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <input
+                          type="file"
+                          id={`cust-doc-replace-${doc.id}`}
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleDocReplace(doc, file);
+                            e.target.value = '';
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={uploadingDocType === doc.document_type}
+                          onClick={() => document.getElementById(`cust-doc-replace-${doc.id}`)?.click()}
+                        >
+                          {uploadingDocType === doc.document_type ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Replace'}
+                        </Button>
+                        {isAdmin && (
+                          <Button type="button" variant="ghost" size="icon" onClick={() => handleDeleteDoc(doc)}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                {pendingExtra.map(p => (
+                  <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <Input
+                          value={p.label}
+                          onChange={(e) => setPendingExtra(prev => prev.map(x => x.id === p.id ? { ...x, label: e.target.value } : x))}
+                          className="h-7 text-sm"
+                        />
+                        <p className="text-xs text-muted-foreground">{p.file.name}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="file"
+                        id={`pending-extra-replace-${p.id}`}
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) setPendingExtra(prev => prev.map(x => x.id === p.id ? { ...x, file } : x));
+                          e.target.value = '';
+                        }}
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById(`pending-extra-replace-${p.id}`)?.click()}>
+                        Replace
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" onClick={() => setPendingExtra(prev => prev.filter(x => x.id !== p.id))}>
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+
+                {extraDocRows.map(row => (
+                  <div key={row.id} className="flex items-center gap-2 p-3 rounded-lg bg-secondary/50">
+                    <Input
+                      placeholder="Document name (e.g. Proof of Billing)"
+                      value={row.label}
+                      onChange={(e) => setExtraDocRows(prev => prev.map(r => r.id === row.id ? { ...r, label: e.target.value } : r))}
+                      className="flex-1"
+                    />
+                    <input
+                      type="file"
+                      id={`cust-doc-upload-extra-${row.id}`}
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file && row.label.trim()) {
+                          if (docUploadFor) {
+                            handleDocUpload(row.label.trim(), file);
+                          } else {
+                            setPendingExtra(prev => [...prev, { id: row.id, label: row.label.trim(), file }]);
+                          }
+                          setExtraDocRows(prev => prev.filter(r => r.id !== row.id));
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={!row.label.trim() || uploadingDocType === row.label.trim()}
+                      onClick={() => document.getElementById(`cust-doc-upload-extra-${row.id}`)?.click()}
+                    >
+                      {uploadingDocType === row.label.trim() ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Upload'}
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => setExtraDocRows(prev => prev.filter(r => r.id !== row.id))}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  </div>
+                ))}
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setExtraDocRows(prev => [...prev, { id: crypto.randomUUID(), label: '' }])}
                 >
-                  <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
-                  <SelectContent>
-                    {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Area</Label>
-                <Select
-                  value={form.area_id}
-                  onValueChange={(v) => {
-                    const pool = getAreaPool(v, editing?.id);
-                    setForm({ ...form, area_id: v, collector_id: '', max_loan_limit: pool ? String(Math.max(0, pool.remaining)) : form.max_loan_limit });
-                  }}
-                >
-                  <SelectTrigger><SelectValue placeholder="Select area" /></SelectTrigger>
-                  <SelectContent>
-                    {areas.filter(a => !form.branch_id || a.branch_id === form.branch_id).map(a => (
-                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Collector</Label>
-                <Select value={form.collector_id} onValueChange={(v) => setForm({ ...form, collector_id: v })} disabled={!form.branch_id}>
-                  <SelectTrigger><SelectValue placeholder={form.branch_id ? 'Select collector' : 'Select a branch first'} /></SelectTrigger>
-                  <SelectContent>
-                    {collectors
-                      .filter(c => c.branch_id === form.branch_id && (!form.area_id || c.area_id === form.area_id))
-                      .map(c => (
-                        <SelectItem key={c.id} value={c.id}>{c.profiles?.full_name ?? 'Unknown'}</SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Government ID</Label>
-                <Input value={form.government_id} onChange={(e) => setForm({ ...form, government_id: e.target.value })} placeholder="SSS / UMID / Driver's License" />
-              </div>
-              <div className="space-y-2">
-                <Label>Max Loan Limit (₱)</Label>
-                <Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} />
-                {form.area_id && (() => {
-                  const pool = getAreaPool(form.area_id, editing?.id);
-                  if (!pool) return null;
-                  return pool.remaining <= 0 ? (
-                    <p className="text-xs text-destructive">No loan limit available — this area's full {formatCurrency(pool.total)} is already allocated to other customers.</p>
+                  <Plus className="w-4 h-4 mr-2" />Add Another Document
+                </Button>
+                <DialogFooter>
+                  {editing ? (
+                    <Button onClick={finishDocUpload}>Done</Button>
                   ) : (
-                    <p className="text-xs text-muted-foreground">{formatCurrency(pool.remaining)} available to allocate (of {formatCurrency(pool.total)} total for this area)</p>
-                  );
-                })()}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Address</Label>
-              <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Street address" />
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>Barangay</Label>
-                <Input value={form.barangay} onChange={(e) => setForm({ ...form, barangay: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>City</Label>
-                <Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Province</Label>
-                <Input value={form.province} onChange={(e) => setForm({ ...form, province: e.target.value })} />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving}>
-                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editing ? 'Update' : 'Create'} Customer
-              </Button>
-            </DialogFooter>
-          </form>
-          </>
+                    <Button onClick={handleCreateCustomer} disabled={creating}>
+                      {creating && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                      Create Customer
+                    </Button>
+                  )}
+                </DialogFooter>
+              </TabsContent>
+
+              <TabsContent value="info">
+                {infoFormContent}
+              </TabsContent>
+            </Tabs>
+          ) : (
+            infoFormContent
           )}
         </DialogContent>
       </Dialog>
