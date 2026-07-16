@@ -35,66 +35,6 @@ function formatVoucherDate(date: string | Date | null | undefined): string {
   return `${mm}/${dd}/${d.getFullYear()}`;
 }
 
-function ordinal(n: number): string {
-  const s = ['th', 'st', 'nd', 'rd'];
-  const v = n % 100;
-  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
-}
-
-// "24th day of June" style, used in the Loan Agreement's opening clause.
-function formatOrdinalDate(date: string | Date | null | undefined): string {
-  if (!date) return '';
-  const d = typeof date === 'string' ? new Date(date) : date;
-  const month = d.toLocaleDateString('en-US', { month: 'long' });
-  return `${ordinal(d.getDate())} day of ${month}`;
-}
-
-function formatLongDate(date: string | Date | null | undefined): string {
-  if (!date) return '';
-  const d = typeof date === 'string' ? new Date(date) : date;
-  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-}
-
-// Loan Agreement & Disclosure Statement clauses — the exact 8-clause wording
-// provided. Clause 8 is followed by a trailing unnumbered closing paragraph
-// (AGREEMENT_CLOSING_PARAGRAPH) rendered right after the numbered list.
-const AGREEMENT_CLAUSES = [
-  {
-    n: 1, title: 'Disclosure of Loan Terms',
-    en: 'The Borrower certifies that prior to the release of the loan proceeds, the Borrower was fully informed and provided with the following information: a. Principal loan amount; b. Interest rate and method of computation; c. Service fees, processing fees, and other charges, if any; d. Documentary Stamp Tax and other government charges, if applicable; e. Penalty charges and surcharges for late payment; f. Payment schedule and maturity date; g. Total amount payable during the loan term; h. Net loan proceeds actually receivable by the Borrower. The Borrower confirms that the foregoing disclosures comply with the requirements of Republic Act No. 3765, otherwise known as the Truth in Lending Act.',
-  },
-  {
-    n: 2, title: 'Receipt of Loan Proceeds',
-    en: 'The Borrower acknowledges having personally received the net loan proceeds stated in the Cash Voucher and other loan documents. The Borrower certifies that the amount received is complete, correct, and satisfactory. The Cash Voucher, Loan Agreement, Kasunduan, and related loan documents shall constitute sufficient proof of the release and receipt of the loan proceeds.',
-  },
-  {
-    n: 3, title: 'Verification of Amount Received',
-    en: 'The Borrower agrees to immediately verify the amount of cash received upon release thereof. Upon signing the Cash Voucher and related loan documents, the Borrower confirms that no shortage, deficiency, or discrepancy exists in the amount received.',
-  },
-  {
-    n: 4, title: 'Waiver of False or Fraudulent Claims',
-    en: 'The Borrower agrees not to make any false, fraudulent, or misleading claim against the Corporation concerning the release, receipt, or amount of the loan proceeds after the execution of the loan documents. Any claim of non-receipt, shortage, or deficiency made after the signing of the loan documents shall be presumed invalid unless supported by clear and convincing evidence of fraud, bad faith, or willful misconduct on the part of the Corporation or its authorized representatives.',
-  },
-  {
-    n: 5, title: 'Authority of Collectors and Representatives',
-    en: 'The Borrower acknowledges that only duly authorized employees, collectors, or representatives of the Corporation may release loan proceeds and receive payments on behalf of the Corporation. The Borrower agrees to transact only with authorized personnel and to request official receipts or payment records for every payment made with existing VALID COMPANY ID.',
-  },
-  {
-    n: 6, title: "Borrower's Duty to Keep Records",
-    en: 'The Borrower agrees to keep copies of the Loan Agreement, Cash Voucher, Kasunduan, Acknowledgement Receipts, and other loan documents for future reference.',
-  },
-  {
-    n: 7, title: 'Voluntary Execution',
-    en: 'The Borrower certifies that the Borrower has read and understood the contents of the loan documents, had the opportunity to ask questions regarding the loan transaction, and voluntarily signed the same without force, intimidation, or undue influence.',
-  },
-  {
-    n: 8, title: 'Entire Agreement',
-    en: 'The Borrower acknowledges that the Loan Agreement, Cash Voucher, Kasunduan, and related documents constitute the complete agreement between the parties concerning the loan transaction.',
-  },
-];
-
-const AGREEMENT_CLOSING_PARAGRAPH = 'The Borrower affirms that all information and documents submitted to the Corporation are true and correct. Any material misrepresentation or falsification shall constitute a ground for acceleration of the loan and the exercise of all legal remedies available to the Corporation. I acknowledge that my signature herein constitutes my conformity to all the terms and conditions stated in the loan documents and serves as evidence of my receipt of the loan proceeds and disclosure of all applicable charges and obligations.';
-
 export default function LoanDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -130,16 +70,6 @@ export default function LoanDetailPage() {
   const voucherPage1Ref = useRef<HTMLDivElement>(null);
   const voucherPage2Ref = useRef<HTMLDivElement>(null);
   const voucherPage3Ref = useRef<HTMLDivElement>(null);
-  const [agreementData, setAgreementData] = useState<any>(null);
-  const [printingAgreement, setPrintingAgreement] = useState(false);
-  const [downloadingAgreement, setDownloadingAgreement] = useState(false);
-  const agreementPage1Ref = useRef<HTMLDivElement>(null);
-  const agreementPage2Ref = useRef<HTMLDivElement>(null);
-  const [undertakingData, setUndertakingData] = useState<any>(null);
-  const [printingUndertaking, setPrintingUndertaking] = useState(false);
-  const [downloadingUndertaking, setDownloadingUndertaking] = useState(false);
-  const undertakingPage1Ref = useRef<HTMLDivElement>(null);
-  const undertakingPage2Ref = useRef<HTMLDivElement>(null);
   const [collateral, setCollateral] = useState<any[]>([]);
   const [collateralDialogOpen, setCollateralDialogOpen] = useState(false);
   const [savingCollateral, setSavingCollateral] = useState(false);
@@ -298,11 +228,19 @@ export default function LoanDetailPage() {
 
       let scheduledRemaining = total;
       collectionDays.forEach((day, i) => {
+        const isFirstDay = i === 0;
         const isLast = i === collectionDays.length - 1;
         const scheduled = isLast ? Math.max(0, scheduledRemaining) : Math.min(segDaily, scheduledRemaining);
         scheduledRemaining = Math.max(0, scheduledRemaining - scheduled);
 
         const key = dateKey(day);
+
+        if (isFirstDay) {
+          // Auto-settled out of the release proceeds — never shown as due.
+          map.set(key, { status: 'paid', amount: scheduled });
+          return;
+        }
+
         const paid = chainPaidAmountByDate.get(key) ?? 0;
 
         if (day > today) {
@@ -445,203 +383,6 @@ export default function LoanDetailPage() {
     setBumpingLimit(false);
   }
 
-  // Builds the Loan Agreement & Disclosure Statement. "Collection Charges
-  // (2%/month)" and the resulting "Total Amount Payable" are computed here
-  // only for this document — they are NOT part of loan.total_payable or
-  // any other calculation elsewhere in the app (which only adds interest,
-  // not collection charges, to the principal). Flag if these should become
-  // a real system-wide fee instead of a display-only figure.
-  function buildAgreementData(approvedAtIso: string, approverName: string) {
-    const isRenewal = !!loan.renewed_from_loan_id;
-    const previousLoan = isRenewal ? chainLoans[chainLoans.length - 2] : null;
-    const actualBalance = previousLoan ? Number(previousLoan.remaining_balance) : 0;
-    const offsetBalance = Number(loan.offset_balance) || 0;
-    // First Payment = the day-one collection, auto-settled out of the loan
-    // proceeds at release. For a new loan that's the daily payment amount;
-    // for a renewal it's the carried-over balance from the previous loan.
-    const firstPayment = isRenewal ? actualBalance - offsetBalance : (Number(loan.daily_payment) || 0);
-    const serviceFee = Number(loan.service_fee) || 0;
-
-    const termMonths = Math.round((loan.term_days / 30) * 10) / 10;
-    const collectionChargeRate = 2;
-    const collectionCharges = Math.round(Number(loan.amount) * (collectionChargeRate / 100) * termMonths * 100) / 100;
-    const totalAmountPayable = Number(loan.amount) + Number(loan.interest_amount) + collectionCharges;
-    const totalDeduction = firstPayment + serviceFee + offsetBalance;
-    const loanProceeds = Number(loan.amount) - totalDeduction;
-
-    const addressParts = [loan.customers?.address, loan.customers?.barangay, loan.customers?.city, loan.customers?.province].filter(Boolean);
-    const fullAddress = addressParts.join(', ');
-
-    return {
-      date: approvedAtIso,
-      borrowerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),
-      idNo: loan.customers?.government_id ?? '',
-      residenceAddress: fullAddress,
-      businessAddress: fullAddress,
-      dueDate: loan.due_date,
-      termMonths,
-      amount: Number(loan.amount),
-      interestRate: Number(loan.interest_rate),
-      interestAmount: Number(loan.interest_amount),
-      collectionChargeRate,
-      collectionCharges,
-      totalAmountPayable,
-      firstPayment,
-      serviceFee,
-      offsetBalance,
-      totalDeduction,
-      loanProceeds,
-      branchManagerName: approverName,
-      branchName: loan.branches?.name ?? '',
-      collectorName: loan.collectors?.profiles?.full_name ?? '',
-    };
-  }
-
-  function openAgreement() {
-    setAgreementData(buildAgreementData(loan.approved_at ?? new Date().toISOString(), loan.approved_by_profile?.full_name ?? ''));
-  }
-
-  async function handlePrintAgreement() {
-    const refs = [agreementPage1Ref, agreementPage2Ref].filter(r => r.current);
-    if (refs.length === 0) return;
-    setPrintingAgreement(true);
-    try {
-      const html2canvas = (await import('html2canvas')).default;
-      const dataUrls: string[] = [];
-      for (const ref of refs) {
-        const canvas = await html2canvas(ref.current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
-        dataUrls.push(canvas.toDataURL('image/png'));
-      }
-      const printWindow = window.open('', '_blank', 'width=900,height=1000');
-      if (!printWindow) {
-        toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the agreement', variant: 'destructive' });
-        setPrintingAgreement(false);
-        return;
-      }
-      printWindow.document.write(`
-        <html>
-          <head><title>Loan Agreement ${loan.loan_number}</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            ${dataUrls.map((url, i) => `<img src="${url}" style="width:100%;display:block;${i < dataUrls.length - 1 ? 'page-break-after:always;' : ''}" />`).join('')}
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => printWindow.print();
-      printWindow.onafterprint = () => printWindow.close();
-    } catch (err: any) {
-      toast({ title: 'Print failed', description: err?.message ?? 'Could not generate agreement for printing', variant: 'destructive' });
-    }
-    setPrintingAgreement(false);
-  }
-
-  async function handleDownloadAgreement() {
-    const refs = [agreementPage1Ref, agreementPage2Ref].filter(r => r.current);
-    if (refs.length === 0) return;
-    setDownloadingAgreement(true);
-    try {
-      const html2canvas = (await import('html2canvas')).default;
-      const { jsPDF } = await import('jspdf');
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-      const margin = 24;
-      const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const pxToPt = 0.75;
-
-      for (let i = 0; i < refs.length; i++) {
-        const canvas = await html2canvas(refs[i].current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
-        const imgData = canvas.toDataURL('image/png');
-        const imgWidth = usableWidth;
-        const imgHeight = ((canvas.height / 2) * pxToPt / ((canvas.width / 2) * pxToPt)) * imgWidth;
-        if (i > 0) pdf.addPage();
-        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
-      }
-      pdf.save(`loan-agreement-${loan.loan_number}.pdf`);
-    } catch (err: any) {
-      toast({ title: 'Download failed', description: err?.message ?? 'Could not generate agreement PDF', variant: 'destructive' });
-    }
-    setDownloadingAgreement(false);
-  }
-
-  // Builds the data for the Borrower's Undertaking. This document is almost
-  // entirely fixed legal text — only the borrower's name, address, and
-  // signing date are dynamic.
-  function buildUndertakingData(approvedAtIso: string) {
-    const addressParts = [loan.customers?.address, loan.customers?.barangay, loan.customers?.city, loan.customers?.province].filter(Boolean);
-    return {
-      date: approvedAtIso,
-      borrowerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),
-      residenceAddress: addressParts.join(', '),
-      branchManagerName: loan.approved_by_profile?.full_name ?? '',
-      branchName: loan.branches?.name ?? '',
-      collectorName: loan.collectors?.profiles?.full_name ?? '',
-    };
-  }
-
-  function openUndertaking() {
-    setUndertakingData(buildUndertakingData(loan.approved_at ?? new Date().toISOString()));
-  }
-
-  async function handlePrintUndertaking() {
-    const refs = [undertakingPage1Ref, undertakingPage2Ref].filter(r => r.current);
-    if (refs.length === 0) return;
-    setPrintingUndertaking(true);
-    try {
-      const html2canvas = (await import('html2canvas')).default;
-      const dataUrls: string[] = [];
-      for (const ref of refs) {
-        const canvas = await html2canvas(ref.current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
-        dataUrls.push(canvas.toDataURL('image/png'));
-      }
-      const printWindow = window.open('', '_blank', 'width=900,height=1000');
-      if (!printWindow) {
-        toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the undertaking', variant: 'destructive' });
-        setPrintingUndertaking(false);
-        return;
-      }
-      printWindow.document.write(`
-        <html>
-          <head><title>Borrower's Undertaking ${loan.loan_number}</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            ${dataUrls.map((url, i) => `<img src="${url}" style="width:100%;display:block;${i < dataUrls.length - 1 ? 'page-break-after:always;' : ''}" />`).join('')}
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => printWindow.print();
-      printWindow.onafterprint = () => printWindow.close();
-    } catch (err: any) {
-      toast({ title: 'Print failed', description: err?.message ?? 'Could not generate undertaking for printing', variant: 'destructive' });
-    }
-    setPrintingUndertaking(false);
-  }
-
-  async function handleDownloadUndertaking() {
-    const refs = [undertakingPage1Ref, undertakingPage2Ref].filter(r => r.current);
-    if (refs.length === 0) return;
-    setDownloadingUndertaking(true);
-    try {
-      const html2canvas = (await import('html2canvas')).default;
-      const { jsPDF } = await import('jspdf');
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-      const margin = 24;
-      const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const pxToPt = 0.75;
-
-      for (let i = 0; i < refs.length; i++) {
-        const canvas = await html2canvas(refs[i].current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
-        const imgData = canvas.toDataURL('image/png');
-        const imgWidth = usableWidth;
-        const imgHeight = ((canvas.height / 2) * pxToPt / ((canvas.width / 2) * pxToPt)) * imgWidth;
-        if (i > 0) pdf.addPage();
-        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
-      }
-      pdf.save(`borrowers-undertaking-${loan.loan_number}.pdf`);
-    } catch (err: any) {
-      toast({ title: 'Download failed', description: err?.message ?? 'Could not generate undertaking PDF', variant: 'destructive' });
-    }
-    setDownloadingUndertaking(false);
-  }
-
   async function handleConfirmApprove() {
     if (overLimit) return;
     setApproving(true);
@@ -656,8 +397,7 @@ export default function LoanDetailPage() {
     } else {
       toast({ title: 'Loan approved', description: `${loan.loan_number} is awaiting disbursement by a Cashier.` });
       setApproveOpen(false);
-      setAgreementData(buildAgreementData(now, profile?.full_name ?? ''));
-      loadLoan();
+      router.push(`/loans/${loan.id}/agreement`);
     }
     setApproving(false);
   }
@@ -684,8 +424,7 @@ export default function LoanDetailPage() {
     } else {
       toast({ title: 'Loan approved at max limit', description: `Loan amount adjusted to ${formatCurrency(newAmount)} and approved.` });
       setApproveOpen(false);
-      setAgreementData(buildAgreementData(now, profile?.full_name ?? ''));
-      loadLoan();
+      router.push(`/loans/${loan.id}/agreement`);
     }
     setApproving(false);
   }
@@ -961,16 +700,20 @@ export default function LoanDetailPage() {
           </Button>
         )}
         {loan.approved_at && (
-          <Button size="sm" variant="outline" onClick={openAgreement}>
-            <FileText className="w-4 h-4 mr-2" />
-            View Agreement
-          </Button>
+          <Link href={`/loans/${loan.id}/agreement`}>
+            <Button size="sm" variant="outline">
+              <FileText className="w-4 h-4 mr-2" />
+              View Agreement
+            </Button>
+          </Link>
         )}
         {loan.approved_at && (
-          <Button size="sm" variant="outline" onClick={openUndertaking}>
-            <FileText className="w-4 h-4 mr-2" />
-            View Undertaking
-          </Button>
+          <Link href={`/loans/${loan.id}/undertaking`}>
+            <Button size="sm" variant="outline">
+              <FileText className="w-4 h-4 mr-2" />
+              View Undertaking
+            </Button>
+          </Link>
         )}
         {loan.status === 'declined' && !loan.reapplied && !isCashier && (
           <Button size="sm" onClick={handleReapply} disabled={reapplying}>
@@ -1594,246 +1337,6 @@ export default function LoanDetailPage() {
           </Dialog>
         );
       })()}
-
-      {/* Loan Agreement & Disclosure Statement */}
-      {agreementData && (() => {
-        const aRow = (label: React.ReactNode, value: React.ReactNode, bold = true) => (
-          <div style={{ display: 'flex', gap: 8, marginBottom: 2 }}>
-            <span style={{ fontWeight: bold ? 700 : 400, minWidth: 190 }}>{label}</span>
-            <span>{value}</span>
-          </div>
-        );
-        const dTable: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 };
-        const dCell: React.CSSProperties = { padding: '3px 6px' };
-
-        return (
-          <Dialog open={!!agreementData} onOpenChange={(open) => !open && setAgreementData(null)}>
-            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <FileText className="w-5 h-5" />
-                  Loan Agreement & Disclosure Statement
-                </DialogTitle>
-                <DialogDescription>Generated automatically when a Branch Manager approves the loan</DialogDescription>
-              </DialogHeader>
-
-              <div className="flex flex-col items-center gap-4 bg-secondary/30 p-4 rounded-lg overflow-x-auto">
-                <div ref={agreementPage1Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
-                  <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
-                    <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>1125 LENDING CORPORATION</div>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>NATIONAL HIWAY, LAYAC, DINALUPIHAN, BATAAN</div>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: 0950-931-9848</div>
-                  </div>
-
-                  <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, marginBottom: 16 }}>
-                    LOAN AGREEMENT &amp; DISCLOSURE STATEMENT
-                  </div>
-
-                  <p style={{ textAlign: 'justify', marginBottom: 10 }}>
-                    This Loan Agreement executed on the {formatOrdinalDate(agreementData.date)} by 1125 LENDING CORPORATION located at{' '}
-                    <span style={{ textDecoration: 'underline' }}>155 National Hiway, Dinalupihan, Bataan</span> hereinafter referred to as the <strong>LENDER</strong>;
-                  </p>
-                  <p style={{ textAlign: 'center', fontWeight: 700, marginBottom: 10 }}>- AND -</p>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                    {aRow('Name of BORROWER', <span style={{ textDecoration: 'underline' }}>{agreementData.borrowerName}</span>)}
-                    <span style={{ display: 'flex', gap: 8 }}><strong>ID NO:</strong> <span>{agreementData.idNo || '—'}</span></span>
-                  </div>
-                  {aRow('Residence Address:', agreementData.residenceAddress || '—')}
-                  {aRow('Business Address:', agreementData.businessAddress || '—')}
-
-                  <p style={{ fontWeight: 700, marginTop: 12, marginBottom: 2 }}>Loan Details:</p>
-                  {aRow('Date of Loan:', formatLongDate(agreementData.date))}
-                  {aRow(<>Loan Due Date: <em>({agreementData.termMonths}-month term)</em></>, formatLongDate(agreementData.dueDate))}
-
-                  <table style={dTable}>
-                    <tbody>
-                      <tr><td style={{ ...dCell, fontWeight: 700 }}>Amount of Loan</td><td style={dCell} /><td style={{ ...dCell, textAlign: 'right' }} /><td style={{ ...dCell, textAlign: 'right', fontWeight: 700 }}>{formatCurrency(agreementData.amount)}</td></tr>
-                      <tr>
-                        <td style={{ ...dCell, fontWeight: 700 }}>Interest</td>
-                        <td style={{ ...dCell, fontStyle: 'italic' }}>(with an interest rate of {agreementData.interestRate}% /month)</td>
-                        <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.interestAmount)}</td>
-                        <td style={dCell} />
-                      </tr>
-                      <tr>
-                        <td style={{ ...dCell, fontWeight: 700 }}>Collection Charges</td>
-                        <td style={{ ...dCell, fontStyle: 'italic' }}>({agreementData.collectionChargeRate}% per month)</td>
-                        <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.collectionCharges)}</td>
-                        <td style={dCell} />
-                      </tr>
-                      <tr>
-                        <td style={{ ...dCell, fontWeight: 700, borderTop: '1px solid #000' }}>Total Amount Payable</td>
-                        <td style={{ ...dCell, borderTop: '1px solid #000' }} />
-                        <td style={{ ...dCell, textAlign: 'right', borderTop: '1px solid #000' }}>{formatCurrency(agreementData.totalAmountPayable)}</td>
-                        <td style={{ ...dCell, borderTop: '1px solid #000' }} />
-                      </tr>
-                      <tr>
-                        <td style={dCell} />
-                        <td style={{ ...dCell, fontWeight: 700 }}>Less: First Payment</td>
-                        <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.firstPayment)}</td>
-                        <td style={dCell} />
-                      </tr>
-                      <tr>
-                        <td style={dCell} />
-                        <td style={{ ...dCell, fontWeight: 700, fontStyle: 'italic' }}>Service Fee (inclusive of DST)</td>
-                        <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.serviceFee)}</td>
-                        <td style={dCell} />
-                      </tr>
-                      <tr>
-                        <td style={dCell} />
-                        <td style={{ ...dCell, fontWeight: 700 }}>Offset Balance from previous loan</td>
-                        <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.offsetBalance)}</td>
-                        <td style={dCell} />
-                      </tr>
-                      <tr>
-                        <td style={dCell} />
-                        <td style={{ ...dCell, fontWeight: 700, borderTop: '1px solid #000' }}>Total Deduction</td>
-                        <td style={dCell} />
-                        <td style={{ ...dCell, textAlign: 'right', borderTop: '1px solid #000', fontWeight: 700 }}>{formatCurrency(agreementData.totalDeduction)}</td>
-                      </tr>
-                      <tr>
-                        <td style={{ ...dCell, fontWeight: 700, borderTop: '2px solid #000' }}>Loan Proceeds:</td>
-                        <td style={{ ...dCell, borderTop: '2px solid #000' }} />
-                        <td style={{ ...dCell, borderTop: '2px solid #000' }} />
-                        <td style={{ ...dCell, textAlign: 'right', borderTop: '2px solid #000', fontWeight: 700 }}>{formatCurrency(agreementData.loanProceeds)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  <p style={{ fontWeight: 700, marginTop: 16, marginBottom: 6 }}>The Borrower hereby represents, warrants, acknowledges, and agrees as follows:</p>
-
-                  {AGREEMENT_CLAUSES.slice(0, 4).map(c => (
-                    <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
-                      <strong>{c.n}. {c.title}</strong> - {c.en}
-                    </p>
-                  ))}
-                </div>
-
-                <div ref={agreementPage2Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
-                  {AGREEMENT_CLAUSES.slice(4).map(c => (
-                    <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
-                      <strong>{c.n}. {c.title}</strong> - {c.en}
-                    </p>
-                  ))}
-
-                  <p style={{ textAlign: 'justify', fontSize: 12, marginTop: 4, marginBottom: 40 }}>
-                    {AGREEMENT_CLOSING_PARAGRAPH}
-                  </p>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', textAlign: 'center', fontSize: 12 }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{agreementData.branchManagerName || ' '}</div>
-                      <div style={{ fontStyle: 'italic' }}>Branch Manager{agreementData.branchName ? ` - ${agreementData.branchName} Branch` : ''}</div>
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{agreementData.collectorName || ' '}</div>
-                      <div style={{ fontStyle: 'italic' }}>Assigned Collector</div>
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{agreementData.borrowerName || ' '}</div>
-                      <div style={{ fontStyle: 'italic' }}>Borrower</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <DialogFooter>
-                <Button variant="outline" onClick={handlePrintAgreement} disabled={printingAgreement}>
-                  {printingAgreement && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  Print
-                </Button>
-                <Button variant="outline" onClick={handleDownloadAgreement} disabled={downloadingAgreement}>
-                  {downloadingAgreement ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                  Download PDF
-                </Button>
-                <Button onClick={() => setAgreementData(null)}>Close</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        );
-      })()}
-
-      {/* Borrower's Undertaking */}
-      {undertakingData && (
-        <Dialog open={!!undertakingData} onOpenChange={(open) => !open && setUndertakingData(null)}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <FileText className="w-5 h-5" />
-                Borrower's Undertaking
-              </DialogTitle>
-              <DialogDescription>Kasunduan sa Pagkakautang bilang Borrower</DialogDescription>
-            </DialogHeader>
-
-            <div className="flex flex-col items-center gap-4 bg-secondary/30 p-4 rounded-lg">
-              <div ref={undertakingPage1Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
-                <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
-                  <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>1125 LENDING CORPORATION</div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>NATIONAL HIWAY, LAYAC, DINALUPIHAN, BATAAN</div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: 0950-931-9848</div>
-                </div>
-
-                <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15 }}>BORROWER'S UNDERTAKING</div>
-                <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, marginBottom: 16 }}>(KASUNDUAN SA PAGKAKAUTANG BILANG BORROWER)</div>
-
-                <p style={{ textAlign: 'justify', marginBottom: 12 }}>
-                  I <span style={{ textDecoration: 'underline' }}>{undertakingData.borrowerName}</span> of legal age, residing at{' '}
-                  <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span> voluntarily agree to the following terms and conditions as a borrower of 1125 Lending Corporation.
-                </p>
-
-                {AGREEMENT_CLAUSES.slice(0, 5).map(c => (
-                  <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
-                    <strong>{c.n}. {c.title}</strong> - {c.en}
-                  </p>
-                ))}
-              </div>
-
-              <div ref={undertakingPage2Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
-                {AGREEMENT_CLAUSES.slice(5).map(c => (
-                  <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
-                    <strong>{c.n}. {c.title}</strong> - {c.en}
-                  </p>
-                ))}
-
-                <p style={{ textAlign: 'justify', fontSize: 12, marginTop: 4, marginBottom: 20 }}>
-                  {AGREEMENT_CLOSING_PARAGRAPH}
-                </p>
-
-                <p style={{ fontSize: 13, marginBottom: 32 }}>
-                  IN WITNESS WHEREOF, the parties hereunto affix their signatures this <span style={{ textDecoration: 'underline' }}>{formatLongDate(undertakingData.date)}</span>
-                </p>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-                  <div style={{ width: 200, textAlign: 'center' }}>
-                    <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.branchManagerName || '—'}</div>
-                    <div style={{ fontStyle: 'italic', fontSize: 12 }}>Branch Manager{undertakingData.branchName ? ` - ${undertakingData.branchName} Branch` : ''}</div>
-                  </div>
-                  <div style={{ width: 200, textAlign: 'center' }}>
-                    <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.collectorName || '—'}</div>
-                    <div style={{ fontStyle: 'italic', fontSize: 12 }}>Assigned Collector</div>
-                  </div>
-                  <div style={{ width: 200, textAlign: 'center' }}>
-                    <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.borrowerName}</div>
-                    <div style={{ fontStyle: 'italic', fontSize: 12 }}>Borrower</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <DialogFooter>
-              <Button variant="outline" onClick={handlePrintUndertaking} disabled={printingUndertaking}>
-                {printingUndertaking && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Print
-              </Button>
-              <Button variant="outline" onClick={handleDownloadUndertaking} disabled={downloadingUndertaking}>
-                {downloadingUndertaking ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                Download PDF
-              </Button>
-              <Button onClick={() => setUndertakingData(null)}>Close</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
 
       {/* Add collateral */}
       <Dialog open={collateralDialogOpen} onOpenChange={setCollateralDialogOpen}>
