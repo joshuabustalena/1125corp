@@ -2,6 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  /* Scales every rem-based Tailwind utility (text sizes, padding, gaps,
+     icon sizing, radii) down together, since the whole UI was rendering
+     too large/zoomed-in on normal screens. */
+  font-size: 70%;
+}
+
 @layer base {
   :root {
     --background: 243 244 246;
