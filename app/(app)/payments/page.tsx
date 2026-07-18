@@ -29,6 +29,19 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+// Collection days = every day in [releaseDate, dueDate] except Sunday —
+// matches the same convention used for the loan's own payment calendar.
+function countCollectionDays(releaseDate: string | null, dueDate: string | null): number {
+  if (!releaseDate || !dueDate) return 0;
+  const start = new Date(releaseDate);
+  const end = new Date(dueDate);
+  let count = 0;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() !== 0) count++;
+  }
+  return count;
+}
+
 export default function PaymentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -129,9 +142,11 @@ export default function PaymentsPage() {
         locationText: receiptData.currentAddress ?? undefined,
         collectorName: receiptData.collectorName ?? undefined,
         amountPaid: formatCurrency(receiptData.amount),
-        daysCoveredText: receiptData.daysCovered > 0
-          ? `Covers ${receiptData.daysCovered} day${receiptData.daysCovered > 1 ? 's' : ''} of payment`
-          : undefined,
+        daysCoveredText: receiptData.isFullyPaid
+          ? 'Loan fully paid'
+          : (receiptData.daysCovered > 0
+            ? `Covers ${receiptData.daysCovered} day${receiptData.daysCovered > 1 ? 's' : ''} of payment`
+            : undefined),
         remainingBalance: formatCurrency(receiptData.remainingBalance),
       });
       await writeToPrinter(characteristic, buildReceiptBytes(lines));
@@ -371,8 +386,24 @@ export default function PaymentsPage() {
           : (selectedLoan.term_days > 0 ? selectedLoan.total_payable / selectedLoan.term_days : 0))
       : 0;
     const amountPaidNum = Number(form.amount_paid);
-    const daysCovered = dailyDue > 0 ? Math.floor((amountPaidNum + 0.001) / dailyDue) : 0;
-    const advanceCredit = dailyDue > 0 ? Math.round((amountPaidNum - daysCovered * dailyDue) * 100) / 100 : 0;
+    // "Days covered" only makes sense up to what was actually still owed —
+    // dividing the raw amount paid by the daily rate could claim far more
+    // days than the loan's own term once the loan is at or near payoff
+    // (e.g. a final lump-sum payment reads as "98 days" on a 30-day loan).
+    // Cap the days/credit math at the balance that existed before this
+    // payment, and treat anything beyond that as the loan being settled.
+    const balanceBeforePayment = selectedLoan ? Number(selectedLoan.remaining_balance) : 0;
+    const appliedTowardSchedule = Math.min(amountPaidNum, balanceBeforePayment);
+    const rawDaysCovered = dailyDue > 0 ? Math.floor((appliedTowardSchedule + 0.001) / dailyDue) : 0;
+    // A lump-sum payment can be large enough that amount/dailyRate works out
+    // to more days than the loan's own term even has — dividing pesos by
+    // the daily rate alone doesn't know the term has an upper bound (e.g. a
+    // 30-day loan showing "covers 98 days"). Cap it at however many actual
+    // collection days (every day except Sunday) exist in the term.
+    const totalCollectionDays = selectedLoan ? countCollectionDays(selectedLoan.release_date, selectedLoan.due_date) : 0;
+    const daysCovered = totalCollectionDays > 0 ? Math.min(rawDaysCovered, totalCollectionDays) : rawDaysCovered;
+    const advanceCredit = dailyDue > 0 ? Math.max(0, Math.round((appliedTowardSchedule - daysCovered * dailyDue) * 100) / 100) : 0;
+    const isFullyPaid = newBalance <= 0.009;
 
     setReceiptData({
       orNumber,
@@ -394,6 +425,7 @@ export default function PaymentsPage() {
       dailyDue,
       daysCovered,
       advanceCredit,
+      isFullyPaid,
     });
 
     setForm({ ...form, loan_id: '', amount_paid: '', payment_date: new Date().toISOString().split('T')[0], notes: '' });
@@ -698,7 +730,9 @@ export default function PaymentsPage() {
               <div className="py-4 text-center">
                 <p className="text-xs mb-1" style={{ color: '#6B7280' }}>Amount Paid</p>
                 <p className="text-3xl font-bold" style={{ color: '#16A34A' }}>{formatCurrency(receiptData.amount)}</p>
-                {receiptData.daysCovered > 0 && (
+                {receiptData.isFullyPaid ? (
+                  <p className="text-xs mt-1 font-medium" style={{ color: '#16A34A' }}>Loan fully paid</p>
+                ) : receiptData.daysCovered > 0 && (
                   <p className="text-xs mt-1" style={{ color: '#6B7280' }}>
                     Covers {receiptData.daysCovered} day{receiptData.daysCovered > 1 ? 's' : ''} of payment
                     {receiptData.advanceCredit > 0.009 && ` + ${formatCurrency(receiptData.advanceCredit)} advance toward the next day`}
