@@ -1,3 +1,5 @@
+/// <reference types="web-bluetooth" />
+
 // Bluetooth thermal receipt printing via the Web Bluetooth API.
 //
 // Only works in Chrome/Edge on Android or desktop — Safari (iOS/macOS) has no
@@ -24,6 +26,25 @@ const CANDIDATE_SERVICE_UUIDS = [
 
 let cachedCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
 let cachedDevice: BluetoothDevice | null = null;
+
+// Remembers which physical printer was picked, so future prints can
+// reconnect silently instead of showing the device chooser every time.
+// Web Bluetooth's requestDevice() (the chooser popup) can't be skipped on
+// the very first pairing — that's a browser security requirement — but
+// once a device has been granted, Chrome's getDevices() can hand back a
+// reference to it without asking again, as long as it's still in range.
+const REMEMBERED_DEVICE_KEY = '1125corp_thermal_printer_device_id';
+
+async function getRememberedDevice(): Promise<BluetoothDevice | null> {
+  const rememberedId = localStorage.getItem(REMEMBERED_DEVICE_KEY);
+  if (!rememberedId || !navigator.bluetooth.getDevices) return null;
+  try {
+    const devices = await navigator.bluetooth.getDevices();
+    return devices.find(d => d.id === rememberedId) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 async function findWritableCharacteristic(server: BluetoothRemoteGATTServer): Promise<BluetoothRemoteGATTCharacteristic> {
   const triedServices: string[] = [];
@@ -54,10 +75,33 @@ export async function connectThermalPrinter(): Promise<BluetoothRemoteGATTCharac
     return cachedCharacteristic;
   }
 
-  const device = await navigator.bluetooth.requestDevice({
+  // Try to silently reconnect to whichever printer was picked last time,
+  // with no chooser popup, before falling back to asking the user to pick
+  // again (e.g. first-ever use, or the remembered device is out of range).
+  let device = await getRememberedDevice();
+  if (device) {
+    try {
+      const server = await device.gatt?.connect();
+      if (server) {
+        const characteristic = await findWritableCharacteristic(server);
+        cachedDevice = device;
+        cachedCharacteristic = characteristic;
+        device.addEventListener('gattserverdisconnected', () => {
+          cachedCharacteristic = null;
+          cachedDevice = null;
+        });
+        return characteristic;
+      }
+    } catch {
+      // Fall through to the full picker below.
+    }
+  }
+
+  device = await navigator.bluetooth.requestDevice({
     acceptAllDevices: true,
     optionalServices: CANDIDATE_SERVICE_UUIDS,
   });
+  localStorage.setItem(REMEMBERED_DEVICE_KEY, device.id);
 
   const server = await device.gatt?.connect();
   if (!server) throw new Error('Could not open a connection to the printer.');
@@ -80,7 +124,15 @@ export async function connectThermalPrinter(): Promise<BluetoothRemoteGATTCharac
 // alignment per model.
 const ESC = 0x1b;
 const GS = 0x1d;
-const LINE_WIDTH = 32; // standard column count for 58mm thermal paper, Font A
+// Standard column count for 58mm thermal paper at normal (non-bold) weight,
+// Font A. An earlier attempt narrowed this to 24 based on the bold, centered
+// header appearing to reach the paper's edge — but bold/emphasized mode
+// prints noticeably wider per character on this printer than normal weight,
+// so that measurement didn't hold for the plain-weight two-column rows
+// (Branch/OR Number/Date/etc.), which were still falling short of the true
+// right edge. Centering and right-alignment are both based on this
+// constant, so recalibrating it here fixes both at once.
+const LINE_WIDTH = 32;
 
 // Most cheap thermal printers only support CP437/ASCII text — non-ASCII
 // characters (like the ₱ peso sign) either print as garbage or get dropped
@@ -96,20 +148,9 @@ function textToBytes(text: string): number[] {
   return Array.from(sanitizeForPrinter(text)).map(ch => ch.charCodeAt(0) & 0xff);
 }
 
-// When doubleSize is on, GS ! 0x11 doubles character width too, so only
-// half as many columns actually fit — centering with the full-width column
-// count was overflowing off the left edge of the paper, clipping the first
-// character(s).
-function center(line: string, doubleSize: boolean): string {
-  const width = doubleSize ? Math.floor(LINE_WIDTH / 2) : LINE_WIDTH;
-  if (line.length >= width) return line;
-  const pad = Math.floor((width - line.length) / 2);
-  return ' '.repeat(pad) + line;
-}
-
 function twoColumns(label: string, value: string): string {
   const space = LINE_WIDTH - label.length - value.length;
-  return space > 0 ? label + ' '.repeat(space) + value : `${label} ${value}`;
+  return space >= 0 ? label + ' '.repeat(space) + value : `${label} ${value}`;
 }
 
 export interface ThermalReceiptLine {
@@ -124,11 +165,15 @@ export function buildReceiptBytes(lines: ThermalReceiptLine[]): Uint8Array {
   bytes.push(ESC, 0x40); // initialize printer
 
   for (const line of lines) {
-    const text = line.align === 'center' ? center(line.text, !!line.doubleSize) : line.text;
+    // Centering is left entirely to the printer's own ESC a 1 command below
+    // — it already knows its true pixel width (including how much narrower
+    // double-size characters make a line), so it centers correctly on its
+    // own. Manually pre-padding with guessed spacing on top of that was
+    // double-centering the text, shifting it off-center instead of fixing it.
     bytes.push(ESC, 0x61, line.align === 'center' ? 1 : 0);
     bytes.push(ESC, 0x45, line.bold ? 1 : 0);
     bytes.push(GS, 0x21, line.doubleSize ? 0x11 : 0x00);
-    bytes.push(...textToBytes(text));
+    bytes.push(...textToBytes(line.text));
     bytes.push(0x0a); // line feed
   }
 
@@ -158,10 +203,8 @@ export function buildPaymentReceiptLines(data: {
   const lines: ThermalReceiptLine[] = [];
   lines.push({ text: bar, align: 'left' });
   lines.push({ text: '1125 LENDING CORPORATION', align: 'center', bold: true });
-  lines.push({ text: '1125corp.org', align: 'center' });
   lines.push({ text: bar, align: 'left' });
-  lines.push({ text: 'OFFICIAL RECEIPT', align: 'center', bold: true });
-  lines.push({ text: '*** PAID ***', align: 'center' });
+  lines.push({ text: 'ACKNOWLEDGEMENT RECEIPT', align: 'center', bold: true });
   lines.push({ text: rule, align: 'left' });
   if (data.branchName) lines.push({ text: twoColumns('Branch:', data.branchName), align: 'left' });
   lines.push({ text: twoColumns('OR Number:', data.orNumber), align: 'left', bold: true });
@@ -177,6 +220,7 @@ export function buildPaymentReceiptLines(data: {
   lines.push({ text: rule, align: 'left' });
   lines.push({ text: '', align: 'left' });
   lines.push({ text: 'AMOUNT PAID', align: 'center' });
+  lines.push({ text: '', align: 'left' });
   lines.push({ text: data.amountPaid, align: 'center', bold: true, doubleSize: true });
   if (data.daysCoveredText) lines.push({ text: data.daysCoveredText, align: 'center' });
   lines.push({ text: '', align: 'left' });
@@ -186,7 +230,6 @@ export function buildPaymentReceiptLines(data: {
   lines.push({ text: '', align: 'left' });
   lines.push({ text: 'Thank you for your payment!', align: 'center', bold: true });
   lines.push({ text: 'This receipt is system-generated', align: 'center' });
-  lines.push({ text: 'and valid without a signature.', align: 'center' });
   return lines;
 }
 

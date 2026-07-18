@@ -48,7 +48,6 @@ export default function PaymentsPage() {
   const [receiptData, setReceiptData] = useState<any>(null);
   const [downloadingReceipt, setDownloadingReceipt] = useState(false);
   const [generatingInvoice, setGeneratingInvoice] = useState(false);
-  const [printingReceipt, setPrintingReceipt] = useState(false);
   const [printingThermal, setPrintingThermal] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -111,35 +110,6 @@ export default function PaymentsPage() {
     setLocationAddress(null);
     requestLocation();
     setDialogOpen(true);
-  }
-
-  async function handlePrintReceipt() {
-    if (!receiptRef.current) return;
-    setPrintingReceipt(true);
-    try {
-      const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(receiptRef.current, { backgroundColor: '#ffffff', scale: 2 });
-      const dataUrl = canvas.toDataURL('image/png');
-      const printWindow = window.open('', '_blank', 'width=500,height=700');
-      if (!printWindow) {
-        toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the receipt', variant: 'destructive' });
-        setPrintingReceipt(false);
-        return;
-      }
-      printWindow.document.write(`
-        <html>
-          <head><title>Receipt ${receiptData?.orNumber ?? ''}</title></head>
-          <body style="margin:0;display:flex;justify-content:center;padding:24px;background:#fff;">
-            <img src="${dataUrl}" style="max-width:100%;" onload="window.print()" />
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onafterprint = () => printWindow.close();
-    } catch (err: any) {
-      toast({ title: 'Print failed', description: err?.message ?? 'Could not generate receipt for printing', variant: 'destructive' });
-    }
-    setPrintingReceipt(false);
   }
 
   async function handlePrintThermal() {
@@ -673,27 +643,24 @@ export default function PaymentsPage() {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Receipt className="w-5 h-5" />
-                Official Receipt
+                Acknowledgement Receipt
               </DialogTitle>
-            </DialogHeader>
-            <div ref={receiptRef} className="p-6 rounded-xl border-2 border-gray-200" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-white border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/image/1125_Corp_Logo.png" alt="1125Corp" width={48} height={48} style={{ objectFit: 'contain' }} />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold" style={{ color: '#0B1F3A' }}>1125Corp</h2>
-                    <p className="text-xs" style={{ color: '#6B7280' }}>1125corp.org</p>
-                  </div>
-                </div>
+              <div className="flex justify-center">
                 <span
                   className="text-xs font-bold px-3 py-1 rounded-full"
                   style={{ color: '#16A34A', backgroundColor: '#DCFCE7', border: '1px solid #16A34A' }}
                 >
                   PAID
                 </span>
+              </div>
+            </DialogHeader>
+            <div ref={receiptRef} className="p-6 rounded-xl border-2 border-gray-200" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 rounded-xl bg-white border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/image/1125_Corp_Logo.png" alt="1125Corp" width={48} height={48} style={{ objectFit: 'contain' }} />
+                </div>
+                <h2 className="text-lg font-bold" style={{ color: '#0B1F3A' }}>1125Corp</h2>
               </div>
 
               <div className="border-t border-dashed" style={{ borderColor: '#D1D5DB' }} />
@@ -729,7 +696,7 @@ export default function PaymentsPage() {
               <div className="border-t border-dashed" style={{ borderColor: '#D1D5DB' }} />
 
               <div className="py-4 text-center">
-                <p className="text-xs" style={{ color: '#6B7280' }}>Amount Paid</p>
+                <p className="text-xs mb-1" style={{ color: '#6B7280' }}>Amount Paid</p>
                 <p className="text-3xl font-bold" style={{ color: '#16A34A' }}>{formatCurrency(receiptData.amount)}</p>
                 {receiptData.daysCovered > 0 && (
                   <p className="text-xs mt-1" style={{ color: '#6B7280' }}>
@@ -745,16 +712,12 @@ export default function PaymentsPage() {
               </div>
 
               <p className="text-center text-xs pt-4" style={{ color: '#6B7280' }}>Thank you for your payment!</p>
-              <p className="text-center text-[10px]" style={{ color: '#9CA3AF' }}>This is a system-generated receipt and is valid without a signature.</p>
+              <p className="text-center text-[10px]" style={{ color: '#9CA3AF' }}>System-generated receipt</p>
             </div>
             <DialogFooter className="flex-row flex-wrap justify-center gap-2 space-x-0 sm:justify-center">
-              <Button variant="outline" size="sm" onClick={handlePrintReceipt} disabled={printingReceipt}>
-                {printingReceipt && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Print
-              </Button>
               <Button variant="outline" size="sm" onClick={handlePrintThermal} disabled={printingThermal}>
                 {printingThermal ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Bluetooth className="w-4 h-4 mr-2" />}
-                Bluetooth
+                Print
               </Button>
               <Button variant="outline" size="sm" onClick={handleDownloadReceipt} disabled={downloadingReceipt}>
                 {downloadingReceipt ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
