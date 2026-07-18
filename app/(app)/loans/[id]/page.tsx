@@ -44,7 +44,7 @@ export default function LoanDetailPage() {
   const [loading, setLoading] = useState(true);
   const [renewing, setRenewing] = useState(false);
   const [renewOpen, setRenewOpen] = useState(false);
-  const [renewForm, setRenewForm] = useState({ amount: '', interest_rate: '8', term_days: '60', release_date: '', first_payment: '' });
+  const [renewForm, setRenewForm] = useState({ amount: '', interest_rate: '8', term_days: '60', release_date: '', daily_payment: '' });
   const [reapplying, setReapplying] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleMonth, setScheduleMonth] = useState(new Date());
@@ -273,7 +273,7 @@ export default function LoanDetailPage() {
       interest_rate: String(loan.interest_rate),
       term_days: String(loan.term_days),
       release_date: new Date().toISOString().split('T')[0],
-      first_payment: '',
+      daily_payment: String(Number(loan.daily_payment) || 0),
     });
     setRenewOpen(true);
   }
@@ -294,6 +294,14 @@ export default function LoanDetailPage() {
     const newLoanNumber = generateLoanNumber();
     const details = computeLoanDetails(Number(renewForm.amount), Number(renewForm.interest_rate), Number(renewForm.term_days));
     const dueDate = new Date(new Date(renewForm.release_date).getTime() + Number(renewForm.term_days) * 86400000).toISOString().split('T')[0];
+    const autoDaily = Number(renewForm.term_days) > 0 ? details.totalPayable / Number(renewForm.term_days) : 0;
+    const regularDaily = Number(renewForm.daily_payment) > 0 ? Number(renewForm.daily_payment) : autoDaily;
+    // The old loan's full remaining balance carries into this renewal rather
+    // than being paid out in cash — it comes straight out of what's actually
+    // released to the customer. Daily Payment is a separate, independent
+    // figure (the new loan's own payment schedule) and does not reduce it.
+    const offsetBalance = Number(loan.remaining_balance);
+    const adjustedReleaseAmount = Math.max(0, details.releaseAmount - offsetBalance);
 
     const { error } = await supabase.from('loans').insert({
       loan_number: newLoanNumber,
@@ -303,10 +311,11 @@ export default function LoanDetailPage() {
       interest_rate: Number(renewForm.interest_rate),
       interest_amount: details.interestAmount,
       service_fee: details.serviceFee,
-      release_amount: details.releaseAmount,
+      release_amount: adjustedReleaseAmount,
       total_payable: details.totalPayable,
       remaining_balance: details.totalPayable,
       term_days: Number(renewForm.term_days),
+      daily_payment: regularDaily,
       collector_id: loan.collector_id,
       branch_id: loan.branch_id,
       area_id: loan.area_id,
@@ -314,7 +323,7 @@ export default function LoanDetailPage() {
       release_date: renewForm.release_date,
       due_date: dueDate,
       renewed_from_loan_id: loan.id,
-      offset_balance: Number(loan.remaining_balance) - Number(renewForm.first_payment || 0),
+      offset_balance: offsetBalance,
     });
 
     if (error) {
@@ -576,7 +585,7 @@ export default function LoanDetailPage() {
             </Button>
           </Link>
         )}
-        {!isCashier && !isCollector && loan.status !== 'renewed' && (
+        {!isCashier && loan.status !== 'renewed' && (
           <Button size="sm" variant="outline" onClick={openRenew} disabled={!canRenew}>
             <RefreshCw className="w-4 h-4 mr-2" />
             Renew Loan
@@ -957,23 +966,44 @@ export default function LoanDetailPage() {
                 <Input type="date" value={renewForm.release_date} onChange={(e) => setRenewForm({ ...renewForm, release_date: e.target.value })} />
               </div>
               <div className="space-y-2 col-span-2">
-                <Label>First Payment Collected Now (₱)</Label>
-                <Input type="number" value={renewForm.first_payment} onChange={(e) => setRenewForm({ ...renewForm, first_payment: e.target.value })} placeholder="0.00" />
-                <p className="text-xs text-muted-foreground">
-                  Old balance {formatCurrency(loan.remaining_balance)} minus this payment ={' '}
-                  {formatCurrency(Number(loan.remaining_balance) - Number(renewForm.first_payment || 0))} beginning balance carried into the renewal — shown on the disbursement voucher.
-                </p>
+                <Label>Daily Payment (₱)</Label>
+                {(() => {
+                  const details = renewForm.amount ? computeLoanDetails(Number(renewForm.amount), Number(renewForm.interest_rate), Number(renewForm.term_days)) : null;
+                  const autoDaily = details && Number(renewForm.term_days) > 0 ? details.totalPayable / Number(renewForm.term_days) : 0;
+                  return (
+                    <>
+                      <Input
+                        type="number"
+                        value={renewForm.daily_payment}
+                        onChange={(e) => setRenewForm({ ...renewForm, daily_payment: e.target.value })}
+                        placeholder={autoDaily ? `Auto: ${formatCurrency(autoDaily)}` : '0.00'}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        How much the customer will pay per collection day on this renewed loan. The Offset Balance ({formatCurrency(loan.remaining_balance)} — the previous loan's full remaining balance) is carried in separately below and is automatically deducted from the Release Amount.
+                      </p>
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
             {renewForm.amount && (() => {
               const details = computeLoanDetails(Number(renewForm.amount), Number(renewForm.interest_rate), Number(renewForm.term_days));
+              const autoDaily = Number(renewForm.term_days) > 0 ? details.totalPayable / Number(renewForm.term_days) : 0;
+              const regularDaily = Number(renewForm.daily_payment) > 0 ? Number(renewForm.daily_payment) : autoDaily;
+              const offsetBalance = Number(loan.remaining_balance);
+              const adjustedReleaseAmount = Math.max(0, details.releaseAmount - offsetBalance);
+              const totalDeduction = details.serviceFee + offsetBalance;
               return (
                 <div className="p-4 rounded-xl bg-secondary/50 border border-border space-y-2 text-sm">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Loan Amount:</span><span className="font-medium">{formatCurrency(Number(renewForm.amount))}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Interest:</span><span className="font-medium">{formatCurrency(details.interestAmount)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">{formatCurrency(details.serviceFee)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Release Amount:</span><span className="font-medium text-success">{formatCurrency(details.releaseAmount)}</span></div>
                   <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Total Payable:</span><span className="font-bold text-primary">{formatCurrency(details.totalPayable)}</span></div>
+                  <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Daily Payment:</span><span className="font-medium">{formatCurrency(regularDaily)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">-{formatCurrency(details.serviceFee)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Offset Balance:</span><span className="font-medium text-warning">-{formatCurrency(offsetBalance)}</span></div>
+                  <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Total Deduction:</span><span className="font-medium">-{formatCurrency(totalDeduction)}</span></div>
+                  <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Release Amount:</span><span className="font-bold text-success">{formatCurrency(adjustedReleaseAmount)}</span></div>
                 </div>
               );
             })()}
