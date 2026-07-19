@@ -15,7 +15,6 @@ import {
   ShieldCheck,
   Building2,
   MapPin,
-  UserCheck,
   Banknote,
   ArrowRightLeft,
   CalendarClock,
@@ -63,7 +62,6 @@ export const navSections: NavSection[] = [
     title: 'Human Resources',
     items: [
       { label: 'Employees', href: '/employees', icon: UserCog },
-      { label: 'Collectors', href: '/collectors', icon: UserCheck },
       { label: 'Payroll', href: '/payroll', icon: ScrollText },
       { label: 'Employee Loans', href: '/employee-loans', icon: Landmark },
       { label: 'Leave Requests', href: '/leave-requests', icon: CalendarClock },

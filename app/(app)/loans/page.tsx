@@ -27,7 +27,7 @@ import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exp
 import {
   Landmark, Plus, Search, Download, Eye, Loader2, Calculator, RefreshCw,
   CalendarDays, ChevronLeft, ChevronRight,
-  ChevronDown, Check,
+  ChevronDown, Check, Pencil, Trash2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -86,6 +86,14 @@ export default function LoansPage() {
   const [scheduleMonth, setScheduleMonth] = useState(new Date());
   const [existingLoanBlock, setExistingLoanBlock] = useState<string | null>(null);
   const [reapplyingId, setReapplyingId] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<Loan | null>(null);
+  const [editForm, setEditForm] = useState({
+    amount: '', interest_rate: '', term_days: '', service_fee: '', release_amount: '',
+    total_payable: '', remaining_balance: '', release_date: '', due_date: '', status: '',
+  });
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Loan | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const pageSize = 10;
 
   const [form, setForm] = useState({
@@ -383,6 +391,68 @@ export default function LoansPage() {
     setReapplyingId(null);
   }
 
+  function openEditLoan(l: Loan) {
+    setEditTarget(l);
+    setEditForm({
+      amount: String(l.amount),
+      interest_rate: String(l.interest_rate),
+      term_days: String(l.term_days),
+      service_fee: String(l.service_fee),
+      release_amount: String(l.release_amount),
+      total_payable: String(l.total_payable),
+      remaining_balance: String(l.remaining_balance),
+      release_date: l.release_date ?? '',
+      due_date: l.due_date ?? '',
+      status: l.status,
+    });
+  }
+
+  async function handleEditLoan(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    setEditSaving(true);
+    const { error } = await supabase.from('loans').update({
+      amount: Number(editForm.amount),
+      interest_rate: Number(editForm.interest_rate),
+      term_days: Number(editForm.term_days),
+      service_fee: Number(editForm.service_fee),
+      release_amount: Number(editForm.release_amount),
+      total_payable: Number(editForm.total_payable),
+      remaining_balance: Number(editForm.remaining_balance),
+      release_date: editForm.release_date || null,
+      due_date: editForm.due_date || null,
+      status: editForm.status,
+    }).eq('id', editTarget.id);
+
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Loan updated' });
+      setEditTarget(null);
+      loadLoans();
+    }
+    setEditSaving(false);
+  }
+
+  async function handleDeleteLoan() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    // cash_vouchers/receipts only SET NULL their loan_id on loan delete (they
+    // don't cascade) — remove them explicitly so nothing orphaned is left
+    // behind. Payments do cascade automatically via the loan delete below.
+    await supabase.from('cash_vouchers').delete().eq('loan_id', deleteTarget.id);
+    await supabase.from('receipts').delete().eq('loan_id', deleteTarget.id);
+    const { error } = await supabase.from('loans').delete().eq('id', deleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Loan deleted', description: `${deleteTarget.loan_number} and its payment history were removed.` });
+      setDeleteTarget(null);
+      loadLoans();
+    }
+    setDeleting(false);
+  }
+
   function handleExport() {
     exportToCSV(
       loans.map(l => ({
@@ -565,6 +635,16 @@ export default function LoansPage() {
                         <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); router.push(`/loans/${l.id}`); }}>
                           <Eye className="w-4 h-4" />
                         </Button>
+                        {isAdmin && (
+                          <>
+                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openEditLoan(l); }}>
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(l); }}>
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -584,128 +664,137 @@ export default function LoansPage() {
 
       {/* Create Loan Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create New Loan</DialogTitle>
             <DialogDescription>Submit a new loan application — a Cashier must approve it before it becomes active</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Customer *</Label>
-                <Select value={form.customer_id} onValueChange={handleCustomerChange}>
-                  <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
-                  <SelectContent>
-                    {customers.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {existingLoanBlock && (
-                  <p className="text-xs text-destructive">{existingLoanBlock}</p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label>Loan Type</Label>
-                <Select value={form.loan_type_id} onValueChange={handleLoanTypeChange}>
-                  <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
-                  <SelectContent>
-                    {loanTypes.map(lt => (
-                      <SelectItem key={lt.id} value={lt.id}>{lt.name}</SelectItem>
-                    ))}
-                    <SelectItem value="custom">Custom</SelectItem>
-                  </SelectContent>
-                </Select>
-                {form.loan_type_id === 'custom' && (
-                  <p className="text-xs text-muted-foreground">Set your own Interest Rate and Term below.</p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label>Loan Amount (₱) *</Label>
-                <Input type="number" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" />
-                {(() => {
-                  const selectedCustomer = customers.find(c => c.id === form.customer_id);
-                  if (!selectedCustomer) return null;
-                  const overLimit = form.amount && Number(form.amount) > selectedCustomer.max_loan_limit;
-                  return (
-                    <p className={`text-xs ${overLimit ? 'text-destructive' : 'text-muted-foreground'}`}>
-                      Customer's max loan limit: {formatCurrency(selectedCustomer.max_loan_limit)}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Computation on the left */}
+              <div className="rounded-xl border border-border p-4">
+                {computed ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                        <Calculator className="w-4 h-4" />
+                        Loan Summary
+                      </div>
+                      <Button type="button" variant="ghost" size="sm" onClick={openSchedule} className="h-7 px-2">
+                        <CalendarDays className="w-4 h-4 mr-1.5" />
+                        View Schedule
+                      </Button>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-muted-foreground">Principal:</span><span className="font-medium">{formatCurrency(Number(form.amount))}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Interest:</span><span className="font-medium">{formatCurrency(computed.interestAmount)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Total Payable:</span><span className="font-bold text-primary">{formatCurrency(computed.totalPayable)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Daily Payment:</span><span className="font-medium">{formatCurrency(regularDaily)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">-{formatCurrency(computed.serviceFee)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">First Day Payment:</span><span className="font-medium text-warning">-{formatCurrency(firstDayAmount)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Release:</span><span className="font-bold text-success">{formatCurrency(adjustedReleaseAmount)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Due Date:</span><span className="font-medium">{formatDate(dueDate)}</span></div>
+                    </div>
+                    <p className="text-xs text-muted-foreground pt-1">
+                      Release = Principal - Service Fee - First Day Payment (auto-settled, so it won't show as due on the calendar).
                     </p>
-                  );
-                })()}
-              </div>
-              <div className="space-y-2">
-                <Label>Interest Rate (%)</Label>
-                <Input type="number" value={form.interest_rate} onChange={(e) => setForm({ ...form, interest_rate: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Term (Days)</Label>
-                <Input type="number" value={form.term_days} onChange={(e) => setForm({ ...form, term_days: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Release Date</Label>
-                <Input type="date" value={form.release_date} onChange={(e) => setForm({ ...form, release_date: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Daily Payment (₱)</Label>
-                <Input
-                  type="number"
-                  value={form.custom_daily_payment}
-                  onChange={(e) => setForm({ ...form, custom_daily_payment: e.target.value })}
-                  placeholder={dailyAmount ? `Auto: ${formatCurrency(dailyAmount)}` : '0.00'}
-                />
-                <p className="text-xs text-muted-foreground">How much the customer will pay per collection day. Leave blank to split evenly — the last day absorbs any remaining balance.</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>Branch</Label>
-                <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
-                  {branches.find(b => b.id === form.branch_id)?.name ?? 'Select a customer first'}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Area</Label>
-                <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
-                  {areas.find(a => a.id === form.area_id)?.name ?? 'Select a customer first'}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Collector</Label>
-                <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
-                  {collectors.find(c => c.id === form.collector_id)?.profiles?.full_name ?? 'Select a customer first'}
-                </div>
-              </div>
-            </div>
-
-            {/* Computed summary */}
-            {computed && (
-              <div className="p-4 rounded-xl bg-secondary/50 border border-border space-y-2">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 text-sm font-medium text-primary">
-                    <Calculator className="w-4 h-4" />
-                    Loan Summary
                   </div>
-                  <Button type="button" variant="ghost" size="sm" onClick={openSchedule} className="h-7 px-2">
-                    <CalendarDays className="w-4 h-4 mr-1.5" />
-                    View Schedule
-                  </Button>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Principal:</span><span className="font-medium">{formatCurrency(Number(form.amount))}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Interest:</span><span className="font-medium">{formatCurrency(computed.interestAmount)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">-{formatCurrency(computed.serviceFee)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">First Day Payment:</span><span className="font-medium text-warning">-{formatCurrency(firstDayAmount)}</span></div>
-                  <div className="flex justify-between col-span-2 pt-2 border-t border-border"><span className="text-muted-foreground">Release:</span><span className="font-bold text-success">{formatCurrency(adjustedReleaseAmount)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Total Payable:</span><span className="font-bold text-primary">{formatCurrency(computed.totalPayable)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Daily Payment:</span><span className="font-medium">{formatCurrency(regularDaily)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Due Date:</span><span className="font-medium">{formatDate(dueDate)}</span></div>
-                </div>
-                <p className="text-xs text-muted-foreground pt-1">
-                  Release = Principal - Service Fee - First Day Payment (auto-settled, so it won't show as due on the calendar).
-                </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">Enter a loan amount to see the computation</p>
+                )}
               </div>
-            )}
+
+              {/* Form fields on the right */}
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Customer *</Label>
+                    <Select value={form.customer_id} onValueChange={handleCustomerChange}>
+                      <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
+                      <SelectContent>
+                        {customers.map(c => (
+                          <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {existingLoanBlock && (
+                      <p className="text-xs text-destructive">{existingLoanBlock}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Loan Type</Label>
+                    <Select value={form.loan_type_id} onValueChange={handleLoanTypeChange}>
+                      <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
+                      <SelectContent>
+                        {loanTypes.map(lt => (
+                          <SelectItem key={lt.id} value={lt.id}>{lt.name}</SelectItem>
+                        ))}
+                        <SelectItem value="custom">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {form.loan_type_id === 'custom' && (
+                      <p className="text-xs text-muted-foreground">Set your own Interest Rate and Term below.</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Loan Amount (₱) *</Label>
+                    <Input type="number" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" />
+                    {(() => {
+                      const selectedCustomer = customers.find(c => c.id === form.customer_id);
+                      if (!selectedCustomer) return null;
+                      const overLimit = form.amount && Number(form.amount) > selectedCustomer.max_loan_limit;
+                      return (
+                        <p className={`text-xs ${overLimit ? 'text-destructive' : 'text-muted-foreground'}`}>
+                          Customer's max loan limit: {formatCurrency(selectedCustomer.max_loan_limit)}
+                        </p>
+                      );
+                    })()}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Interest Rate (%)</Label>
+                    <Input type="number" value={form.interest_rate} onChange={(e) => setForm({ ...form, interest_rate: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Term (Days)</Label>
+                    <Input type="number" value={form.term_days} onChange={(e) => setForm({ ...form, term_days: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Release Date</Label>
+                    <Input type="date" value={form.release_date} onChange={(e) => setForm({ ...form, release_date: e.target.value })} />
+                  </div>
+                  <div className="space-y-2 col-span-2">
+                    <Label>Daily Payment (₱)</Label>
+                    <Input
+                      type="number"
+                      value={form.custom_daily_payment}
+                      onChange={(e) => setForm({ ...form, custom_daily_payment: e.target.value })}
+                      placeholder={dailyAmount ? `Auto: ${formatCurrency(dailyAmount)}` : '0.00'}
+                    />
+                    <p className="text-xs text-muted-foreground">How much the customer will pay per collection day. Leave blank to split evenly — the last day absorbs any remaining balance.</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Branch</Label>
+                    <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
+                      {branches.find(b => b.id === form.branch_id)?.name ?? 'Select a customer first'}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Area</Label>
+                    <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
+                      {areas.find(a => a.id === form.area_id)?.name ?? 'Select a customer first'}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Collector</Label>
+                    <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
+                      {collectors.find(c => c.id === form.collector_id)?.profiles?.full_name ?? 'Select a customer first'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -776,6 +865,60 @@ export default function LoansPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!editTarget} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Loan {editTarget?.loan_number}</DialogTitle>
+            <DialogDescription>Directly overwrites this loan's stored data — use with care, this does not recompute related payment history.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditLoan} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2"><Label>Amount (₱)</Label><Input type="number" required value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Interest Rate (%)</Label><Input type="number" value={editForm.interest_rate} onChange={(e) => setEditForm({ ...editForm, interest_rate: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Term (Days)</Label><Input type="number" value={editForm.term_days} onChange={(e) => setEditForm({ ...editForm, term_days: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Service Fee (₱)</Label><Input type="number" value={editForm.service_fee} onChange={(e) => setEditForm({ ...editForm, service_fee: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Release Amount (₱)</Label><Input type="number" value={editForm.release_amount} onChange={(e) => setEditForm({ ...editForm, release_amount: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Total Payable (₱)</Label><Input type="number" value={editForm.total_payable} onChange={(e) => setEditForm({ ...editForm, total_payable: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Remaining Balance (₱)</Label><Input type="number" value={editForm.remaining_balance} onChange={(e) => setEditForm({ ...editForm, remaining_balance: e.target.value })} /></div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['pending', 'approved', 'active', 'overdue', 'paid', 'declined', 'renewed'].map(s => (
+                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2"><Label>Release Date</Label><Input type="date" value={editForm.release_date} onChange={(e) => setEditForm({ ...editForm, release_date: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Due Date</Label><Input type="date" value={editForm.due_date} onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })} /></div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+              <Button type="submit" disabled={editSaving}>{editSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Loan</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete {deleteTarget?.loan_number}? This permanently removes the loan and all of its payments, receipts, and cash vouchers. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteLoan} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

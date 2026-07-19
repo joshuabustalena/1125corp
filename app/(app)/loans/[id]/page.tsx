@@ -928,85 +928,95 @@ export default function LoanDetailPage() {
 
       {/* Renew loan — same pending/approve workflow as a new loan */}
       <Dialog open={renewOpen} onOpenChange={setRenewOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Renew {loan.loan_number}</DialogTitle>
             <DialogDescription>Submit a renewal for {loan.customers?.first_name} {loan.customers?.last_name} — a Branch Manager must approve it before it becomes active</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmitRenew} className="space-y-4">
-            <div className="space-y-2">
-              <Label>Customer</Label>
-              <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
-                {loan.customers?.first_name} {loan.customers?.last_name}
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Loan Amount (₱) *</Label>
-                <Input type="number" required value={renewForm.amount} onChange={(e) => setRenewForm({ ...renewForm, amount: e.target.value })} />
-                {loan.customers?.max_loan_limit != null && (() => {
-                  const overLimit = renewForm.amount && Number(renewForm.amount) > loan.customers.max_loan_limit;
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Computation on the left */}
+              <div className="rounded-xl border border-border p-4">
+                {renewForm.amount ? (() => {
+                  const details = computeLoanDetails(Number(renewForm.amount), Number(renewForm.interest_rate), Number(renewForm.term_days));
+                  const autoDaily = Number(renewForm.term_days) > 0 ? details.totalPayable / Number(renewForm.term_days) : 0;
+                  const regularDaily = Number(renewForm.daily_payment) > 0 ? Number(renewForm.daily_payment) : autoDaily;
+                  const offsetBalance = Number(loan.remaining_balance);
+                  const adjustedReleaseAmount = Math.max(0, details.releaseAmount - offsetBalance);
+                  const totalDeduction = details.serviceFee + offsetBalance;
                   return (
-                    <p className={`text-xs ${overLimit ? 'text-destructive' : 'text-muted-foreground'}`}>
-                      Customer's max loan limit: {formatCurrency(loan.customers.max_loan_limit)}
-                    </p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-muted-foreground">Loan Amount:</span><span className="font-medium">{formatCurrency(Number(renewForm.amount))}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Interest:</span><span className="font-medium">{formatCurrency(details.interestAmount)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Total Payable:</span><span className="font-bold text-primary">{formatCurrency(details.totalPayable)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Daily Payment:</span><span className="font-medium">{formatCurrency(regularDaily)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">-{formatCurrency(details.serviceFee)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Offset Balance:</span><span className="font-medium text-warning">-{formatCurrency(offsetBalance)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Total Deduction:</span><span className="font-medium">-{formatCurrency(totalDeduction)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Release Amount:</span><span className="font-bold text-success">{formatCurrency(adjustedReleaseAmount)}</span></div>
+                    </div>
                   );
-                })()}
+                })() : (
+                  <p className="text-sm text-muted-foreground text-center py-8">Enter a loan amount to see the computation</p>
+                )}
               </div>
-              <div className="space-y-2">
-                <Label>Interest Rate (%)</Label>
-                <Input type="number" value={renewForm.interest_rate} onChange={(e) => setRenewForm({ ...renewForm, interest_rate: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Term (Days)</Label>
-                <Input type="number" value={renewForm.term_days} onChange={(e) => setRenewForm({ ...renewForm, term_days: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Release Date</Label>
-                <Input type="date" value={renewForm.release_date} onChange={(e) => setRenewForm({ ...renewForm, release_date: e.target.value })} />
-              </div>
-              <div className="space-y-2 col-span-2">
-                <Label>Daily Payment (₱)</Label>
-                {(() => {
-                  const details = renewForm.amount ? computeLoanDetails(Number(renewForm.amount), Number(renewForm.interest_rate), Number(renewForm.term_days)) : null;
-                  const autoDaily = details && Number(renewForm.term_days) > 0 ? details.totalPayable / Number(renewForm.term_days) : 0;
-                  return (
-                    <>
-                      <Input
-                        type="number"
-                        value={renewForm.daily_payment}
-                        onChange={(e) => setRenewForm({ ...renewForm, daily_payment: e.target.value })}
-                        placeholder={autoDaily ? `Auto: ${formatCurrency(autoDaily)}` : '0.00'}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        How much the customer will pay per collection day on this renewed loan. The Offset Balance ({formatCurrency(loan.remaining_balance)} — the previous loan's full remaining balance) is carried in separately below and is automatically deducted from the Release Amount.
-                      </p>
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
 
-            {renewForm.amount && (() => {
-              const details = computeLoanDetails(Number(renewForm.amount), Number(renewForm.interest_rate), Number(renewForm.term_days));
-              const autoDaily = Number(renewForm.term_days) > 0 ? details.totalPayable / Number(renewForm.term_days) : 0;
-              const regularDaily = Number(renewForm.daily_payment) > 0 ? Number(renewForm.daily_payment) : autoDaily;
-              const offsetBalance = Number(loan.remaining_balance);
-              const adjustedReleaseAmount = Math.max(0, details.releaseAmount - offsetBalance);
-              const totalDeduction = details.serviceFee + offsetBalance;
-              return (
-                <div className="p-4 rounded-xl bg-secondary/50 border border-border space-y-2 text-sm">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Loan Amount:</span><span className="font-medium">{formatCurrency(Number(renewForm.amount))}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Interest:</span><span className="font-medium">{formatCurrency(details.interestAmount)}</span></div>
-                  <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Total Payable:</span><span className="font-bold text-primary">{formatCurrency(details.totalPayable)}</span></div>
-                  <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Daily Payment:</span><span className="font-medium">{formatCurrency(regularDaily)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Service Fee:</span><span className="font-medium text-warning">-{formatCurrency(details.serviceFee)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Offset Balance:</span><span className="font-medium text-warning">-{formatCurrency(offsetBalance)}</span></div>
-                  <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Total Deduction:</span><span className="font-medium">-{formatCurrency(totalDeduction)}</span></div>
-                  <div className="flex justify-between pt-2 border-t border-border"><span className="text-muted-foreground">Release Amount:</span><span className="font-bold text-success">{formatCurrency(adjustedReleaseAmount)}</span></div>
+              {/* Form fields on the right */}
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Customer</Label>
+                  <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
+                    {loan.customers?.first_name} {loan.customers?.last_name}
+                  </div>
                 </div>
-              );
-            })()}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Loan Amount (₱) *</Label>
+                    <Input type="number" required value={renewForm.amount} onChange={(e) => setRenewForm({ ...renewForm, amount: e.target.value })} />
+                    {loan.customers?.max_loan_limit != null && (() => {
+                      const overLimit = renewForm.amount && Number(renewForm.amount) > loan.customers.max_loan_limit;
+                      return (
+                        <p className={`text-xs ${overLimit ? 'text-destructive' : 'text-muted-foreground'}`}>
+                          Customer's max loan limit: {formatCurrency(loan.customers.max_loan_limit)}
+                        </p>
+                      );
+                    })()}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Interest Rate (%)</Label>
+                    <Input type="number" value={renewForm.interest_rate} onChange={(e) => setRenewForm({ ...renewForm, interest_rate: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Term (Days)</Label>
+                    <Input type="number" value={renewForm.term_days} onChange={(e) => setRenewForm({ ...renewForm, term_days: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Release Date</Label>
+                    <Input type="date" value={renewForm.release_date} onChange={(e) => setRenewForm({ ...renewForm, release_date: e.target.value })} />
+                  </div>
+                  <div className="space-y-2 col-span-2">
+                    <Label>Daily Payment (₱)</Label>
+                    {(() => {
+                      const details = renewForm.amount ? computeLoanDetails(Number(renewForm.amount), Number(renewForm.interest_rate), Number(renewForm.term_days)) : null;
+                      const autoDaily = details && Number(renewForm.term_days) > 0 ? details.totalPayable / Number(renewForm.term_days) : 0;
+                      return (
+                        <>
+                          <Input
+                            type="number"
+                            value={renewForm.daily_payment}
+                            onChange={(e) => setRenewForm({ ...renewForm, daily_payment: e.target.value })}
+                            placeholder={autoDaily ? `Auto: ${formatCurrency(autoDaily)}` : '0.00'}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            How much the customer will pay per collection day on this renewed loan. The Offset Balance ({formatCurrency(loan.remaining_balance)} — the previous loan's full remaining balance) is carried in separately and is automatically deducted from the Release Amount.
+                          </p>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setRenewOpen(false)}>Cancel</Button>

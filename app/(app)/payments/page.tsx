@@ -23,7 +23,7 @@ import { formatCurrency, formatDate, formatTime, generateORNumber, exportToCSV }
 import { postJournalEntry } from '@/lib/ledger';
 import { connectThermalPrinter, buildPaymentReceiptLines, buildReceiptBytes, writeToPrinter } from '@/lib/thermal-printer';
 import {
-  Wallet, Plus, Search, Download, Eye, Loader2, MapPin, Receipt, Calculator, ChevronDown, Check, Bluetooth,
+  Wallet, Plus, Search, Download, Eye, Loader2, MapPin, Receipt, Calculator, ChevronDown, Check, Bluetooth, Pencil, Trash2,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -46,7 +46,13 @@ export default function PaymentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
   const isCollector = profile?.role_name === 'Branch Field Collector';
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [editForm, setEditForm] = useState({ amount_paid: '', payment_date: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const { toast } = useToast();
   const [payments, setPayments] = useState<any[]>([]);
@@ -291,6 +297,88 @@ export default function PaymentsPage() {
     setLoading(false);
   }
 
+  function openEditPayment(p: any) {
+    setEditTarget(p);
+    setEditForm({ amount_paid: String(p.amount_paid), payment_date: p.payment_date });
+  }
+
+  // This table only ever shows the most recent payment per loan (see the
+  // collapse above), so editing/deleting the row shown here can never
+  // desync an older payment's stored "balance after" snapshot — there is no
+  // later payment on the loan whose numbers would be invalidated.
+  async function handleEditPayment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    setEditSaving(true);
+
+    const { data: loan } = await supabase.from('loans').select('remaining_balance, status').eq('id', editTarget.loan_id).maybeSingle();
+    const oldAmount = Number(editTarget.amount_paid);
+    const newAmount = Number(editForm.amount_paid);
+    const delta = newAmount - oldAmount;
+    const currentBalance = Number(loan?.remaining_balance ?? 0);
+    const newLoanBalance = Math.max(0, currentBalance - delta);
+
+    const { error: payError } = await supabase.from('payments').update({
+      amount_paid: newAmount,
+      payment_date: editForm.payment_date,
+      remaining_balance: newLoanBalance,
+    }).eq('id', editTarget.id);
+
+    if (payError) {
+      toast({ title: 'Error', description: payError.message, variant: 'destructive' });
+      setEditSaving(false);
+      return;
+    }
+
+    if (editTarget.receipt_id) {
+      await supabase.from('receipts').update({
+        amount: newAmount,
+        payment_date: editForm.payment_date,
+        remaining_balance: newLoanBalance,
+      }).eq('id', editTarget.receipt_id);
+    }
+
+    await supabase.from('loans').update({
+      remaining_balance: newLoanBalance,
+      status: newLoanBalance === 0 ? 'paid' : (loan?.status === 'paid' ? 'active' : loan?.status),
+    }).eq('id', editTarget.loan_id);
+
+    toast({ title: 'Payment updated' });
+    setEditTarget(null);
+    setEditSaving(false);
+    loadPayments();
+    loadLoans();
+  }
+
+  async function handleDeletePayment() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+
+    const { data: loan } = await supabase.from('loans').select('remaining_balance, status').eq('id', deleteTarget.loan_id).maybeSingle();
+    const restoredBalance = Number(loan?.remaining_balance ?? 0) + Number(deleteTarget.amount_paid);
+
+    const { error } = await supabase.from('payments').delete().eq('id', deleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      setDeleting(false);
+      return;
+    }
+
+    if (deleteTarget.receipt_id) {
+      await supabase.from('receipts').delete().eq('id', deleteTarget.receipt_id);
+    }
+
+    await supabase.from('loans').update({
+      remaining_balance: restoredBalance,
+      status: loan?.status === 'paid' ? 'active' : loan?.status,
+    }).eq('id', deleteTarget.loan_id);
+
+    toast({ title: 'Payment deleted' });
+    setDeleteTarget(null);
+    setDeleting(false);
+    loadPayments();
+    loadLoans();
+  }
 
   const customerOptions = Array.from(
     new Map(
@@ -570,6 +658,16 @@ export default function PaymentsPage() {
                       >
                         <Receipt className="w-4 h-4" />
                       </Button>
+                      {isAdmin && (
+                        <>
+                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openEditPayment(p); }}>
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p); }}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
@@ -766,6 +864,49 @@ export default function PaymentsPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      <Dialog open={!!editTarget} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Payment</DialogTitle>
+            <DialogDescription>
+              Changing the amount will adjust the loan's remaining balance to match.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditPayment} className="space-y-4">
+            <div className="space-y-2">
+              <Label>Amount Paid (₱)</Label>
+              <Input type="number" required value={editForm.amount_paid} onChange={(e) => setEditForm({ ...editForm, amount_paid: e.target.value })} />
+            </div>
+            <div className="space-y-2">
+              <Label>Payment Date</Label>
+              <Input type="date" required value={editForm.payment_date} onChange={(e) => setEditForm({ ...editForm, payment_date: e.target.value })} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+              <Button type="submit" disabled={editSaving}>{editSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Payment</DialogTitle>
+            <DialogDescription>
+              This will remove the payment of {deleteTarget && formatCurrency(deleteTarget.amount_paid)} and restore it to the loan's remaining balance. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeletePayment} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -26,6 +27,7 @@ type CameraMode = 'checkin' | 'checkout';
 
 export default function AttendancePage() {
   const { toast } = useToast();
+  const searchParams = useSearchParams();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const [records, setRecords] = useState<any[]>([]);
@@ -51,8 +53,21 @@ export default function AttendancePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // The ?employee= deep-link updates filterEmployee a tick after mount,
+  // firing a second load() while the first (unfiltered) one may still be in
+  // flight. Without a sequence guard, whichever request's response arrives
+  // last wins — which could re-overwrite the filtered result with the
+  // unfiltered one. This tags each call so only the most recent applies.
+  const loadSeq = useRef(0);
 
   useEffect(() => { if (profile) { loadEmployees(); } }, [profile]);
+  // Deep-link support: /attendance?employee=<id> (e.g. from the employee
+  // detail page's "Attendance" button) pre-selects that employee's filter.
+  useEffect(() => {
+    if (!isAdmin) return;
+    const employeeParam = searchParams.get('employee');
+    if (employeeParam) setFilterEmployee(employeeParam);
+  }, [isAdmin, searchParams]);
   useEffect(() => { if (profile) load(); }, [filterEmployee, profile, myEmployeeId]);
   useEffect(() => () => stopStream(), []);
 
@@ -77,6 +92,7 @@ export default function AttendancePage() {
   }
 
   async function load() {
+    const seq = ++loadSeq.current;
     setLoading(true);
     let query = supabase.from('attendance').select('*, employees(first_name, last_name)').order('date', { ascending: false });
     if (!isAdmin) {
@@ -85,6 +101,7 @@ export default function AttendancePage() {
       query = query.eq('employee_id', filterEmployee);
     }
     const { data } = await query.limit(50);
+    if (seq !== loadSeq.current) return; // a newer load() already started — discard this stale response
     setRecords(data ?? []);
     setLoading(false);
   }

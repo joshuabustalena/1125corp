@@ -36,6 +36,9 @@ export default function EmployeesPage() {
   const [positions, setPositions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [positionFilter, setPositionFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -50,7 +53,7 @@ export default function EmployeesPage() {
     branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
   });
 
-  useEffect(() => { load(); loadBranches(); loadAreas(); loadPositions(); }, [search, page]);
+  useEffect(() => { load(); loadBranches(); loadAreas(); loadPositions(); }, [search, branchFilter, positionFilter, statusFilter, page]);
 
   async function loadBranches() {
     const { data } = await supabase.from('branches').select('id, name').eq('status', 'active');
@@ -71,6 +74,9 @@ export default function EmployeesPage() {
     setLoading(true);
     let query = supabase.from('employees').select('*, branches(name)', { count: 'exact' });
     if (search) query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%`);
+    if (branchFilter !== 'all') query = query.eq('branch_id', branchFilter);
+    if (positionFilter !== 'all') query = query.eq('position', positionFilter);
+    if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     query = query.range((page - 1) * pageSize, page * pageSize - 1).order('created_at', { ascending: false });
     const { data, count } = await query;
     setEmployees(data ?? []);
@@ -231,10 +237,35 @@ export default function EmployeesPage() {
       </PageHeader>
 
       <Card className="glass-card border-border">
-        <CardContent className="p-4">
+        <CardContent className="p-4 space-y-4">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input placeholder="Search employees..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="pl-10" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setPage(1); }}>
+              <SelectTrigger><SelectValue placeholder="Branch" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Branches</SelectItem>
+                {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={positionFilter} onValueChange={(v) => { setPositionFilter(v); setPage(1); }}>
+              <SelectTrigger><SelectValue placeholder="Position" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Positions</SelectItem>
+                {positions.map(p => <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
+              <SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
+                <SelectItem value="resigned">Resigned</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
@@ -264,7 +295,7 @@ export default function EmployeesPage() {
                 </TableHeader>
                 <TableBody>
                   {employees.map(e => (
-                    <TableRow key={e.id} className="hover:bg-secondary/50">
+                    <TableRow key={e.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employees/${e.id}`)}>
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar className="w-9 h-9">
@@ -280,9 +311,11 @@ export default function EmployeesPage() {
                       <TableCell className="text-sm font-medium">{formatCurrency(e.salary)}</TableCell>
                       <TableCell><Badge variant={e.status === 'active' ? 'default' : 'secondary'}>{e.status}</Badge></TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" onClick={() => router.push(`/attendance?employee=${e.id}`)}><Eye className="w-4 h-4" /></Button>
-                        <Button variant="ghost" size="icon" onClick={() => openEdit(e)}><Pencil className="w-4 h-4" /></Button>
-                        <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(e)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                        <div className="flex justify-end" onClick={(e2) => e2.stopPropagation()}>
+                          <Button variant="ghost" size="icon" onClick={() => router.push(`/employees/${e.id}`)}><Eye className="w-4 h-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => openEdit(e)}><Pencil className="w-4 h-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(e)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

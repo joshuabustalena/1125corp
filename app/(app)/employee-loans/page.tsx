@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -20,10 +21,11 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
-import { Landmark, Plus, Download, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Landmark, Plus, Download, Loader2, CheckCircle, XCircle, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 
 export default function EmployeeLoansPage() {
   const { toast } = useToast();
+  const router = useRouter();
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const [loans, setLoans] = useState<any[]>([]);
@@ -34,6 +36,8 @@ export default function EmployeeLoansPage() {
   const [saving, setSaving] = useState(false);
 
   const [form, setForm] = useState({ employee_id: '', amount: '', deduction_amount: '', term_months: '6' });
+  const [calendarLoan, setCalendarLoan] = useState<any>(null);
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
 
   useEffect(() => {
     if (!profile) return;
@@ -110,6 +114,67 @@ export default function EmployeeLoansPage() {
 
   const statusVariant = (s: string) => s === 'active' ? 'default' : s === 'pending' ? 'outline' : s === 'rejected' ? 'destructive' : 'secondary';
 
+  function openCalendar(loan: any) {
+    const start = new Date(loan.approved_at ?? loan.created_at);
+    setCalendarMonth(new Date(start.getFullYear(), start.getMonth(), 1));
+    setCalendarLoan(loan);
+  }
+
+  // Semi-monthly payroll deduction: the 15th and the last day of the month,
+  // twice a month, for the loan's term. The final deduction absorbs whatever
+  // balance is left over, same "last one settles the remainder" rule used
+  // for customer daily-payment schedules. Stops as soon as the balance hits
+  // zero instead of continuing to list ₱0.00 deductions for the rest of the
+  // term — an early payoff should just end the schedule, not pad it out.
+  function computeEmployeeSchedule(loan: any) {
+    const termMonths = Number(loan.term_months) || 6;
+    const deduction = Number(loan.deduction_amount) || 0;
+    const start = new Date(loan.approved_at ?? loan.created_at);
+    const dates: Date[] = [];
+    for (let m = 0; m < termMonths; m++) {
+      const year = start.getFullYear();
+      const month = start.getMonth() + m;
+      dates.push(new Date(year, month, 15));
+      dates.push(new Date(year, month + 1, 0));
+    }
+    let remaining = Number(loan.amount);
+    const schedule: { date: Date; amount: number; remainingAfter: number }[] = [];
+    for (let idx = 0; idx < dates.length && remaining > 0; idx++) {
+      const isLast = idx === dates.length - 1;
+      const amount = isLast ? remaining : Math.min(deduction, remaining);
+      remaining = Math.max(0, remaining - amount);
+      schedule.push({ date: dates[idx], amount, remainingAfter: remaining });
+    }
+    return schedule;
+  }
+
+  function dateKey(date: Date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  function getMonthGrid(monthDate: Date) {
+    const year = monthDate.getFullYear();
+    const month = monthDate.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const startOffset = firstDay.getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const cells: { date: Date; inCurrentMonth: boolean }[] = [];
+    for (let i = 0; i < startOffset; i++) {
+      cells.push({ date: new Date(year, month, i - startOffset + 1), inCurrentMonth: false });
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      cells.push({ date: new Date(year, month, d), inCurrentMonth: true });
+    }
+    while (cells.length % 7 !== 0) {
+      const last = cells[cells.length - 1].date;
+      cells.push({ date: new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1), inCurrentMonth: false });
+    }
+    return cells;
+  }
+
+  const calendarSchedule = calendarLoan ? computeEmployeeSchedule(calendarLoan) : [];
+  const scheduleByDate = new Map(calendarSchedule.map(s => [dateKey(s.date), s]));
+
   return (
     <div className="space-y-6">
       <PageHeader title="Employee Loans" description="Manage employee loan applications (max ₱15,000, 2 active, 6 months)">
@@ -149,7 +214,7 @@ export default function EmployeeLoansPage() {
               </TableHeader>
               <TableBody>
                 {loans.map(l => (
-                  <TableRow key={l.id} className="hover:bg-secondary/50">
+                  <TableRow key={l.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employee-loans/${l.id}`)}>
                     <TableCell className="text-sm font-medium">{l.employees?.first_name} {l.employees?.last_name}</TableCell>
                     <TableCell className="text-sm">{formatCurrency(l.amount)}</TableCell>
                     <TableCell className="text-sm">{formatCurrency(l.remaining_balance)}</TableCell>
@@ -158,12 +223,19 @@ export default function EmployeeLoansPage() {
                     <TableCell><Badge variant={statusVariant(l.status)}>{l.status}</Badge></TableCell>
                     <TableCell className="text-sm">{formatDate(l.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {l.status === 'pending' && canApprove && (
-                        <div className="flex gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => updateStatus(l.id, 'active')}><CheckCircle className="w-4 h-4 text-success" /></Button>
-                          <Button variant="ghost" size="icon" onClick={() => updateStatus(l.id, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>
-                        </div>
-                      )}
+                      <div className="flex gap-1 justify-end">
+                        {(l.status === 'active' || l.status === 'approved' || l.status === 'completed') && (
+                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openCalendar(l); }} title="Deduction calendar">
+                            <CalendarDays className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {l.status === 'pending' && canApprove && (
+                          <>
+                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); updateStatus(l.id, 'active'); }}><CheckCircle className="w-4 h-4 text-success" /></Button>
+                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); updateStatus(l.id, 'rejected'); }}><XCircle className="w-4 h-4 text-destructive" /></Button>
+                          </>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -191,11 +263,128 @@ export default function EmployeeLoansPage() {
               <div className="space-y-2"><Label>Term (Months)</Label><Input type="number" max="6" value={form.term_months} onChange={(e) => setForm({ ...form, term_months: e.target.value })} /></div>
               <div className="space-y-2 col-span-2"><Label>Deduction per Payroll (₱)</Label><Input type="number" value={form.deduction_amount} onChange={(e) => setForm({ ...form, deduction_amount: e.target.value })} placeholder="0.00" /></div>
             </div>
+
+            {form.amount && form.deduction_amount && (
+              <div className="p-4 rounded-xl bg-secondary/50 border border-border space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                    <CalendarDays className="w-4 h-4" />
+                    Deduction Schedule
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2"
+                    onClick={() => openCalendar({
+                      amount: Number(form.amount),
+                      deduction_amount: Number(form.deduction_amount),
+                      term_months: Number(form.term_months) || 6,
+                      created_at: new Date().toISOString(),
+                    })}
+                  >
+                    <CalendarDays className="w-4 h-4 mr-1.5" />
+                    View Calendar
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {formatCurrency(Number(form.deduction_amount))} deducted every payroll (15th and end of month) — preview the full schedule before submitting.
+                </p>
+              </div>
+            )}
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Submit Application</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!calendarLoan} onOpenChange={(open) => !open && setCalendarLoan(null)}>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl">Deduction Calendar</DialogTitle>
+            <DialogDescription className="text-base">
+              {calendarLoan && `${formatCurrency(calendarLoan.deduction_amount)} deducted every payroll (15th and end of month) for ${calendarLoan.term_months} months`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {calendarSchedule.length > 0 && (
+            <p className="text-xs font-medium text-success">
+              Fully paid by {formatDate(calendarSchedule[calendarSchedule.length - 1].date.toISOString())} ({calendarSchedule.length} deduction{calendarSchedule.length === 1 ? '' : 's'})
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Details on the left */}
+            {calendarLoan && (
+              <div className="rounded-xl border border-border overflow-hidden max-h-[420px] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Deduction</TableHead>
+                      <TableHead>Balance After</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {calendarSchedule.map((s, i) => (
+                      <TableRow key={i}>
+                        <TableCell className="text-sm">{formatDate(s.date.toISOString())}</TableCell>
+                        <TableCell className="text-sm">{formatCurrency(s.amount)}</TableCell>
+                        <TableCell className="text-sm font-medium">{formatCurrency(s.remainingAfter)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Calendar on the right */}
+            <div className="space-y-3 rounded-xl border border-border p-4">
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><span className="w-3 h-3 rounded-sm bg-primary/10 border border-primary/30" /> Payroll deduction</span>
+
+              <div className="flex items-center justify-between">
+                <Button type="button" variant="outline" size="icon" className="h-10 w-10"
+                  onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}>
+                  <ChevronLeft className="w-5 h-5" />
+                </Button>
+                <p className="text-lg font-semibold">
+                  {calendarMonth.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })}
+                </p>
+                <Button type="button" variant="outline" size="icon" className="h-10 w-10"
+                  onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}>
+                  <ChevronRight className="w-5 h-5" />
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-7 gap-1.5 text-center">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                  <div key={d} className="text-sm font-medium text-muted-foreground py-1.5">{d}</div>
+                ))}
+                {getMonthGrid(calendarMonth).map(({ date, inCurrentMonth }, i) => {
+                  const info = inCurrentMonth ? scheduleByDate.get(dateKey(date)) : undefined;
+                  return (
+                    <div
+                      key={i}
+                      className={`relative rounded-lg py-3 text-sm ${
+                        !inCurrentMonth ? 'text-muted-foreground/30' :
+                        info ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'
+                      }`}
+                    >
+                      <p className="text-base">{date.getDate()}</p>
+                      {info && <p className="text-xs leading-tight mt-0.5">{formatCurrency(info.amount)}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCalendarLoan(null)}>Close</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
