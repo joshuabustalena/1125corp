@@ -14,12 +14,15 @@ import {
 } from '@/components/ui/table';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
 import { FileDown, Download, Loader2, TrendingUp, Wallet, Receipt } from 'lucide-react';
 
 export default function PaymentReportsPage() {
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -29,12 +32,32 @@ export default function PaymentReportsPage() {
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [branchResolved, setBranchResolved] = useState(false);
+  const [optionsLoaded, setOptionsLoaded] = useState(false);
   const reportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadFilterOptions();
-    generateReport();
   }, []);
+
+  // Non-admin employees (Branch Manager, Cashier, Branch Field Collector) are
+  // locked to their own assigned branch — no company-wide visibility.
+  // Administrators keep the free Branch filter dropdown.
+  useEffect(() => {
+    if (!profile) return;
+    if (!isAdmin && profile.branch_id) {
+      setBranchFilter(profile.branch_id);
+    }
+    setBranchResolved(true);
+  }, [profile, isAdmin]);
+
+  // Wait for both the branch lock AND the customers list (needed to resolve
+  // which customer IDs belong to that branch) before running the report —
+  // otherwise it filters against an empty customers array and returns nothing.
+  useEffect(() => {
+    if (!branchResolved || !optionsLoaded) return;
+    generateReport();
+  }, [branchResolved, optionsLoaded]);
 
   async function loadFilterOptions() {
     const [b, a, c] = await Promise.all([
@@ -45,6 +68,7 @@ export default function PaymentReportsPage() {
     setBranches(b.data ?? []);
     setAreas(a.data ?? []);
     setCustomers(c.data ?? []);
+    setOptionsLoaded(true);
   }
 
   async function generateReport() {
@@ -222,13 +246,19 @@ export default function PaymentReportsPage() {
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="space-y-2 flex-1">
               <Label>Branch</Label>
-              <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); setCustomerFilter('all'); }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Branches</SelectItem>
-                  {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {isAdmin ? (
+                <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); setCustomerFilter('all'); }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Branches</SelectItem>
+                    {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
+                  {branches.find(b => b.id === branchFilter)?.name ?? '—'}
+                </div>
+              )}
             </div>
             <div className="space-y-2 flex-1">
               <Label>Area</Label>
