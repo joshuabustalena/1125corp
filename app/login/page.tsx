@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Eye, EyeOff, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
+import { Eye, EyeOff, ShieldCheck, Loader2, AlertCircle, Mail, Lock, ArrowRight, Sparkles, FileCheck2 } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -39,105 +39,133 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex">
-      {/* Left panel - branding */}
-      <div className="hidden lg:flex lg:w-1/2 bg-[rgb(11,31,58)] relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-20 left-20 w-72 h-72 bg-white rounded-full blur-3xl" />
-          <div className="absolute bottom-20 right-20 w-96 h-96 bg-blue-400 rounded-full blur-3xl" />
-        </div>
-        <div className="relative z-10 flex flex-col justify-between p-12 text-white">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center overflow-hidden shrink-0">
-              <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={48} height={48} className="object-contain" />
+    <div className="min-h-screen relative flex items-center justify-center p-6 overflow-hidden">
+      {/* Full-bleed background image */}
+      <Image
+        src="/image/coverbackground.png"
+        alt=""
+        fill
+        priority
+        className="object-cover"
+      />
+      {/* Gradient overlay for legibility + brand tint */}
+      <div className="absolute inset-0 bg-gradient-to-br from-[rgb(11,31,58)]/90 via-[rgb(11,31,58)]/70 to-black/80" />
+      <div className="absolute inset-0 opacity-20">
+        <div className="absolute top-[-10%] left-[-5%] w-96 h-96 bg-blue-400 rounded-full blur-3xl" />
+        <div className="absolute bottom-[-10%] right-[-5%] w-[28rem] h-[28rem] bg-primary rounded-full blur-3xl" />
+      </div>
+
+      <div className="relative z-10 w-full max-w-[90rem] grid grid-cols-1 lg:grid-cols-2 gap-20 items-center px-6">
+        {/* Left - branding */}
+        <div className="hidden lg:flex flex-col gap-10 text-white">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-2xl bg-white flex items-center justify-center overflow-hidden shrink-0 shadow-lg">
+              <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={64} height={64} className="object-contain" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">1125Corp</h1>
-              <p className="text-sm text-white/60">1125corp.org</p>
+              <h1 className="text-3xl font-bold tracking-tight">1125Corp</h1>
+              <p className="text-base text-white/60">1125corp.org</p>
             </div>
           </div>
+
           <div className="space-y-6">
-            <h2 className="text-4xl font-bold leading-tight">
-              Enterprise Loan Management System
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-xs font-medium tracking-wide text-white/80 backdrop-blur-sm">
+              <Sparkles className="w-3.5 h-3.5 text-blue-300" />
+              ENTERPRISE-GRADE PLATFORM
+            </div>
+            <h2 className="text-6xl font-bold leading-[1.1] tracking-tight">
+              Enterprise Loan<br />
+              <span className="bg-gradient-to-r from-blue-300 via-sky-200 to-white bg-clip-text text-transparent">
+                Management System
+              </span>
             </h2>
-            <p className="text-lg text-white/70 max-w-md">
+            <p className="text-xl text-white/70 max-w-xl">
               Professional lending platform with collections, payroll, accounting,
               and real-time analytics for modern lending corporations.
             </p>
-            <div className="grid grid-cols-2 gap-4 max-w-md">
-              {[
-                'Customer Management',
-                'Loan Processing',
-                'Payment Collection',
-                'Payroll & HR',
-                'Accounting',
-                'Audit & Reports',
-              ].map((feature) => (
-                <div key={feature} className="flex items-center gap-2 text-sm text-white/80">
-                  <ShieldCheck className="w-4 h-4 text-green-400" />
-                  {feature}
-                </div>
-              ))}
-            </div>
           </div>
-          <p className="text-sm text-white/40">
+
+          <div className="grid grid-cols-2 gap-4 max-w-xl">
+            {[
+              'Customer Management',
+              'Loan Processing',
+              'Payment Collection',
+              'Payroll & HR',
+              'Accounting',
+              'Audit & Reports',
+            ].map((feature, i) => (
+              <div
+                key={feature}
+                className="flex items-center gap-2.5 text-base text-white/85 animate-fade-in"
+                style={{ animationDelay: `${i * 60}ms`, animationFillMode: 'backwards' }}
+              >
+                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                {feature}
+              </div>
+            ))}
+          </div>
+
+          <p className="text-base text-white/40">
             © 2026 1125Corp. All rights reserved.
           </p>
         </div>
-      </div>
 
-      {/* Right panel - form */}
-      <div className="flex-1 flex items-center justify-center p-6 bg-secondary">
-        <div className="w-full max-w-md animate-slide-up">
-          <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-            <div className="w-12 h-12 rounded-xl bg-white border border-border flex items-center justify-center overflow-hidden shrink-0">
-              <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={48} height={48} className="object-contain" />
+        {/* Right - form */}
+        <div className="w-full max-w-lg mx-auto lg:mx-0 lg:ml-auto animate-slide-up">
+          <div className="lg:hidden flex items-center gap-3 mb-8 justify-center text-white">
+            <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center overflow-hidden shrink-0 shadow-lg">
+              <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={56} height={56} className="object-contain" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-primary">1125Corp</h1>
-              <p className="text-sm text-muted-foreground">1125corp.org</p>
+              <h1 className="text-2xl font-bold">1125Corp</h1>
+              <p className="text-sm text-white/60">1125corp.org</p>
             </div>
           </div>
 
-          <div className="glass-card rounded-2xl p-8 border border-border">
-            <h2 className="text-2xl font-bold text-primary mb-1">Welcome back</h2>
-            <p className="text-muted-foreground text-sm mb-6">
+          <div className="relative rounded-3xl p-11 border border-white/10 bg-[rgb(11,31,58)]/70 backdrop-blur-2xl shadow-2xl shadow-black/50 overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 via-sky-400 to-blue-500" />
+            <h2 className="text-3xl font-bold text-white mb-2">Welcome back</h2>
+            <p className="text-white/60 text-base mb-8">
               Sign in to access your dashboard
             </p>
 
             {error && (
-              <div className="mb-4 flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm animate-fade-in">
+              <div className="mb-5 flex items-center gap-2 p-3.5 rounded-lg bg-destructive/20 border border-destructive/30 text-white text-sm animate-fade-in">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 {error}
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="admin@1125corp.org"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  autoComplete="email"
-                  className="h-11"
-                />
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-2.5">
+                <Label htmlFor="email" className="text-white/80 text-base">Email Address</Label>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40" />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="admin@1125corp.org"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                    className="h-[3.25rem] text-base pl-12 pr-4 bg-white/10 border-white/20 text-white placeholder:text-white/40 focus-visible:ring-white/40 transition-colors focus-visible:bg-white/[0.14]"
+                  />
+                </div>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password" className="text-white/80 text-base">Password</Label>
                   <Link
                     href="/forgot-password"
-                    className="text-sm text-primary hover:underline"
+                    className="text-sm text-white/70 hover:text-white hover:underline"
                   >
                     Forgot password?
                   </Link>
                 </div>
                 <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40" />
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
@@ -146,12 +174,12 @@ export default function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     required
                     autoComplete="current-password"
-                    className="h-11 pr-10"
+                    className="h-[3.25rem] text-base pl-12 pr-11 bg-white/10 border-white/20 text-white placeholder:text-white/40 focus-visible:ring-white/40 transition-colors focus-visible:bg-white/[0.14]"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/50 hover:text-white transition-colors"
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
@@ -163,15 +191,16 @@ export default function LoginPage() {
                   id="remember"
                   checked={remember}
                   onCheckedChange={(checked) => setRemember(checked === true)}
+                  className="border-white/30 data-[state=checked]:bg-white data-[state=checked]:text-primary"
                 />
-                <Label htmlFor="remember" className="text-sm text-muted-foreground cursor-pointer">
+                <Label htmlFor="remember" className="text-base text-white/60 cursor-pointer">
                   Remember me for 30 days
                 </Label>
               </div>
 
               <Button
                 type="submit"
-                className="w-full h-11 text-base"
+                className="group w-full h-[3.25rem] text-lg bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-500 hover:to-blue-400 shadow-lg shadow-blue-950/40 transition-all hover:shadow-xl hover:shadow-blue-900/40 hover:-translate-y-0.5"
                 disabled={submitting}
               >
                 {submitting ? (
@@ -180,20 +209,27 @@ export default function LoginPage() {
                     Signing in...
                   </>
                 ) : (
-                  'Sign In'
+                  <>
+                    Sign In
+                    <ArrowRight className="w-5 h-5 ml-2 transition-transform group-hover:translate-x-1" />
+                  </>
                 )}
               </Button>
             </form>
 
-            <div className="mt-6 pt-6 border-t border-border">
-              <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                <ShieldCheck className="w-4 h-4" />
-                Protected by enterprise-grade security
+            <div className="mt-8 pt-6 border-t border-white/10 flex items-center justify-center gap-6">
+              <div className="flex items-center gap-1.5 text-xs text-white/50">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400/80" />
+                Encrypted connection
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-white/50">
+                <FileCheck2 className="w-3.5 h-3.5 text-emerald-400/80" />
+                Audit-ready records
               </div>
             </div>
           </div>
 
-          <p className="text-center text-sm text-muted-foreground mt-6">
+          <p className="text-center text-base text-white/60 mt-8">
             Need an account? Contact your system administrator.
           </p>
         </div>
