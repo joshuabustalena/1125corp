@@ -21,7 +21,8 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDate, formatTime, formatDuration, exportToCSV } from '@/lib/format';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search } from 'lucide-react';
 
 type CameraMode = 'checkin' | 'checkout';
 
@@ -32,10 +33,16 @@ export default function AttendancePage() {
   const isAdmin = profile?.role_name === 'Administrator';
   const [records, setRecords] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [positions, setPositions] = useState<any[]>([]);
   const [myEmployeeId, setMyEmployeeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [filterEmployee, setFilterEmployee] = useState('all');
+  const [search, setSearch] = useState('');
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [positionFilter, setPositionFilter] = useState('all');
+  const [employeeStatusFilter, setEmployeeStatusFilter] = useState('all');
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraMode, setCameraMode] = useState<CameraMode>('checkin');
@@ -61,6 +68,11 @@ export default function AttendancePage() {
   const loadSeq = useRef(0);
 
   useEffect(() => { if (profile) { loadEmployees(); } }, [profile]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    supabase.from('branches').select('id, name').eq('status', 'active').order('name').then(({ data }) => setBranches(data ?? []));
+    supabase.from('roles').select('id, name').neq('name', 'Administrator').order('name').then(({ data }) => setPositions(data ?? []));
+  }, [isAdmin]);
   // Deep-link support: /attendance?employee=<id> (e.g. from the employee
   // detail page's "Attendance" button) pre-selects that employee's filter.
   useEffect(() => {
@@ -68,12 +80,12 @@ export default function AttendancePage() {
     const employeeParam = searchParams.get('employee');
     if (employeeParam) setFilterEmployee(employeeParam);
   }, [isAdmin, searchParams]);
-  useEffect(() => { if (profile) load(); }, [filterEmployee, profile, myEmployeeId]);
+  useEffect(() => { if (profile) load(); }, [filterEmployee, branchFilter, positionFilter, employeeStatusFilter, search, profile, myEmployeeId]);
   useEffect(() => () => stopStream(), []);
 
   async function loadEmployees() {
     if (isAdmin) {
-      const { data } = await supabase.from('employees').select('id, first_name, last_name').eq('status', 'active');
+      const { data } = await supabase.from('employees').select('id, first_name, last_name, branch_id, position, status');
       setEmployees(data ?? []);
       return;
     }
@@ -91,6 +103,21 @@ export default function AttendancePage() {
     }
   }
 
+  // Branch/Position/Status/Search narrow the pool of employees, which then
+  // narrows the attendance records down to just those employees' ids — same
+  // pattern as the Payment Reports branch filter.
+  function filteredEmployeeIds(): string[] | null {
+    if (branchFilter === 'all' && positionFilter === 'all' && employeeStatusFilter === 'all' && !search) return null;
+    return employees
+      .filter(e =>
+        (branchFilter === 'all' || e.branch_id === branchFilter) &&
+        (positionFilter === 'all' || e.position === positionFilter) &&
+        (employeeStatusFilter === 'all' || e.status === employeeStatusFilter) &&
+        (!search || `${e.first_name} ${e.last_name}`.toLowerCase().includes(search.toLowerCase()))
+      )
+      .map(e => e.id);
+  }
+
   async function load() {
     const seq = ++loadSeq.current;
     setLoading(true);
@@ -99,6 +126,9 @@ export default function AttendancePage() {
       query = query.eq('employee_id', myEmployeeId ?? '00000000-0000-0000-0000-000000000000');
     } else if (filterEmployee !== 'all') {
       query = query.eq('employee_id', filterEmployee);
+    } else {
+      const ids = filteredEmployeeIds();
+      if (ids) query = query.in('employee_id', ids.length > 0 ? ids : ['00000000-0000-0000-0000-000000000000']);
     }
     const { data } = await query.limit(50);
     if (seq !== loadSeq.current) return; // a newer load() already started — discard this stale response
@@ -303,7 +333,7 @@ export default function AttendancePage() {
                 <Label>Select Employee</Label>
                 <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
                   <SelectTrigger><SelectValue placeholder="Choose employee to check in" /></SelectTrigger>
-                  <SelectContent>{employees.map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
+                  <SelectContent>{employees.filter(e => e.status === 'active').map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
             ) : (
@@ -320,17 +350,39 @@ export default function AttendancePage() {
         </CardContent>
       </Card>
 
-      {/* Filter (admin only — non-admins only ever see their own record) */}
+      {/* Filters (admin only — non-admins only ever see their own record) */}
       {isAdmin && (
         <Card className="glass-card border-border">
-          <CardContent className="p-4">
-            <Select value={filterEmployee} onValueChange={setFilterEmployee}>
-              <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="All employees" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Employees</SelectItem>
-                {employees.map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+          <CardContent className="p-4 space-y-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search employees..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Select value={branchFilter} onValueChange={setBranchFilter}>
+                <SelectTrigger><SelectValue placeholder="Branch" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Branches</SelectItem>
+                  {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={positionFilter} onValueChange={setPositionFilter}>
+                <SelectTrigger><SelectValue placeholder="Position" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Positions</SelectItem>
+                  {positions.map(p => <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={employeeStatusFilter} onValueChange={setEmployeeStatusFilter}>
+                <SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="resigned">Resigned</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </CardContent>
         </Card>
       )}

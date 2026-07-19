@@ -66,7 +66,6 @@ export const navSections: NavSection[] = [
       { label: 'Employee Loans', href: '/employee-loans', icon: Landmark },
       { label: 'Leave Requests', href: '/leave-requests', icon: CalendarClock },
       { label: 'Attendance', href: '/attendance', icon: ClipboardCheck },
-      { label: 'Collector Attendance', href: '/collector-attendance', icon: ClipboardCheck },
     ],
   },
   {

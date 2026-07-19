@@ -21,13 +21,14 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
-import { Landmark, Plus, Download, Loader2, CheckCircle, XCircle, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Landmark, Plus, Download, Loader2, CalendarDays, ChevronLeft, ChevronRight, Pencil, Trash2, Search } from 'lucide-react';
 
 export default function EmployeeLoansPage() {
   const { toast } = useToast();
   const router = useRouter();
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
+  const isAdmin = profile?.role_name === 'Administrator';
   const [loans, setLoans] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [myEmployee, setMyEmployee] = useState<{ id: string } | null>(null);
@@ -38,6 +39,15 @@ export default function EmployeeLoansPage() {
   const [form, setForm] = useState({ employee_id: '', amount: '', deduction_amount: '', term_months: '6' });
   const [calendarLoan, setCalendarLoan] = useState<any>(null);
   const [calendarMonth, setCalendarMonth] = useState(new Date());
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [editForm, setEditForm] = useState({ amount: '', remaining_balance: '', deduction_amount: '', term_months: '', status: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [appliedFrom, setAppliedFrom] = useState('');
+  const [appliedTo, setAppliedTo] = useState('');
 
   useEffect(() => {
     if (!profile) return;
@@ -98,14 +108,52 @@ export default function EmployeeLoansPage() {
     setSaving(false);
   }
 
-  async function updateStatus(id: string, status: string) {
-    const { error } = await supabase.from('employee_loans').update({ status, approved_at: new Date().toISOString() }).eq('id', id);
-    if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    else { toast({ title: 'Success', description: `Loan ${status}` }); load(); }
+  function openEditLoan(l: any) {
+    setEditTarget(l);
+    setEditForm({
+      amount: String(l.amount), remaining_balance: String(l.remaining_balance),
+      deduction_amount: String(l.deduction_amount), term_months: String(l.term_months), status: l.status,
+    });
+  }
+
+  async function handleEditLoan(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    setEditSaving(true);
+    const { error } = await supabase.from('employee_loans').update({
+      amount: Number(editForm.amount),
+      remaining_balance: Number(editForm.remaining_balance),
+      deduction_amount: Number(editForm.deduction_amount),
+      term_months: Number(editForm.term_months),
+      status: editForm.status,
+    }).eq('id', editTarget.id);
+
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Loan updated' });
+      setEditTarget(null);
+      load();
+    }
+    setEditSaving(false);
+  }
+
+  async function handleDeleteLoan() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const { error } = await supabase.from('employee_loans').delete().eq('id', deleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Loan deleted' });
+      setDeleteTarget(null);
+      load();
+    }
+    setDeleting(false);
   }
 
   function handleExport() {
-    exportToCSV(loans.map(l => ({
+    exportToCSV(filteredLoans.map(l => ({
       Employee: `${l.employees?.first_name} ${l.employees?.last_name}`,
       Amount: l.amount, Balance: l.remaining_balance, Deduction: l.deduction_amount,
       Term: l.term_months, Status: l.status, Applied: l.created_at,
@@ -134,7 +182,12 @@ export default function EmployeeLoansPage() {
     for (let m = 0; m < termMonths; m++) {
       const year = start.getFullYear();
       const month = start.getMonth() + m;
-      dates.push(new Date(year, month, 15));
+      // If the loan starts after the 15th, that month's 15th has already
+      // passed — the first deduction is the end of that month instead
+      // (30th, or 31st for months with 31 days).
+      if (m > 0 || start.getDate() <= 15) {
+        dates.push(new Date(year, month, 15));
+      }
       dates.push(new Date(year, month + 1, 0));
     }
     let remaining = Number(loan.amount);
@@ -175,6 +228,16 @@ export default function EmployeeLoansPage() {
   const calendarSchedule = calendarLoan ? computeEmployeeSchedule(calendarLoan) : [];
   const scheduleByDate = new Map(calendarSchedule.map(s => [dateKey(s.date), s]));
 
+  const filteredLoans = loans.filter(l => {
+    const name = `${l.employees?.first_name ?? ''} ${l.employees?.last_name ?? ''}`.toLowerCase();
+    if (search && !name.includes(search.toLowerCase())) return false;
+    if (statusFilter !== 'all' && l.status !== statusFilter) return false;
+    const appliedDate = l.created_at?.split('T')[0];
+    if (appliedFrom && appliedDate < appliedFrom) return false;
+    if (appliedTo && appliedDate > appliedTo) return false;
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <PageHeader title="Employee Loans" description="Manage employee loan applications (max ₱15,000, 2 active, 6 months)">
@@ -190,13 +253,44 @@ export default function EmployeeLoansPage() {
       </PageHeader>
 
       <Card className="glass-card border-border">
+        <CardContent className="p-4 space-y-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Search by employee name..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  {['pending', 'active', 'approved', 'completed', 'rejected'].map(s => (
+                    <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Applied From</Label>
+              <Input type="date" value={appliedFrom} onChange={(e) => setAppliedFrom(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Applied To</Label>
+              <Input type="date" value={appliedTo} onChange={(e) => setAppliedTo(e.target.value)} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card border-border">
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
-          ) : loans.length === 0 ? (
+          ) : filteredLoans.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Landmark className="w-12 h-12 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">No employee loans</p>
+              <p className="text-sm text-muted-foreground">No employee loans found</p>
             </div>
           ) : (
             <Table>
@@ -213,7 +307,7 @@ export default function EmployeeLoansPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loans.map(l => (
+                {filteredLoans.map(l => (
                   <TableRow key={l.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employee-loans/${l.id}`)}>
                     <TableCell className="text-sm font-medium">{l.employees?.first_name} {l.employees?.last_name}</TableCell>
                     <TableCell className="text-sm">{formatCurrency(l.amount)}</TableCell>
@@ -223,19 +317,16 @@ export default function EmployeeLoansPage() {
                     <TableCell><Badge variant={statusVariant(l.status)}>{l.status}</Badge></TableCell>
                     <TableCell className="text-sm">{formatDate(l.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      <div className="flex gap-1 justify-end">
-                        {(l.status === 'active' || l.status === 'approved' || l.status === 'completed') && (
-                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openCalendar(l); }} title="Deduction calendar">
-                            <CalendarDays className="w-4 h-4" />
+                      {isAdmin && (
+                        <div className="flex gap-1 justify-end">
+                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openEditLoan(l); }}>
+                            <Pencil className="w-4 h-4" />
                           </Button>
-                        )}
-                        {l.status === 'pending' && canApprove && (
-                          <>
-                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); updateStatus(l.id, 'active'); }}><CheckCircle className="w-4 h-4 text-success" /></Button>
-                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); updateStatus(l.id, 'rejected'); }}><XCircle className="w-4 h-4 text-destructive" /></Button>
-                          </>
-                        )}
-                      </div>
+                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(l); }}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -384,6 +475,56 @@ export default function EmployeeLoansPage() {
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setCalendarLoan(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editTarget} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Employee Loan</DialogTitle>
+            <DialogDescription>{editTarget?.employees?.first_name} {editTarget?.employees?.last_name}</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditLoan} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2"><Label>Amount (₱)</Label><Input type="number" required value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Remaining Balance (₱)</Label><Input type="number" value={editForm.remaining_balance} onChange={(e) => setEditForm({ ...editForm, remaining_balance: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Deduction per Payroll (₱)</Label><Input type="number" value={editForm.deduction_amount} onChange={(e) => setEditForm({ ...editForm, deduction_amount: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Term (Months)</Label><Input type="number" value={editForm.term_months} onChange={(e) => setEditForm({ ...editForm, term_months: e.target.value })} /></div>
+              <div className="space-y-2 col-span-2">
+                <Label>Status</Label>
+                <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['pending', 'active', 'approved', 'completed', 'rejected'].map(s => (
+                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+              <Button type="submit" disabled={editSaving}>{editSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Employee Loan</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete {deleteTarget?.employees?.first_name} {deleteTarget?.employees?.last_name}'s loan of {deleteTarget && formatCurrency(deleteTarget.amount)}? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteLoan} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

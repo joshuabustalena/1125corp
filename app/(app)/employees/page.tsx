@@ -221,7 +221,7 @@ export default function EmployeesPage() {
   function handleExport() {
     exportToCSV(employees.map(e => ({
       Name: `${e.first_name} ${e.last_name}`, Department: e.department ?? '', Position: e.position ?? '',
-      Branch: e.branches?.name ?? '', Salary: e.salary, Status: e.status, Hired: e.hire_date ?? '',
+      Branch: e.branches?.name ?? '', DailyRate: e.salary, Status: e.status, Hired: e.hire_date ?? '',
     })), 'employees.csv');
   }
 
@@ -288,7 +288,7 @@ export default function EmployeesPage() {
                     <TableHead>Department</TableHead>
                     <TableHead>Position</TableHead>
                     <TableHead>Branch</TableHead>
-                    <TableHead>Salary</TableHead>
+                    <TableHead>Daily Rate</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -369,7 +369,7 @@ export default function EmployeesPage() {
                   </Select>
                 </div>
               )}
-              <div className="space-y-2"><Label>Salary (₱)</Label><Input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} placeholder="0.00" /></div>
+              <div className="space-y-2"><Label>Daily Rate (₱)</Label><Input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} placeholder="0.00" /></div>
               <div className="space-y-2"><Label>Hire Date</Label><Input type="date" value={form.hire_date} onChange={(e) => setForm({ ...form, hire_date: e.target.value })} /></div>
               <div className="space-y-2"><Label>Status</Label><Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem><SelectItem value="resigned">Resigned</SelectItem></SelectContent></Select></div>
               <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
