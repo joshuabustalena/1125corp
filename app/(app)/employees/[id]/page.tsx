@@ -10,7 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials } from '@/lib/format';
 import {
-  ArrowLeft, User, Briefcase, ClipboardCheck, Loader2, Landmark,
+  ArrowLeft, User, Briefcase, ClipboardCheck, Loader2, Landmark, IdCard,
 } from 'lucide-react';
 
 export default function EmployeeDetailPage() {
@@ -159,6 +159,35 @@ export default function EmployeeDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="glass-card border-border">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <IdCard className="w-5 h-5 text-primary" />
+            Government IDs
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <p className="text-xs text-muted-foreground">SSS Number</p>
+              <p className="text-sm font-medium">{employee.sss_number ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">PhilHealth Number</p>
+              <p className="text-sm font-medium">{employee.philhealth_number ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Pag-IBIG Number</p>
+              <p className="text-sm font-medium">{employee.pagibig_number ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">TIN</p>
+              <p className="text-sm font-medium">{employee.tin_number ?? '—'}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

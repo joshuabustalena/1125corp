@@ -51,6 +51,7 @@ export default function EmployeesPage() {
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', department: '', position: '',
     branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
+    sss_number: '', philhealth_number: '', pagibig_number: '', tin_number: '',
   });
 
   useEffect(() => { load(); loadBranches(); loadAreas(); loadPositions(); }, [search, branchFilter, positionFilter, statusFilter, page]);
@@ -86,7 +87,10 @@ export default function EmployeesPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '' });
+    setForm({
+      first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
+      sss_number: '', philhealth_number: '', pagibig_number: '', tin_number: '',
+    });
     setCreateLogin(true);
     setDialogOpen(true);
   }
@@ -98,6 +102,7 @@ export default function EmployeesPage() {
       department: e.department ?? '', position: e.position ?? '', branch_id: e.branch_id ?? '', area_id: e.area_id ?? '',
       salary: String(e.salary ?? ''), status: e.status, hire_date: e.hire_date ?? '',
       phone: e.phone ?? '', email: e.email ?? '', address: e.address ?? '',
+      sss_number: e.sss_number ?? '', philhealth_number: e.philhealth_number ?? '', pagibig_number: e.pagibig_number ?? '', tin_number: e.tin_number ?? '',
     });
     setDialogOpen(true);
   }
@@ -133,6 +138,8 @@ export default function EmployeesPage() {
       salary: Number(form.salary) || 0,
       status: form.status, hire_date: form.hire_date || null,
       phone: form.phone || null, email: form.email || null, address: form.address || null,
+      sss_number: form.sss_number || null, philhealth_number: form.philhealth_number || null,
+      pagibig_number: form.pagibig_number || null, tin_number: form.tin_number || null,
     };
     if (editing) {
       const { error } = await supabase.from('employees').update(payload).eq('id', editing.id);
@@ -222,6 +229,7 @@ export default function EmployeesPage() {
     exportToCSV(employees.map(e => ({
       Name: `${e.first_name} ${e.last_name}`, Department: e.department ?? '', Position: e.position ?? '',
       Branch: e.branches?.name ?? '', DailyRate: e.salary, Status: e.status, Hired: e.hire_date ?? '',
+      SSS: e.sss_number ?? '', PhilHealth: e.philhealth_number ?? '', PagIBIG: e.pagibig_number ?? '', TIN: e.tin_number ?? '',
     })), 'employees.csv');
   }
 
@@ -376,6 +384,16 @@ export default function EmployeesPage() {
               <div className="space-y-2"><Label>Email</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
             </div>
             <div className="space-y-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Government IDs</Label>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2"><Label className="text-xs text-muted-foreground">SSS Number</Label><Input value={form.sss_number} onChange={(e) => setForm({ ...form, sss_number: e.target.value })} /></div>
+                <div className="space-y-2"><Label className="text-xs text-muted-foreground">PhilHealth Number</Label><Input value={form.philhealth_number} onChange={(e) => setForm({ ...form, philhealth_number: e.target.value })} /></div>
+                <div className="space-y-2"><Label className="text-xs text-muted-foreground">Pag-IBIG Number</Label><Input value={form.pagibig_number} onChange={(e) => setForm({ ...form, pagibig_number: e.target.value })} /></div>
+                <div className="space-y-2"><Label className="text-xs text-muted-foreground">TIN</Label><Input value={form.tin_number} onChange={(e) => setForm({ ...form, tin_number: e.target.value })} /></div>
+              </div>
+            </div>
 
             {!editing && (
               <div className="flex items-start space-x-2 rounded-lg border border-border p-3">

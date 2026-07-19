@@ -20,6 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateLoanNumber, generateVoucherNumber, computeLoanDetails } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
+import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
@@ -63,6 +64,8 @@ export default function LoanDetailPage() {
   const [releaseTarget, setReleaseTarget] = useState<any>(null);
   const [releasedTo, setReleasedTo] = useState('');
   const [releasingCollateral, setReleasingCollateral] = useState(false);
+  const [customerDocuments, setCustomerDocuments] = useState<any[]>([]);
+  const [previewDoc, setPreviewDoc] = useState<PreviewableDocument | null>(null);
 
   async function loadLoan() {
     const id = params.id as string;
@@ -75,6 +78,13 @@ export default function LoanDetailPage() {
 
     const { data: collateralData } = await supabase.from('collateral').select('*').eq('loan_id', id).order('created_at', { ascending: false });
     setCollateral(collateralData ?? []);
+
+    if (l.data?.customer_id) {
+      const { data: docs } = await supabase.from('customer_documents').select('*').eq('customer_id', l.data.customer_id).order('uploaded_at', { ascending: false });
+      setCustomerDocuments(docs ?? []);
+    } else {
+      setCustomerDocuments([]);
+    }
 
     // Walk backward through renewed_from_loan_id to build the full chain of
     // renewals for this customer, oldest first, so the calendar can show one
@@ -1042,6 +1052,25 @@ export default function LoanDetailPage() {
             </DialogDescription>
           </DialogHeader>
 
+          <div className="space-y-2">
+            <Label className="text-sm">Submitted Documents</Label>
+            {customerDocuments.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No documents uploaded for this customer yet.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {customerDocuments.map(d => (
+                  <div key={d.id} className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-secondary/50">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{d.file_name ?? d.document_type}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{d.document_type.replace(/_/g, ' ')}</p>
+                    </div>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => setPreviewDoc(d)}>View</Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {overLimit && (
             <div className="flex items-start gap-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
               <AlertTriangle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
@@ -1168,6 +1197,8 @@ export default function LoanDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <DocumentPreviewDialog doc={previewDoc} onClose={() => setPreviewDoc(null)} />
     </div>
   );
 }

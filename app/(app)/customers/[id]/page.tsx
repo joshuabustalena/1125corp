@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/table';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials } from '@/lib/format';
+import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
 import {
   ArrowLeft, Phone, Mail, MapPin, User, FileText, Landmark,
   Wallet, Calendar, Loader2, Pencil, Plus,
@@ -26,6 +27,7 @@ export default function CustomerDetailPage() {
   const [loans, setLoans] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [documents, setDocuments] = useState<any[]>([]);
+  const [previewDoc, setPreviewDoc] = useState<PreviewableDocument | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -232,9 +234,7 @@ export default function CustomerDetailPage() {
                             <p className="text-sm font-medium">{d.file_name ?? d.document_type}</p>
                             <p className="text-xs text-muted-foreground capitalize">{d.document_type.replace(/_/g, ' ')} • {formatDate(d.uploaded_at)}</p>
                           </div>
-                          <Button variant="ghost" size="sm" asChild>
-                            <a href={d.file_url} target="_blank" rel="noreferrer">View</a>
-                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setPreviewDoc(d)}>View</Button>
                         </div>
                       ))}
                     </div>
@@ -245,6 +245,8 @@ export default function CustomerDetailPage() {
           </Tabs>
         </div>
       </div>
+
+      <DocumentPreviewDialog doc={previewDoc} onClose={() => setPreviewDoc(null)} />
     </div>
   );
 }

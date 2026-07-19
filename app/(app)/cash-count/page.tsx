@@ -37,6 +37,7 @@ export default function CashCountPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
+  const [pendingRemittanceIds, setPendingRemittanceIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (isAdmin) {
@@ -62,17 +63,20 @@ export default function CashCountPage() {
     const { data: collectors } = await supabase.from('collectors').select('id').eq('branch_id', branchId);
     const collectorIds = (collectors ?? []).map(c => c.id);
 
-    const [{ data: rems }, { data: vouchers }, { data: hist }] = await Promise.all([
+    // Expected Cash = whatever's still sitting as "pending" remittances for
+    // this branch, up through the count date — not just today's, since an
+    // unreconciled remittance from an earlier day should still be expected
+    // until a count actually sweeps it up. Submitting a count marks these
+    // as "received" so they aren't counted again on a later day.
+    const [{ data: rems }, { data: hist }] = await Promise.all([
       collectorIds.length > 0
-        ? supabase.from('remittances').select('amount').eq('remittance_date', date).in('collector_id', collectorIds)
+        ? supabase.from('remittances').select('id, amount').eq('status', 'pending').lte('remittance_date', date).in('collector_id', collectorIds)
         : Promise.resolve({ data: [] as any[] }),
-      supabase.from('cash_vouchers').select('amount, voucher_date, loans(branch_id)').eq('voucher_date', date),
       supabase.from('cash_counts').select('*').eq('branch_id', branchId).order('count_date', { ascending: false }).limit(30),
     ]);
 
-    const remTotal = (rems ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0);
-    const voucherTotal = (vouchers ?? []).filter((v: any) => v.loans?.branch_id === branchId).reduce((s: number, v: any) => s + Number(v.amount), 0);
-    setExpected(remTotal - voucherTotal);
+    setPendingRemittanceIds((rems ?? []).map((r: any) => r.id));
+    setExpected((rems ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0));
     setHistory(hist ?? []);
     setLoading(false);
   }
@@ -98,6 +102,11 @@ export default function CashCountPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
+      // This count just reconciled these remittances — mark them received
+      // so they don't get counted as "pending" (and re-expected) again.
+      if (pendingRemittanceIds.length > 0) {
+        await supabase.from('remittances').update({ status: 'received', received_by: profile?.id ?? null }).in('id', pendingRemittanceIds);
+      }
       toast({ title: 'Success', description: 'Cash count recorded' });
       setVaultAmount('');
       setBankAmount('');
@@ -126,7 +135,7 @@ export default function CashCountPage() {
       </PageHeader>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <StatCard title="Expected Cash" value={formatCurrency(expected)} icon={<TrendingUp className="w-5 h-5" />} subtitle="Remittances received minus loans disbursed today" />
+        <StatCard title="Expected Cash" value={formatCurrency(expected)} icon={<TrendingUp className="w-5 h-5" />} subtitle="Total pending remittances not yet reconciled" />
         <StatCard
           title="Variance"
           value={variancePreview !== null ? formatCurrency(variancePreview) : '—'}

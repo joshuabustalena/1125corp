@@ -418,16 +418,23 @@ export default function GeneralLedgerPage() {
 
     const assets = Object.entries(byAccount).filter(([, v]) => v.type === 'asset');
     const liabilities = Object.entries(byAccount).filter(([, v]) => v.type === 'liability');
-    const equity = Object.entries(byAccount).filter(([, v]) => v.type === 'equity');
     const revenueTotal = Object.entries(byAccount).filter(([, v]) => v.type === 'revenue').reduce((s, [, v]) => s + v.balance, 0);
     const expenseTotal = Object.entries(byAccount).filter(([, v]) => v.type === 'expense').reduce((s, [, v]) => s + v.balance, 0);
     const retainedEarnings = revenueTotal - expenseTotal;
 
+    // Owner's Equity is driven by the Shareholders' Capital table (the
+    // authoritative record of actual investment), not by whatever's been
+    // posted to equity-type chart-of-accounts via journal entries — those
+    // could previously drift apart from the real capital ledger. Retained
+    // Earnings still layers on top since it's a genuinely separate
+    // component (accumulated profit/loss), not part of contributed capital.
+    const shareholdersCapital = shareholders.reduce((s, sh) => s + Number(sh.capital_contributed), 0);
+
     const totalAssets = assets.reduce((s, [, v]) => s + v.balance, 0);
     const totalLiabilities = liabilities.reduce((s, [, v]) => s + v.balance, 0);
-    const totalEquity = equity.reduce((s, [, v]) => s + v.balance, 0) + retainedEarnings;
+    const totalEquity = shareholdersCapital + retainedEarnings;
 
-    setBalanceSheet({ assets, liabilities, equity, retainedEarnings, totalAssets, totalLiabilities, totalEquity });
+    setBalanceSheet({ assets, liabilities, shareholdersCapital, retainedEarnings, totalAssets, totalLiabilities, totalEquity });
     setStatementLoading(false);
   }
 
@@ -475,7 +482,6 @@ export default function GeneralLedgerPage() {
                         </div>
                         {entry.reference && <span className="text-xs text-muted-foreground">Ref: {entry.reference}</span>}
                       </div>
-                      {entry.description && <p className="text-sm text-muted-foreground mb-2">{entry.description}</p>}
                       <Table>
                         <TableBody>
                           {(entry.journal_entry_lines ?? []).map((line: any) => (
@@ -487,6 +493,7 @@ export default function GeneralLedgerPage() {
                           ))}
                         </TableBody>
                       </Table>
+                      {entry.description && <p className="text-sm text-muted-foreground mt-2">{entry.description}</p>}
                     </div>
                   ))}
                 </div>
@@ -534,9 +541,9 @@ export default function GeneralLedgerPage() {
                     <TableRow>
                       <TableHead>Date</TableHead>
                       <TableHead>Entry #</TableHead>
-                      <TableHead>Description</TableHead>
                       <TableHead className="text-right">Debit</TableHead>
                       <TableHead className="text-right">Credit</TableHead>
+                      <TableHead>Description</TableHead>
                       <TableHead className="text-right">Balance</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -554,9 +561,9 @@ export default function GeneralLedgerPage() {
                         <TableRow key={i}>
                           <TableCell className="text-sm">{formatDate(r.date)}</TableCell>
                           <TableCell className="text-sm font-mono">{r.entryNumber}</TableCell>
-                          <TableCell className="text-sm">{r.description ?? r.memo ?? '—'}</TableCell>
                           <TableCell className="text-right text-sm">{r.debit > 0 ? formatCurrency(r.debit) : ''}</TableCell>
                           <TableCell className="text-right text-sm">{r.credit > 0 ? formatCurrency(r.credit) : ''}</TableCell>
+                          <TableCell className="text-sm">{r.description ?? r.memo ?? '—'}</TableCell>
                           <TableCell className="text-right text-sm font-medium">{formatCurrency(r.balance)}</TableCell>
                         </TableRow>
                       ))
@@ -754,9 +761,7 @@ export default function GeneralLedgerPage() {
                     <TableRow><TableCell className="font-medium">Total Liabilities</TableCell><TableCell className="text-right font-medium">{formatCurrency(balanceSheet.totalLiabilities)}</TableCell></TableRow>
 
                     <TableRow><TableCell className="font-semibold pt-4" colSpan={2}>Equity</TableCell></TableRow>
-                    {balanceSheet.equity.map(([name, v]: any) => (
-                      <TableRow key={name}><TableCell className="pl-6 text-sm">{name}</TableCell><TableCell className="text-right text-sm">{formatCurrency(v.balance)}</TableCell></TableRow>
-                    ))}
+                    <TableRow><TableCell className="pl-6 text-sm">Shareholders' Capital</TableCell><TableCell className="text-right text-sm">{formatCurrency(balanceSheet.shareholdersCapital)}</TableCell></TableRow>
                     <TableRow><TableCell className="pl-6 text-sm">Retained Earnings (computed)</TableCell><TableCell className="text-right text-sm">{formatCurrency(balanceSheet.retainedEarnings)}</TableCell></TableRow>
                     <TableRow><TableCell className="font-medium">Total Equity</TableCell><TableCell className="text-right font-medium">{formatCurrency(balanceSheet.totalEquity)}</TableCell></TableRow>
 
