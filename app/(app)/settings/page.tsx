@@ -37,8 +37,8 @@ export default function SettingsPage() {
   const [areaDialog, setAreaDialog] = useState(false);
   const [holidayDialog, setHolidayDialog] = useState(false);
 
-  const [branchForm, setBranchForm] = useState({ name: '', code: '', address: '', phone: '', email: '', max_loan_limit: '80000' });
-  const [areaForm, setAreaForm] = useState({ name: '', branch_id: '', max_loan_limit: '80000' });
+  const [branchForm, setBranchForm] = useState({ name: '', code: '', address: '', phone: '', email: '' });
+  const [areaForm, setAreaForm] = useState({ name: '', branch_id: '' });
   const [holidayForm, setHolidayForm] = useState({ name: '', holiday_date: '', type: 'regular' });
 
   const isAdmin = profile?.role_name === 'Administrator';
@@ -86,7 +86,7 @@ export default function SettingsPage() {
   }
 
   function openBranchDialog() {
-    setBranchForm({ name: '', code: nextBranchCode(), address: '', phone: '', email: '', max_loan_limit: '80000' });
+    setBranchForm({ name: '', code: nextBranchCode(), address: '', phone: '', email: '' });
     setBranchDialog(true);
   }
 
@@ -94,19 +94,17 @@ export default function SettingsPage() {
     const { error } = await supabase.from('branches').insert({
       name: branchForm.name, code: branchForm.code, address: branchForm.address || null,
       phone: branchForm.phone || null, email: branchForm.email || null,
-      max_loan_limit: Number(branchForm.max_loan_limit) || 80000,
     });
     if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    else { toast({ title: 'Success', description: 'Branch added' }); setBranchDialog(false); setBranchForm({ name: '', code: '', address: '', phone: '', email: '', max_loan_limit: '80000' }); load(); }
+    else { toast({ title: 'Success', description: 'Branch added' }); setBranchDialog(false); setBranchForm({ name: '', code: '', address: '', phone: '', email: '' }); load(); }
   }
 
   async function addArea() {
     const { error } = await supabase.from('areas').insert({
       name: areaForm.name, branch_id: areaForm.branch_id || null,
-      max_loan_limit: Number(areaForm.max_loan_limit) || 80000,
     });
     if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    else { toast({ title: 'Success', description: 'Area added' }); setAreaDialog(false); setAreaForm({ name: '', branch_id: '', max_loan_limit: '80000' }); load(); }
+    else { toast({ title: 'Success', description: 'Area added' }); setAreaDialog(false); setAreaForm({ name: '', branch_id: '' }); load(); }
   }
 
   async function addHoliday() {
@@ -200,14 +198,13 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent>
               <Table>
-                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Code</TableHead><TableHead>Address</TableHead><TableHead>Max Loan</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Code</TableHead><TableHead>Address</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {branches.map(b => (
                     <TableRow key={b.id}>
                       <TableCell className="text-sm font-medium">{b.name}</TableCell>
                       <TableCell className="text-sm font-mono">{b.code}</TableCell>
                       <TableCell className="text-sm">{b.address ?? '—'}</TableCell>
-                      <TableCell className="text-sm">₱{Number(b.max_loan_limit).toLocaleString()}</TableCell>
                       <TableCell><Badge variant={b.status === 'active' ? 'default' : 'secondary'}>{b.status}</Badge></TableCell>
                     </TableRow>
                   ))}
@@ -225,13 +222,12 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent>
               <Table>
-                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Branch</TableHead><TableHead>Max Loan</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Branch</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {areas.map(a => (
                     <TableRow key={a.id}>
                       <TableCell className="text-sm font-medium">{a.name}</TableCell>
                       <TableCell className="text-sm">{a.branches?.name ?? '—'}</TableCell>
-                      <TableCell className="text-sm">₱{Number(a.max_loan_limit).toLocaleString()}</TableCell>
                       <TableCell><Badge variant={a.status === 'active' ? 'default' : 'secondary'}>{a.status}</Badge></TableCell>
                     </TableRow>
                   ))}
@@ -314,7 +310,6 @@ export default function SettingsPage() {
               <div className="space-y-2"><Label>Phone</Label><Input value={branchForm.phone} onChange={(e) => setBranchForm({ ...branchForm, phone: e.target.value })} /></div>
               <div className="space-y-2"><Label>Email</Label><Input value={branchForm.email} onChange={(e) => setBranchForm({ ...branchForm, email: e.target.value })} /></div>
             </div>
-            <div className="space-y-2"><Label>Max Loan Limit (₱)</Label><Input type="number" value={branchForm.max_loan_limit} onChange={(e) => setBranchForm({ ...branchForm, max_loan_limit: e.target.value })} /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setBranchDialog(false)}>Cancel</Button><Button onClick={addBranch} disabled={!branchForm.name || !branchForm.code}>Add Branch</Button></DialogFooter>
         </DialogContent>
@@ -332,7 +327,6 @@ export default function SettingsPage() {
                 {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
             </div>
-            <div className="space-y-2"><Label>Max Loan Limit (₱)</Label><Input type="number" value={areaForm.max_loan_limit} onChange={(e) => setAreaForm({ ...areaForm, max_loan_limit: e.target.value })} /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setAreaDialog(false)}>Cancel</Button><Button onClick={addArea} disabled={!areaForm.name}>Add Area</Button></DialogFooter>
         </DialogContent>

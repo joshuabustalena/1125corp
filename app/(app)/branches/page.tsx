@@ -20,7 +20,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, getInitials, exportToCSV } from '@/lib/format';
+import { getInitials, exportToCSV } from '@/lib/format';
 import {
   Building2, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, Users, UserCog,
 } from 'lucide-react';
@@ -32,7 +32,6 @@ interface Branch {
   address: string | null;
   phone: string | null;
   email: string | null;
-  max_loan_limit: number;
   status: string;
 }
 
@@ -55,8 +54,7 @@ export default function BranchesPage() {
   const [viewCustomers, setViewCustomers] = useState<any[]>([]);
 
   const [form, setForm] = useState({
-    name: '', code: '', address: '', phone: '', email: '',
-    max_loan_limit: '80000', status: 'active',
+    name: '', code: '', address: '', phone: '', email: '', status: 'active',
   });
 
   useEffect(() => { load(); }, []);
@@ -104,7 +102,7 @@ export default function BranchesPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ name: '', code: nextBranchCode(), address: '', phone: '', email: '', max_loan_limit: '80000', status: 'active' });
+    setForm({ name: '', code: nextBranchCode(), address: '', phone: '', email: '', status: 'active' });
     setDialogOpen(true);
   }
 
@@ -112,7 +110,7 @@ export default function BranchesPage() {
     setEditing(b);
     setForm({
       name: b.name, code: b.code, address: b.address ?? '', phone: b.phone ?? '',
-      email: b.email ?? '', max_loan_limit: String(b.max_loan_limit ?? '80000'), status: b.status,
+      email: b.email ?? '', status: b.status,
     });
     setDialogOpen(true);
   }
@@ -135,7 +133,6 @@ export default function BranchesPage() {
     const payload = {
       name: form.name, code: form.code, address: form.address || null,
       phone: form.phone || null, email: form.email || null,
-      max_loan_limit: Number(form.max_loan_limit) || 0,
       status: form.status,
     };
     if (editing) {
@@ -161,7 +158,7 @@ export default function BranchesPage() {
     exportToCSV(branches.map(b => ({
       Name: b.name, Code: b.code, Manager: (managersByBranch[b.id] ?? []).join('; '),
       Employees: employeeCounts[b.id] ?? 0, Customers: customerCounts[b.id] ?? 0,
-      MaxLoanLimit: b.max_loan_limit, Status: b.status,
+      Status: b.status,
     })), 'branches.csv');
   }
 
@@ -202,7 +199,6 @@ export default function BranchesPage() {
                   <TableHead>Manager</TableHead>
                   <TableHead>Employees</TableHead>
                   <TableHead>Clients</TableHead>
-                  <TableHead>Max Loan</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -223,7 +219,6 @@ export default function BranchesPage() {
                     <TableCell className="text-sm">
                       <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5 text-muted-foreground" />{customerCounts[b.id] ?? 0}</span>
                     </TableCell>
-                    <TableCell className="text-sm font-medium">{formatCurrency(b.max_loan_limit)}</TableCell>
                     <TableCell><Badge variant={b.status === 'active' ? 'default' : 'secondary'}>{b.status}</Badge></TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="icon" onClick={() => openView(b)}><Eye className="w-4 h-4" /></Button>
@@ -252,7 +247,6 @@ export default function BranchesPage() {
               <div className="space-y-2 col-span-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
               <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
               <div className="space-y-2"><Label>Email</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-              <div className="space-y-2"><Label>Max Loan Limit (₱)</Label><Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} /></div>
               <div className="space-y-2">
                 <Label>Status</Label>
                 <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>

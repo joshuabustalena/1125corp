@@ -67,7 +67,6 @@ export default function CustomersPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [collectors, setCollectors] = useState<any[]>([]);
-  const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('all');
@@ -122,7 +121,7 @@ export default function CustomersPage() {
 
   async function loadOptions() {
     let branchQuery = supabase.from('branches').select('id, name').eq('status', 'active');
-    let areaQuery = supabase.from('areas').select('id, name, branch_id, max_loan_limit').eq('status', 'active');
+    let areaQuery = supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
     if (isCollector && myCollector) {
       branchQuery = branchQuery.eq('id', myCollector.branch_id ?? '00000000-0000-0000-0000-000000000000');
       areaQuery = areaQuery.eq('branch_id', myCollector.branch_id ?? '00000000-0000-0000-0000-000000000000');
@@ -130,25 +129,14 @@ export default function CustomersPage() {
       branchQuery = branchQuery.eq('id', profile.branch_id);
       areaQuery = areaQuery.eq('branch_id', profile.branch_id);
     }
-    const [b, a, c, ac] = await Promise.all([
+    const [b, a, c] = await Promise.all([
       branchQuery,
       areaQuery,
       supabase.from('collectors').select('id, profile_id, branch_id, area_id, profiles(full_name)').eq('status', 'active'),
-      supabase.from('customers').select('id, area_id, max_loan_limit'),
     ]);
     setBranches(b.data ?? []);
     setAreas(a.data ?? []);
     setCollectors(c.data ?? []);
-    setAllCustomers(ac.data ?? []);
-  }
-
-  function getAreaPool(areaId: string, excludeCustomerId?: string) {
-    const area = areas.find((a) => a.id === areaId);
-    if (!area) return null;
-    const allocated = allCustomers
-      .filter((c) => c.area_id === areaId && c.id !== excludeCustomerId)
-      .reduce((sum, c) => sum + Number(c.max_loan_limit), 0);
-    return { total: Number(area.max_loan_limit), allocated, remaining: Number(area.max_loan_limit) - allocated };
   }
 
   async function loadCustomers() {
@@ -238,27 +226,8 @@ export default function CustomersPage() {
     };
   }
 
-  function checkAreaLimit(): boolean {
-    if (form.area_id) {
-      const pool = getAreaPool(form.area_id, editing?.id);
-      const requested = Number(form.max_loan_limit) || 0;
-      if (pool && requested > pool.remaining) {
-        toast({
-          title: 'No loan limit available',
-          description: pool.remaining <= 0
-            ? 'This area\'s entire loan limit is already allocated to other customers.'
-            : `Only ${formatCurrency(pool.remaining)} is left to allocate for this area.`,
-          variant: 'destructive',
-        });
-        return false;
-      }
-    }
-    return true;
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!checkAreaLimit()) return;
 
     if (editing) {
       setSaving(true);
@@ -513,10 +482,7 @@ export default function CustomersPage() {
           <Label>Area</Label>
           <Select
             value={form.area_id}
-            onValueChange={(v) => {
-              const pool = getAreaPool(v, editing?.id);
-              setForm({ ...form, area_id: v, collector_id: '', max_loan_limit: pool ? String(Math.max(0, pool.remaining)) : form.max_loan_limit });
-            }}
+            onValueChange={(v) => setForm({ ...form, area_id: v, collector_id: '' })}
           >
             <SelectTrigger><SelectValue placeholder="Select area" /></SelectTrigger>
             <SelectContent>
@@ -548,15 +514,6 @@ export default function CustomersPage() {
         <div className="space-y-2">
           <Label>Max Loan Limit (₱)</Label>
           <Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} />
-          {form.area_id && (() => {
-            const pool = getAreaPool(form.area_id, editing?.id);
-            if (!pool) return null;
-            return pool.remaining <= 0 ? (
-              <p className="text-xs text-destructive">No loan limit available — this area's full {formatCurrency(pool.total)} is already allocated to other customers.</p>
-            ) : (
-              <p className="text-xs text-muted-foreground">{formatCurrency(pool.remaining)} available to allocate (of {formatCurrency(pool.total)} total for this area)</p>
-            );
-          })()}
         </div>
       </div>
       <div className="space-y-2">
