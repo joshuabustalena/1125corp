@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,15 +18,11 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { getInitials, exportToCSV } from '@/lib/format';
 import {
-  MapPin, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, Users, UserCheck, ChevronDown, Check,
+  MapPin, Plus, Search, Download, Pencil, Trash2, Loader2, Users, UserCheck,
 } from 'lucide-react';
 
 interface Area {
@@ -38,6 +35,7 @@ interface Area {
 
 export default function AreasPage() {
   const { toast } = useToast();
+  const router = useRouter();
   const [areas, setAreas] = useState<Area[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [collectorCounts, setCollectorCounts] = useState<Record<string, number>>({});
@@ -45,15 +43,11 @@ export default function AreasPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Area | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Area | null>(null);
   const [saving, setSaving] = useState(false);
-
-  const [viewTarget, setViewTarget] = useState<Area | null>(null);
-  const [viewLoading, setViewLoading] = useState(false);
-  const [viewCollectors, setViewCollectors] = useState<any[]>([]);
-  const [viewCustomers, setViewCustomers] = useState<any[]>([]);
 
   const [form, setForm] = useState({
     name: '', branch_id: '', status: 'active',
@@ -102,18 +96,6 @@ export default function AreasPage() {
     setDialogOpen(true);
   }
 
-  async function openView(a: Area) {
-    setViewTarget(a);
-    setViewLoading(true);
-    const [collectorsRes, customersRes] = await Promise.all([
-      supabase.from('employees').select('id, first_name, last_name, status').eq('area_id', a.id).eq('position', 'Branch Field Collector').order('first_name'),
-      supabase.from('customers').select('id, first_name, last_name, phone, status').eq('area_id', a.id).order('first_name'),
-    ]);
-    setViewCollectors(collectorsRes.data ?? []);
-    setViewCustomers(customersRes.data ?? []);
-    setViewLoading(false);
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
@@ -151,7 +133,8 @@ export default function AreasPage() {
 
   const filtered = areas.filter(a =>
     (!search || a.name.toLowerCase().includes(search.toLowerCase())) &&
-    (branchFilter === 'all' || a.branch_id === branchFilter)
+    (branchFilter === 'all' || a.branch_id === branchFilter) &&
+    (statusFilter === 'all' || a.status === statusFilter)
   );
 
   return (
@@ -162,10 +145,33 @@ export default function AreasPage() {
       </PageHeader>
 
       <Card className="glass-card border-border">
-        <CardContent className="p-4">
+        <CardContent className="p-4 space-y-4">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input placeholder="Search areas..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Branch</Label>
+              <Select value={branchFilter} onValueChange={setBranchFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Branches</SelectItem>
+                  {branches.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="inactive">Inactive</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -176,26 +182,7 @@ export default function AreasPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Area</TableHead>
-                <TableHead>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
-                      Branch
-                      <ChevronDown className="w-3.5 h-3.5" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuItem onClick={() => setBranchFilter('all')} className="flex items-center justify-between">
-                        All Branches
-                        {branchFilter === 'all' && <Check className="w-4 h-4" />}
-                      </DropdownMenuItem>
-                      {branches.map((b) => (
-                        <DropdownMenuItem key={b.id} onClick={() => setBranchFilter(b.id)} className="flex items-center justify-between">
-                          {b.name}
-                          {branchFilter === b.id && <Check className="w-4 h-4" />}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableHead>
+                <TableHead>Branch</TableHead>
                 <TableHead>Collectors</TableHead>
                 <TableHead>Clients</TableHead>
                 <TableHead>Status</TableHead>
@@ -218,7 +205,7 @@ export default function AreasPage() {
                 </TableRow>
               ) : (
                 filtered.map(a => (
-                  <TableRow key={a.id} className="hover:bg-secondary/50">
+                  <TableRow key={a.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/areas/${a.id}`)}>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="w-9 h-9"><AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(a.name)}</AvatarFallback></Avatar>
@@ -233,8 +220,7 @@ export default function AreasPage() {
                       <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5 text-muted-foreground" />{customerCounts[a.id] ?? 0}</span>
                     </TableCell>
                     <TableCell><Badge variant={a.status === 'active' ? 'default' : 'secondary'}>{a.status}</Badge></TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" onClick={() => openView(a)}><Eye className="w-4 h-4" /></Button>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       <Button variant="ghost" size="icon" onClick={() => openEdit(a)}><Pencil className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(a)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                     </TableCell>
@@ -287,61 +273,6 @@ export default function AreasPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={handleDelete}>Delete</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Drill-down view: area -> collectors -> clients */}
-      <Dialog open={!!viewTarget} onOpenChange={(open) => !open && setViewTarget(null)}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><MapPin className="w-5 h-5" />{viewTarget?.name}</DialogTitle>
-            <DialogDescription>Branch: {viewTarget?.branches?.name ?? 'Unassigned'}</DialogDescription>
-          </DialogHeader>
-          {viewLoading ? (
-            <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
-          ) : (
-            <Tabs defaultValue="collectors">
-              <TabsList>
-                <TabsTrigger value="collectors">Collectors ({viewCollectors.length})</TabsTrigger>
-                <TabsTrigger value="clients">Clients ({viewCustomers.length})</TabsTrigger>
-              </TabsList>
-              <TabsContent value="collectors">
-                {viewCollectors.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-8 text-center">No collectors assigned to this area</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {viewCollectors.map((c: any) => (
-                        <TableRow key={c.id}>
-                          <TableCell className="text-sm font-medium">{c.first_name} {c.last_name}</TableCell>
-                          <TableCell><Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </TabsContent>
-              <TabsContent value="clients">
-                {viewCustomers.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-8 text-center">No clients assigned to this area</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Phone</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {viewCustomers.map((c: any) => (
-                        <TableRow key={c.id}>
-                          <TableCell className="text-sm font-medium">{c.first_name} {c.last_name}</TableCell>
-                          <TableCell className="text-sm">{c.phone ?? '—'}</TableCell>
-                          <TableCell><Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </TabsContent>
-            </Tabs>
-          )}
         </DialogContent>
       </Dialog>
     </div>

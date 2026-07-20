@@ -8,22 +8,41 @@ import { Badge } from '@/components/ui/badge';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDateTime } from '@/lib/format';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 import { Bell, Loader2, Mail, MessageSquare, Send } from 'lucide-react';
 
+function roleToRecipientType(roleName: string | null | undefined): string | null {
+  if (!roleName) return null;
+  return roleName.toLowerCase().replace(/\s+/g, '_');
+}
+
 export default function NotificationsPage() {
+  const { profile } = useAuth();
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { if (profile) load(); }, [profile]);
 
   async function load() {
     setLoading(true);
     await checkDueDateAlerts();
-    const { data } = await supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(50);
+    const isAdmin = profile?.role_name === 'Administrator';
+    let query = supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(50);
+    if (!isAdmin) {
+      const myType = roleToRecipientType(profile?.role_name);
+      query = query.in('recipient_type', [myType, 'all'].filter(Boolean) as string[]);
+    }
+    const { data } = await query;
     setNotifications(data ?? []);
+    // Opening this page reads everything currently shown, same as opening
+    // the topbar bell dropdown.
+    const unreadIds = (data ?? []).filter((n: any) => !n.read_at).map((n: any) => n.id);
+    if (unreadIds.length > 0) {
+      await supabase.from('notifications').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
+    }
     setLoading(false);
   }
 

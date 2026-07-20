@@ -22,24 +22,36 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDate } from '@/lib/format';
-import { CalendarClock, Plus, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search } from 'lucide-react';
 
 export default function LeaveRequestsPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
+  const isAdmin = profile?.role_name === 'Administrator';
   const [loading, setLoading] = useState(true);
   const [myEmployee, setMyEmployee] = useState<{ id: string; paid_leaves_used: number } | null>(null);
   const [annualLeaves, setAnnualLeaves] = useState(5);
   const [requests, setRequests] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ leave_type: 'vacation', start_date: '', end_date: '', reason: '' });
+  const [form, setForm] = useState({ employee_id: '', leave_type: 'vacation', start_date: '', end_date: '', reason: '' });
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [appliedFrom, setAppliedFrom] = useState('');
+  const [appliedTo, setAppliedTo] = useState('');
 
   useEffect(() => {
     if (!profile) return;
     load();
+    if (canApprove) loadEmployees();
   }, [profile]);
+
+  async function loadEmployees() {
+    const { data } = await supabase.from('employees').select('id, first_name, last_name, paid_leaves_used').eq('status', 'active');
+    setEmployees(data ?? []);
+  }
 
   async function load() {
     setLoading(true);
@@ -60,7 +72,7 @@ export default function LeaveRequestsPage() {
   }
 
   function openRequest() {
-    setForm({ leave_type: 'vacation', start_date: '', end_date: '', reason: '' });
+    setForm({ employee_id: canApprove ? '' : (myEmployee?.id ?? ''), leave_type: 'vacation', start_date: '', end_date: '', reason: '' });
     setDialogOpen(true);
   }
 
@@ -70,24 +82,43 @@ export default function LeaveRequestsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!myEmployee || !form.start_date || !form.end_date || days <= 0) return;
+    const targetEmployeeId = canApprove ? form.employee_id : myEmployee?.id;
+    if (!targetEmployeeId || !form.start_date || !form.end_date || days <= 0) return;
     setSaving(true);
+
+    // An Administrator creating a leave request directly (e.g. logging
+    // approved time off on an employee's behalf) doesn't need to route it
+    // through a separate approval step — it's auto-approved on creation,
+    // same as if it had already gone through updateStatus('approved').
+    const autoApprove = isAdmin;
     const { error } = await supabase.from('leave_requests').insert({
-      employee_id: myEmployee.id,
+      employee_id: targetEmployeeId,
       leave_type: form.leave_type,
       start_date: form.start_date,
       end_date: form.end_date,
       days,
       reason: form.reason || null,
-      status: 'pending',
+      status: autoApprove ? 'approved' : 'pending',
+      approved_by: autoApprove ? (profile?.id ?? null) : null,
+      approved_at: autoApprove ? new Date().toISOString() : null,
     });
+
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Success', description: 'Leave request submitted' });
-      setDialogOpen(false);
-      load();
+      setSaving(false);
+      return;
     }
+
+    if (autoApprove) {
+      const targetEmployee = employees.find(e => e.id === targetEmployeeId) ?? myEmployee;
+      await supabase.from('employees').update({
+        paid_leaves_used: (targetEmployee?.paid_leaves_used ?? 0) + days,
+      }).eq('id', targetEmployeeId);
+    }
+
+    toast({ title: 'Success', description: autoApprove ? 'Leave request added and approved' : 'Leave request submitted' });
+    setDialogOpen(false);
+    load();
     setSaving(false);
   }
 
@@ -117,10 +148,20 @@ export default function LeaveRequestsPage() {
   const balance = annualLeaves - (myEmployee?.paid_leaves_used ?? 0);
   const statusVariant = (s: string) => s === 'approved' ? 'default' : s === 'rejected' ? 'destructive' : 'outline';
 
+  const filteredRequests = requests.filter(r => {
+    const name = `${r.employees?.first_name ?? ''} ${r.employees?.last_name ?? ''}`.toLowerCase();
+    if (search && !name.includes(search.toLowerCase())) return false;
+    if (statusFilter !== 'all' && r.status !== statusFilter) return false;
+    const appliedDate = r.created_at?.split('T')[0];
+    if (appliedFrom && appliedDate < appliedFrom) return false;
+    if (appliedTo && appliedDate > appliedTo) return false;
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <PageHeader title="Leave Requests" description="Request time off and check your leave balance">
-        <Button size="sm" onClick={openRequest} disabled={!myEmployee}>
+        <Button size="sm" onClick={openRequest} disabled={!canApprove && !myEmployee}>
           <Plus className="w-4 h-4 mr-2" />
           Request Leave
         </Button>
@@ -135,13 +176,44 @@ export default function LeaveRequestsPage() {
       )}
 
       <Card className="glass-card border-border">
+        <CardContent className="p-4 space-y-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Search by employee name..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  {['pending', 'approved', 'rejected'].map(s => (
+                    <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Applied From</Label>
+              <Input type="date" value={appliedFrom} onChange={(e) => setAppliedFrom(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Applied To</Label>
+              <Input type="date" value={appliedTo} onChange={(e) => setAppliedTo(e.target.value)} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card border-border">
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
-          ) : requests.length === 0 ? (
+          ) : filteredRequests.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <CalendarClock className="w-12 h-12 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">No leave requests {canApprove ? '' : 'yet'}</p>
+              <p className="text-sm text-muted-foreground">No leave requests found</p>
             </div>
           ) : (
             <Table>
@@ -158,7 +230,7 @@ export default function LeaveRequestsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {requests.map(r => (
+                {filteredRequests.map(r => (
                   <TableRow key={r.id} className="hover:bg-secondary/50">
                     {canApprove && <TableCell className="text-sm font-medium">{r.employees?.first_name} {r.employees?.last_name}</TableCell>}
                     <TableCell className="text-sm capitalize">{r.leave_type}</TableCell>
@@ -189,9 +261,20 @@ export default function LeaveRequestsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Request Leave</DialogTitle>
-            <DialogDescription>Submit a leave request for Branch Manager approval</DialogDescription>
+            <DialogDescription>
+              {isAdmin ? 'Add a leave request — this will be auto-approved immediately' : 'Submit a leave request for Branch Manager approval'}
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
+            {canApprove && (
+              <div className="space-y-2">
+                <Label>Employee *</Label>
+                <Select value={form.employee_id} onValueChange={(v) => setForm({ ...form, employee_id: v })} required>
+                  <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
+                  <SelectContent>{employees.map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Leave Type</Label>
               <Select value={form.leave_type} onValueChange={(v) => setForm({ ...form, leave_type: v })}>
@@ -214,20 +297,24 @@ export default function LeaveRequestsPage() {
                 <Input type="date" required value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} />
               </div>
             </div>
-            {days > 0 && (
-              <p className="text-sm text-muted-foreground">
-                {days} day{days !== 1 ? 's' : ''} — remaining balance after this request: {balance - days}
-              </p>
-            )}
+            {days > 0 && (() => {
+              const target = canApprove ? employees.find(e => e.id === form.employee_id) : myEmployee;
+              const targetBalance = target ? annualLeaves - (target.paid_leaves_used ?? 0) : null;
+              return (
+                <p className="text-sm text-muted-foreground">
+                  {days} day{days !== 1 ? 's' : ''}{targetBalance !== null ? ` — remaining balance after this request: ${targetBalance - days}` : ''}
+                </p>
+              );
+            })()}
             <div className="space-y-2">
               <Label>Reason</Label>
               <Textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} rows={3} />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving || days <= 0}>
+              <Button type="submit" disabled={saving || days <= 0 || (canApprove && !form.employee_id)}>
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Submit Request
+                {isAdmin ? 'Add & Approve' : 'Submit Request'}
               </Button>
             </DialogFooter>
           </form>

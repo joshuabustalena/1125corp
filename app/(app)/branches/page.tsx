@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,12 +18,11 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { getInitials, exportToCSV } from '@/lib/format';
 import {
-  Building2, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, Users, UserCog,
+  Building2, Plus, Search, Download, Pencil, Trash2, Loader2, Users, UserCog,
 } from 'lucide-react';
 
 interface Branch {
@@ -37,6 +37,7 @@ interface Branch {
 
 export default function BranchesPage() {
   const { toast } = useToast();
+  const router = useRouter();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [employeeCounts, setEmployeeCounts] = useState<Record<string, number>>({});
   const [customerCounts, setCustomerCounts] = useState<Record<string, number>>({});
@@ -47,11 +48,6 @@ export default function BranchesPage() {
   const [editing, setEditing] = useState<Branch | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Branch | null>(null);
   const [saving, setSaving] = useState(false);
-
-  const [viewTarget, setViewTarget] = useState<Branch | null>(null);
-  const [viewLoading, setViewLoading] = useState(false);
-  const [viewEmployees, setViewEmployees] = useState<any[]>([]);
-  const [viewCustomers, setViewCustomers] = useState<any[]>([]);
 
   const [form, setForm] = useState({
     name: '', code: '', address: '', phone: '', email: '', status: 'active',
@@ -113,18 +109,6 @@ export default function BranchesPage() {
       email: b.email ?? '', status: b.status,
     });
     setDialogOpen(true);
-  }
-
-  async function openView(b: Branch) {
-    setViewTarget(b);
-    setViewLoading(true);
-    const [employeesRes, customersRes] = await Promise.all([
-      supabase.from('employees').select('id, first_name, last_name, position, department, status').eq('branch_id', b.id).order('first_name'),
-      supabase.from('customers').select('id, first_name, last_name, phone, status').eq('branch_id', b.id).order('first_name'),
-    ]);
-    setViewEmployees(employeesRes.data ?? []);
-    setViewCustomers(customersRes.data ?? []);
-    setViewLoading(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -205,7 +189,7 @@ export default function BranchesPage() {
               </TableHeader>
               <TableBody>
                 {filtered.map(b => (
-                  <TableRow key={b.id} className="hover:bg-secondary/50">
+                  <TableRow key={b.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/branches/${b.id}`)}>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="w-9 h-9"><AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(b.name)}</AvatarFallback></Avatar>
@@ -220,8 +204,7 @@ export default function BranchesPage() {
                       <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5 text-muted-foreground" />{customerCounts[b.id] ?? 0}</span>
                     </TableCell>
                     <TableCell><Badge variant={b.status === 'active' ? 'default' : 'secondary'}>{b.status}</Badge></TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" onClick={() => openView(b)}><Eye className="w-4 h-4" /></Button>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       <Button variant="ghost" size="icon" onClick={() => openEdit(b)}><Pencil className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(b)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                     </TableCell>
@@ -276,65 +259,6 @@ export default function BranchesPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={handleDelete}>Delete</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Drill-down view: branch -> employees -> clients */}
-      <Dialog open={!!viewTarget} onOpenChange={(open) => !open && setViewTarget(null)}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Building2 className="w-5 h-5" />{viewTarget?.name}</DialogTitle>
-            <DialogDescription>
-              {viewTarget?.code} · Manager: {viewTarget ? ((managersByBranch[viewTarget.id] ?? []).join(', ') || 'Unassigned') : ''}
-            </DialogDescription>
-          </DialogHeader>
-          {viewLoading ? (
-            <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
-          ) : (
-            <Tabs defaultValue="employees">
-              <TabsList>
-                <TabsTrigger value="employees">Employees ({viewEmployees.length})</TabsTrigger>
-                <TabsTrigger value="clients">Clients ({viewCustomers.length})</TabsTrigger>
-              </TabsList>
-              <TabsContent value="employees">
-                {viewEmployees.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-8 text-center">No employees assigned to this branch</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Department</TableHead><TableHead>Position</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {viewEmployees.map((e: any) => (
-                        <TableRow key={e.id}>
-                          <TableCell className="text-sm font-medium">{e.first_name} {e.last_name}</TableCell>
-                          <TableCell className="text-sm">{e.department ?? '—'}</TableCell>
-                          <TableCell className="text-sm">{e.position ?? '—'}</TableCell>
-                          <TableCell><Badge variant={e.status === 'active' ? 'default' : 'secondary'}>{e.status}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </TabsContent>
-              <TabsContent value="clients">
-                {viewCustomers.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-8 text-center">No clients assigned to this branch</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Phone</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {viewCustomers.map((c: any) => (
-                        <TableRow key={c.id}>
-                          <TableCell className="text-sm font-medium">{c.first_name} {c.last_name}</TableCell>
-                          <TableCell className="text-sm">{c.phone ?? '—'}</TableCell>
-                          <TableCell><Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </TabsContent>
-            </Tabs>
-          )}
         </DialogContent>
       </Dialog>
     </div>
