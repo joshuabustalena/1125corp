@@ -19,6 +19,7 @@ import {
   ArrowRightLeft,
   CalendarClock,
   BookOpen,
+  TrendingUp,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -56,6 +57,7 @@ export const navSections: NavSection[] = [
       { label: 'Payments', href: '/payments', icon: Wallet },
       { label: 'Penalties', href: '/penalties', icon: AlertCircle },
       { label: 'Payment Reports', href: '/payment-reports', icon: Receipt },
+      { label: 'Credit Limit Requests', href: '/credit-limit-requests', icon: TrendingUp },
     ],
   },
   {

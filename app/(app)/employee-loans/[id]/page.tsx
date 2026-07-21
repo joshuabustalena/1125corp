@@ -22,7 +22,9 @@ import {
   ArrowLeft, Landmark, User, CheckCircle, XCircle, CalendarDays, ChevronLeft, ChevronRight, Loader2, AlertTriangle,
 } from 'lucide-react';
 
-const MAX_EMPLOYEE_LOAN = 15000;
+function maxLoanAmount(position: string | null | undefined) {
+  return position === 'Branch Manager' ? 20000 : 15000;
+}
 
 export default function EmployeeLoanDetailPage() {
   const params = useParams();
@@ -30,6 +32,7 @@ export default function EmployeeLoanDetailPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  const isBranchManager = profile?.role_name === 'Branch Manager';
   const [loan, setLoan] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [calendarMonth, setCalendarMonth] = useState(new Date());
@@ -46,7 +49,7 @@ export default function EmployeeLoanDetailPage() {
     const id = params.id as string;
     const { data } = await supabase
       .from('employee_loans')
-      .select('*, employees(first_name, last_name, department, position, phone, email, branches(name)), approved_by_profile:profiles!approved_by(full_name)')
+      .select('*, employees(first_name, last_name, department, position, phone, email, branch_id, branches(name)), approved_by_profile:profiles!approved_by(full_name)')
       .eq('id', id)
       .maybeSingle();
     setLoan(data);
@@ -157,6 +160,16 @@ export default function EmployeeLoanDetailPage() {
     return <p className="text-center text-muted-foreground py-16">Employee loan not found</p>;
   }
 
+  // A Branch Manager approves their own branch's staff loans, but a loan
+  // where the applicant IS a Branch Manager always requires Administrator
+  // approval instead — avoids a Manager approving their own or a peer's loan.
+  const applicantMaxLoan = maxLoanAmount(loan.employees?.position);
+  const canApprove = isAdmin || (
+    isBranchManager &&
+    loan.employees?.position !== 'Branch Manager' &&
+    loan.employees?.branch_id === profile?.branch_id
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -167,7 +180,7 @@ export default function EmployeeLoanDetailPage() {
           <ArrowLeft className="w-4 h-4 mr-2" />
           Back
         </Button>
-        {loan.status === 'pending' && isAdmin && (
+        {loan.status === 'pending' && canApprove && (
           <>
             <Button size="sm" onClick={() => setApproveOpen(true)}>
               <CheckCircle className="w-4 h-4 mr-2" />
@@ -361,11 +374,11 @@ export default function EmployeeLoanDetailPage() {
               Approve {formatCurrency(loan.amount)} for {loan.employees?.first_name} {loan.employees?.last_name}? This will activate the loan and begin the deduction schedule.
             </DialogDescription>
           </DialogHeader>
-          {Number(loan.amount) > MAX_EMPLOYEE_LOAN && (
+          {Number(loan.amount) > applicantMaxLoan && (
             <div className="flex items-start gap-2 p-3 rounded-lg bg-warning/10 border border-warning/20">
               <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
               <p className="text-sm">
-                This loan ({formatCurrency(loan.amount)}) exceeds the maximum employee loan limit of {formatCurrency(MAX_EMPLOYEE_LOAN)}.
+                This loan ({formatCurrency(loan.amount)}) exceeds the maximum employee loan limit of {formatCurrency(applicantMaxLoan)}.
               </p>
             </div>
           )}

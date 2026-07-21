@@ -24,14 +24,28 @@ import { supabase } from '@/lib/supabase/client';
 import { formatDate } from '@/lib/format';
 import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search } from 'lucide-react';
 
+// 5 regular leave terms, plus a separate Special Leave category (solo
+// parent, VAWC, etc.) with its own +7-day allowance — additive on top of
+// the regular annual allowance, tracked in its own bucket.
+const LEAVE_TYPES = [
+  { value: 'vacation', label: 'Vacation' },
+  { value: 'sick', label: 'Sick' },
+  { value: 'emergency', label: 'Emergency' },
+  { value: 'bereavement', label: 'Bereavement' },
+  { value: 'other', label: 'Other' },
+];
+const SPECIAL_LEAVE_TYPE = 'special';
+
 export default function LeaveRequestsPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const isAdmin = profile?.role_name === 'Administrator';
+  const isBranchManager = profile?.role_name === 'Branch Manager';
   const [loading, setLoading] = useState(true);
-  const [myEmployee, setMyEmployee] = useState<{ id: string; paid_leaves_used: number } | null>(null);
+  const [myEmployee, setMyEmployee] = useState<{ id: string; paid_leaves_used: number; special_leaves_used?: number; position?: string | null; branch_id?: string | null } | null>(null);
   const [annualLeaves, setAnnualLeaves] = useState(5);
+  const [specialLeavesAnnual, setSpecialLeavesAnnual] = useState(7);
   const [requests, setRequests] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -49,26 +63,43 @@ export default function LeaveRequestsPage() {
   }, [profile]);
 
   async function loadEmployees() {
-    const { data } = await supabase.from('employees').select('id, first_name, last_name, paid_leaves_used').eq('status', 'active');
+    let q = supabase.from('employees').select('id, first_name, last_name, paid_leaves_used, special_leaves_used, position, branch_id').eq('status', 'active');
+    // A Branch Manager can only request/track leave on behalf of their own branch's staff.
+    if (isBranchManager && profile?.branch_id) q = q.eq('branch_id', profile.branch_id);
+    const { data } = await q;
     setEmployees(data ?? []);
   }
 
   async function load() {
     setLoading(true);
-    const [{ data: emp }, { data: setting }] = await Promise.all([
-      supabase.from('employees').select('id, paid_leaves_used').eq('profile_id', profile?.id ?? '').maybeSingle(),
+    const [{ data: emp }, { data: setting }, { data: specialSetting }] = await Promise.all([
+      supabase.from('employees').select('id, paid_leaves_used, special_leaves_used, position, branch_id').eq('profile_id', profile?.id ?? '').maybeSingle(),
       supabase.from('settings').select('value').eq('key', 'paid_leaves_annual').maybeSingle(),
+      supabase.from('settings').select('value').eq('key', 'special_leaves_annual').maybeSingle(),
     ]);
     setMyEmployee(emp);
     if (setting?.value) setAnnualLeaves(Number(setting.value));
+    if (specialSetting?.value) setSpecialLeavesAnnual(Number(specialSetting.value));
 
-    let q = supabase.from('leave_requests').select('*, employees(first_name, last_name)').order('created_at', { ascending: false });
+    let q = supabase.from('leave_requests').select('*, employees(first_name, last_name, position, branch_id)').order('created_at', { ascending: false });
     if (!canApprove) {
       q = q.eq('employee_id', emp?.id ?? '00000000-0000-0000-0000-000000000000');
     }
     const { data } = await q;
-    setRequests(data ?? []);
+    // A Branch Manager only sees their own branch's requests — a Manager-tier
+    // applicant's own leave still requires Administrator approval (handled
+    // per-row below), but the list itself is branch-scoped here.
+    const scoped = isBranchManager && profile?.branch_id
+      ? (data ?? []).filter((r: any) => r.employees?.branch_id === profile.branch_id)
+      : (data ?? []);
+    setRequests(scoped);
     setLoading(false);
+  }
+
+  function canApproveRequest(r: any): boolean {
+    if (isAdmin) return true;
+    if (!isBranchManager) return false;
+    return r.employees?.position !== 'Branch Manager' && r.employees?.branch_id === profile?.branch_id;
   }
 
   function openRequest() {
@@ -111,9 +142,9 @@ export default function LeaveRequestsPage() {
 
     if (autoApprove) {
       const targetEmployee = employees.find(e => e.id === targetEmployeeId) ?? myEmployee;
-      await supabase.from('employees').update({
-        paid_leaves_used: (targetEmployee?.paid_leaves_used ?? 0) + days,
-      }).eq('id', targetEmployeeId);
+      const field = form.leave_type === SPECIAL_LEAVE_TYPE ? 'special_leaves_used' : 'paid_leaves_used';
+      const current = form.leave_type === SPECIAL_LEAVE_TYPE ? (targetEmployee?.special_leaves_used ?? 0) : (targetEmployee?.paid_leaves_used ?? 0);
+      await supabase.from('employees').update({ [field]: current + days }).eq('id', targetEmployeeId);
     }
 
     toast({ title: 'Success', description: autoApprove ? 'Leave request added and approved' : 'Leave request submitted' });
@@ -135,10 +166,10 @@ export default function LeaveRequestsPage() {
     }
 
     if (status === 'approved') {
-      const { data: emp } = await supabase.from('employees').select('paid_leaves_used').eq('id', request.employee_id).maybeSingle();
-      await supabase.from('employees').update({
-        paid_leaves_used: (emp?.paid_leaves_used ?? 0) + request.days,
-      }).eq('id', request.employee_id);
+      const field = request.leave_type === SPECIAL_LEAVE_TYPE ? 'special_leaves_used' : 'paid_leaves_used';
+      const { data: emp } = await supabase.from('employees').select(field).eq('id', request.employee_id).maybeSingle();
+      const current = (emp as any)?.[field] ?? 0;
+      await supabase.from('employees').update({ [field]: current + request.days }).eq('id', request.employee_id);
     }
 
     toast({ title: 'Success', description: `Leave request ${status}` });
@@ -146,6 +177,7 @@ export default function LeaveRequestsPage() {
   }
 
   const balance = annualLeaves - (myEmployee?.paid_leaves_used ?? 0);
+  const specialBalance = specialLeavesAnnual - (myEmployee?.special_leaves_used ?? 0);
   const statusVariant = (s: string) => s === 'approved' ? 'default' : s === 'rejected' ? 'destructive' : 'outline';
 
   const filteredRequests = requests.filter(r => {
@@ -168,11 +200,18 @@ export default function LeaveRequestsPage() {
       </PageHeader>
 
       {myEmployee && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard title="Annual Paid Leaves" value={annualLeaves.toString()} icon={<CalendarClock className="w-5 h-5" />} />
-          <StatCard title="Used" value={(myEmployee.paid_leaves_used ?? 0).toString()} icon={<CalendarClock className="w-5 h-5" />} variant="warning" />
-          <StatCard title="Remaining Balance" value={balance.toString()} icon={<CalendarClock className="w-5 h-5" />} variant={balance > 0 ? 'success' : 'danger'} />
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <StatCard title="Annual Paid Leaves" value={annualLeaves.toString()} icon={<CalendarClock className="w-5 h-5" />} />
+            <StatCard title="Used" value={(myEmployee.paid_leaves_used ?? 0).toString()} icon={<CalendarClock className="w-5 h-5" />} variant="warning" />
+            <StatCard title="Remaining Balance" value={balance.toString()} icon={<CalendarClock className="w-5 h-5" />} variant={balance > 0 ? 'success' : 'danger'} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <StatCard title="Special Leave Allowance" value={specialLeavesAnnual.toString()} icon={<CalendarClock className="w-5 h-5" />} />
+            <StatCard title="Special Leave Used" value={(myEmployee.special_leaves_used ?? 0).toString()} icon={<CalendarClock className="w-5 h-5" />} variant="warning" />
+            <StatCard title="Special Leave Remaining" value={specialBalance.toString()} icon={<CalendarClock className="w-5 h-5" />} variant={specialBalance > 0 ? 'success' : 'danger'} />
+          </div>
+        </>
       )}
 
       <Card className="glass-card border-border">
@@ -242,10 +281,14 @@ export default function LeaveRequestsPage() {
                     {canApprove && (
                       <TableCell className="text-right">
                         {r.status === 'pending' && (
-                          <div className="flex gap-1 justify-end">
-                            <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-4 h-4 text-success" /></Button>
-                            <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>
-                          </div>
+                          canApproveRequest(r) ? (
+                            <div className="flex gap-1 justify-end">
+                              <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-4 h-4 text-success" /></Button>
+                              <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Pending Admin approval</span>
+                          )
                         )}
                       </TableCell>
                     )}
@@ -280,12 +323,13 @@ export default function LeaveRequestsPage() {
               <Select value={form.leave_type} onValueChange={(v) => setForm({ ...form, leave_type: v })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="vacation">Vacation</SelectItem>
-                  <SelectItem value="sick">Sick</SelectItem>
-                  <SelectItem value="emergency">Emergency</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
+                  {LEAVE_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                  <SelectItem value={SPECIAL_LEAVE_TYPE}>Special Leave (solo parent, VAWC, etc.)</SelectItem>
                 </SelectContent>
               </Select>
+              {form.leave_type === SPECIAL_LEAVE_TYPE && (
+                <p className="text-xs text-muted-foreground">Uses the separate +{specialLeavesAnnual}-day special leave allowance, on top of the regular annual leave balance. Please specify the qualifying reason below.</p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -299,10 +343,13 @@ export default function LeaveRequestsPage() {
             </div>
             {days > 0 && (() => {
               const target = canApprove ? employees.find(e => e.id === form.employee_id) : myEmployee;
-              const targetBalance = target ? annualLeaves - (target.paid_leaves_used ?? 0) : null;
+              const isSpecial = form.leave_type === SPECIAL_LEAVE_TYPE;
+              const targetBalance = target
+                ? (isSpecial ? specialLeavesAnnual - (target.special_leaves_used ?? 0) : annualLeaves - (target.paid_leaves_used ?? 0))
+                : null;
               return (
                 <p className="text-sm text-muted-foreground">
-                  {days} day{days !== 1 ? 's' : ''}{targetBalance !== null ? ` — remaining balance after this request: ${targetBalance - days}` : ''}
+                  {days} day{days !== 1 ? 's' : ''}{targetBalance !== null ? ` — remaining ${isSpecial ? 'special leave' : ''} balance after this request: ${targetBalance - days}` : ''}
                 </p>
               );
             })()}

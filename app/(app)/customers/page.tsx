@@ -98,7 +98,7 @@ export default function CustomersPage() {
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', phone: '', email: '',
     address: '', barangay: '', city: '', province: '', zip_code: '',
-    branch_id: '', area_id: '', collector_id: '', max_loan_limit: '80000',
+    branch_id: '', area_id: '', collector_id: '', max_loan_limit: '30000',
     status: 'active', gender: '', birth_date: '', government_id: '',
   });
 
@@ -177,7 +177,7 @@ export default function CustomersPage() {
     setForm({
       first_name: '', last_name: '', middle_name: '', phone: '', email: '',
       address: '', barangay: '', city: '', province: '', zip_code: '',
-      branch_id: !isAdmin ? (profile?.branch_id ?? '') : '', area_id: '', collector_id: '', max_loan_limit: '80000',
+      branch_id: !isAdmin ? (profile?.branch_id ?? '') : '', area_id: '', collector_id: '', max_loan_limit: '30000',
       status: 'active', gender: '', birth_date: '', government_id: '',
     });
     setDialogOpen(true);
@@ -218,7 +218,7 @@ export default function CustomersPage() {
       branch_id: form.branch_id || null,
       area_id: form.area_id || null,
       collector_id: form.collector_id || null,
-      max_loan_limit: Number(form.max_loan_limit) || 80000,
+      max_loan_limit: Number(form.max_loan_limit) || 30000,
       status: form.status,
       gender: form.gender || null,
       birth_date: form.birth_date || null,
@@ -513,7 +513,12 @@ export default function CustomersPage() {
         </div>
         <div className="space-y-2">
           <Label>Max Loan Limit (₱)</Label>
-          <Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} />
+          {isAdmin ? (
+            <Input type="number" value={form.max_loan_limit} onChange={(e) => setForm({ ...form, max_loan_limit: e.target.value })} />
+          ) : (
+            <Input value={formatCurrency(Number(form.max_loan_limit))} disabled className="bg-muted" />
+          )}
+          {!isAdmin && <p className="text-xs text-muted-foreground">Only an Administrator can set a customer's max loan limit.</p>}
         </div>
       </div>
       <div className="space-y-2">

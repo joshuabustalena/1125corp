@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth-context';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +24,8 @@ import Link from 'next/link';
 export default function CustomerDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { profile } = useAuth();
+  const isBranchManager = profile?.role_name === 'Branch Manager';
   const [customer, setCustomer] = useState<any>(null);
   const [loans, setLoans] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
@@ -123,10 +126,15 @@ export default function CustomerDetailPage() {
                 <span className="text-muted-foreground">Collector:</span>
                 <span className="font-medium">{customer.collectors?.profiles?.full_name ?? '—'}</span>
               </div>
-              <div className="flex justify-between text-sm">
+              <div className="flex justify-between text-sm items-center">
                 <span className="text-muted-foreground">Max Loan:</span>
                 <span className="font-medium">{formatCurrency(customer.max_loan_limit)}</span>
               </div>
+              {isBranchManager && (
+                <Button variant="outline" size="sm" className="w-full" onClick={() => router.push(`/credit-limit-requests?customer=${customer.id}`)}>
+                  Request Limit Increase
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>

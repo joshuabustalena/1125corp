@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/format';
+import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { ArrowLeft, Banknote, Download, Loader2 } from 'lucide-react';
 
 function formatVoucherDate(date: string | Date | null | undefined): string {
@@ -80,6 +81,7 @@ export default function VoucherPage() {
     firstPayment,
     beginningBalance,
   };
+  const branding = getDocumentBranding(loan.branches?.name);
 
   const vTable: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 12 };
   const vCell: React.CSSProperties = { border: '1px solid #000', padding: '6px 10px', verticalAlign: 'middle' };
@@ -91,7 +93,7 @@ export default function VoucherPage() {
       {checked ? '✓' : ''}
     </span>
   );
-  const pageStyle: React.CSSProperties = { width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif' };
+  const pageStyle: React.CSSProperties = { width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif' };
 
   async function handlePrint() {
     const refs = [page1Ref, page2Ref, page3Ref].filter(r => r.current);
@@ -134,7 +136,8 @@ export default function VoucherPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      // 8.5" x 13" (Philippine "folio"/long bond paper), in points (72pt/in).
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
       const pxToPt = 0.75;
@@ -192,17 +195,17 @@ export default function VoucherPage() {
             </table>
 
             <p style={{ fontWeight: 700, fontSize: 12, marginTop: 16, textAlign: 'justify', textIndent: 40 }}>
-              I further certify that this Cash Voucher constitutes sufficient proof and evidence of my receipt of the net loan proceeds. I hereby waive any claim, demand, complaint, or action against 1125 Lending Corporation for any alleged cash shortage, deficiency, or non-receipt of the loan proceeds after the execution and signing of this document.
+              I further certify that this Cash Voucher constitutes sufficient proof and evidence of my receipt of the net loan proceeds. I hereby waive any claim, demand, complaint, or action against {COMPANY_NAME_DISPLAY} for any alleged cash shortage, deficiency, or non-receipt of the loan proceeds after the execution and signing of this document.
             </p>
             <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333' }}>
-              (Pinatutunayan ko na ang Cash Voucher na ito ay sapat na katibayan at patunay na aking natanggap ang nitong halaga ng aking loan. Nauunawaan ko na hindi maari ang anumang paghahabol, reklamo, demanda, o anumang aksyon laban sa 1125 Lending Corporation kaugnay ng anumang kakulangan sa salapi, diperensya, o hindi pagtanggap ng loan proceeds matapos kong lagdaan at maisakatuparan ang dokumentong ito)
+              (Pinatutunayan ko na ang Cash Voucher na ito ay sapat na katibayan at patunay na aking natanggap ang nitong halaga ng aking loan. Nauunawaan ko na hindi maari ang anumang paghahabol, reklamo, demanda, o anumang aksyon laban sa {COMPANY_NAME_DISPLAY} kaugnay ng anumang kakulangan sa salapi, diperensya, o hindi pagtanggap ng loan proceeds matapos kong lagdaan at maisakatuparan ang dokumentong ito)
             </p>
 
             <p style={{ fontWeight: 700, fontSize: 12, textAlign: 'justify', textIndent: 40 }}>
-              The amount of my loan shall be reflected in the Field Collector's Customer List together with the corresponding beginning balance. Attached hereto are copies of the Loan Agreement and Kasunduan, which shall serve as proof of the proper and lawful release of the loan proceeds by the duly authorized collectors of 1125 Lending Corporation.
+              The amount of my loan shall be reflected in the Field Collector's Customer List together with the corresponding beginning balance. Attached hereto are copies of the Loan Agreement and Kasunduan, which shall serve as proof of the proper and lawful release of the loan proceeds by the duly authorized collectors of {COMPANY_NAME_DISPLAY}.
             </p>
             <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333' }}>
-              (Ang halaga ng aking loan ay makikita sa Customer List ng Field Collector kasama ang kaukulang panimulang balanse. Nakalakip dito ang mga kopya ng Loan Agreement at Kasunduan na magsisilbing patunay ng maayos, tama, at naaayon sa batas na pagpapalabas ng loan proceeds ng mga awtorisadong kolektor ng 1125 Lending Corporation.)
+              (Ang halaga ng aking loan ay makikita sa Customer List ng Field Collector kasama ang kaukulang panimulang balanse. Nakalakip dito ang mga kopya ng Loan Agreement at Kasunduan na magsisilbing patunay ng maayos, tama, at naaayon sa batas na pagpapalabas ng loan proceeds ng mga awtorisadong kolektor ng {COMPANY_NAME_DISPLAY}.)
             </p>
 
             {voucherData.isRenewal && (
@@ -238,8 +241,10 @@ export default function VoucherPage() {
 
           {/* PAGE 2 — Cash Voucher (Branch Cashier -> Field Collector) */}
           <div ref={page2Ref} style={pageStyle}>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#0B1F3A', marginBottom: 16 }}>
-              1125 LENDING CORPORATION
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 18, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.address.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CEL NO: {branding.contact}</div>
             </div>
             <table style={vTable}>
               <tbody>
@@ -256,8 +261,12 @@ export default function VoucherPage() {
 
           {/* PAGE 3 — Acknowledgement Receipt of Loan */}
           <div ref={page3Ref} style={pageStyle}>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#0B1F3A' }}>1125 LENDING CORPORATION</div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, color: '#0B1F3A', marginBottom: 16 }}>ACKNOWLEDGEMENT RECEIPT OF LOAN</div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontWeight: 700, fontSize: 18, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.address.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CEL NO: {branding.contact}</div>
+            </div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, color: '#0B1F3A', marginBottom: 16, marginTop: 8 }}>ACKNOWLEDGEMENT RECEIPT OF LOAN</div>
             <table style={vTable}>
               <tbody>
                 <tr><td style={vCell}>Date of Receipt:</td><td style={vCell}>{formatVoucherDate(voucherData.date)}</td></tr>
@@ -296,17 +305,17 @@ export default function VoucherPage() {
             </table>
 
             <p style={{ fontWeight: 700, fontSize: 12, marginTop: 16, textAlign: 'justify', textIndent: 40 }}>
-              I further certify that this Cash Voucher constitutes sufficient proof and evidence of my receipt of the net loan proceeds. I hereby waive any claim, demand, complaint, or action against 1125 Lending Corporation for any alleged cash shortage, deficiency, or non-receipt of the loan proceeds after the execution and signing of this document.
+              I further certify that this Cash Voucher constitutes sufficient proof and evidence of my receipt of the net loan proceeds. I hereby waive any claim, demand, complaint, or action against {COMPANY_NAME_DISPLAY} for any alleged cash shortage, deficiency, or non-receipt of the loan proceeds after the execution and signing of this document.
             </p>
             <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333' }}>
-              (Pinatutunayan ko na ang Cash Voucher na ito ay sapat na katibayan at patunay na aking natanggap ang nitong halaga ng aking loan. Nauunawaan ko na hindi maari ang anumang paghahabol, reklamo, demanda, o anumang aksyon laban sa 1125 Lending Corporation kaugnay ng anumang kakulangan sa salapi, diperensya, o hindi pagtanggap ng loan proceeds matapos kong lagdaan at maisakatuparan ang dokumentong ito)
+              (Pinatutunayan ko na ang Cash Voucher na ito ay sapat na katibayan at patunay na aking natanggap ang nitong halaga ng aking loan. Nauunawaan ko na hindi maari ang anumang paghahabol, reklamo, demanda, o anumang aksyon laban sa {COMPANY_NAME_DISPLAY} kaugnay ng anumang kakulangan sa salapi, diperensya, o hindi pagtanggap ng loan proceeds matapos kong lagdaan at maisakatuparan ang dokumentong ito)
             </p>
 
             <p style={{ fontWeight: 700, fontSize: 12, textAlign: 'justify', textIndent: 40 }}>
-              The amount of my loan shall be reflected in the Field Collector's Customer List together with the corresponding beginning balance. Attached hereto are copies of the Loan Agreement and Kasunduan, which shall serve as proof of the proper and lawful release of the loan proceeds by the duly authorized collectors of 1125 Lending Corporation.
+              The amount of my loan shall be reflected in the Field Collector's Customer List together with the corresponding beginning balance. Attached hereto are copies of the Loan Agreement and Kasunduan, which shall serve as proof of the proper and lawful release of the loan proceeds by the duly authorized collectors of {COMPANY_NAME_DISPLAY}.
             </p>
             <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333' }}>
-              (Ang halaga ng aking loan ay makikita sa Customer List ng Field Collector kasama ang kaukulang panimulang balanse. Nakalakip dito ang mga kopya ng Loan Agreement at Kasunduan na magsisilbing patunay ng maayos, tama, at naaayon sa batas na pagpapalabas ng loan proceeds ng mga awtorisadong kolektor ng 1125 Lending Corporation.)
+              (Ang halaga ng aking loan ay makikita sa Customer List ng Field Collector kasama ang kaukulang panimulang balanse. Nakalakip dito ang mga kopya ng Loan Agreement at Kasunduan na magsisilbing patunay ng maayos, tama, at naaayon sa batas na pagpapalabas ng loan proceeds ng mga awtorisadong kolektor ng {COMPANY_NAME_DISPLAY}.)
             </p>
           </div>
         </div>

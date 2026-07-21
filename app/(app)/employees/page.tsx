@@ -50,7 +50,7 @@ export default function EmployeesPage() {
 
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', department: '', position: '',
-    branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
+    branch_id: '', area_id: '', salary: '', pay_type: 'daily', status: 'active', hire_date: '', phone: '', email: '', address: '',
     sss_number: '', philhealth_number: '', pagibig_number: '', tin_number: '',
   });
 
@@ -88,7 +88,7 @@ export default function EmployeesPage() {
   function openCreate() {
     setEditing(null);
     setForm({
-      first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', area_id: '', salary: '', status: 'active', hire_date: '', phone: '', email: '', address: '',
+      first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', area_id: '', salary: '', pay_type: 'daily', status: 'active', hire_date: '', phone: '', email: '', address: '',
       sss_number: '', philhealth_number: '', pagibig_number: '', tin_number: '',
     });
     setCreateLogin(true);
@@ -100,7 +100,7 @@ export default function EmployeesPage() {
     setForm({
       first_name: e.first_name, last_name: e.last_name, middle_name: e.middle_name ?? '',
       department: e.department ?? '', position: e.position ?? '', branch_id: e.branch_id ?? '', area_id: e.area_id ?? '',
-      salary: String(e.salary ?? ''), status: e.status, hire_date: e.hire_date ?? '',
+      salary: String(e.salary ?? ''), pay_type: e.pay_type ?? 'daily', status: e.status, hire_date: e.hire_date ?? '',
       phone: e.phone ?? '', email: e.email ?? '', address: e.address ?? '',
       sss_number: e.sss_number ?? '', philhealth_number: e.philhealth_number ?? '', pagibig_number: e.pagibig_number ?? '', tin_number: e.tin_number ?? '',
     });
@@ -135,7 +135,7 @@ export default function EmployeesPage() {
       department: form.department || null, position: form.position || null,
       branch_id: form.branch_id || null,
       area_id: form.position === 'Branch Field Collector' ? (form.area_id || null) : null,
-      salary: Number(form.salary) || 0,
+      salary: Number(form.salary) || 0, pay_type: form.pay_type,
       status: form.status, hire_date: form.hire_date || null,
       phone: form.phone || null, email: form.email || null, address: form.address || null,
       sss_number: form.sss_number || null, philhealth_number: form.philhealth_number || null,
@@ -228,7 +228,7 @@ export default function EmployeesPage() {
   function handleExport() {
     exportToCSV(employees.map(e => ({
       Name: `${e.first_name} ${e.last_name}`, Department: e.department ?? '', Position: e.position ?? '',
-      Branch: e.branches?.name ?? '', DailyRate: e.salary, Status: e.status, Hired: e.hire_date ?? '',
+      Branch: e.branches?.name ?? '', PayType: e.pay_type ?? 'daily', Salary: e.salary, Status: e.status, Hired: e.hire_date ?? '',
       SSS: e.sss_number ?? '', PhilHealth: e.philhealth_number ?? '', PagIBIG: e.pagibig_number ?? '', TIN: e.tin_number ?? '',
     })), 'employees.csv');
   }
@@ -316,7 +316,7 @@ export default function EmployeesPage() {
                       <TableCell className="text-sm">{e.department ?? '—'}</TableCell>
                       <TableCell className="text-sm">{e.position ?? '—'}</TableCell>
                       <TableCell className="text-sm">{e.branches?.name ?? '—'}</TableCell>
-                      <TableCell className="text-sm font-medium">{formatCurrency(e.salary)}</TableCell>
+                      <TableCell className="text-sm font-medium">{formatCurrency(e.salary)}{e.pay_type === 'monthly' ? '/mo' : '/day'}</TableCell>
                       <TableCell><Badge variant={e.status === 'active' ? 'default' : 'secondary'}>{e.status}</Badge></TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end" onClick={(e2) => e2.stopPropagation()}>
@@ -377,7 +377,20 @@ export default function EmployeesPage() {
                   </Select>
                 </div>
               )}
-              <div className="space-y-2"><Label>Daily Rate (₱)</Label><Input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} placeholder="0.00" /></div>
+              <div className="space-y-2">
+                <Label>Pay Type</Label>
+                <Select value={form.pay_type} onValueChange={(v) => setForm({ ...form, pay_type: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Daily Rate</SelectItem>
+                    <SelectItem value="monthly">Fixed Monthly Salary</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>{form.pay_type === 'monthly' ? 'Monthly Salary (₱)' : 'Daily Rate (₱)'}</Label>
+                <Input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} placeholder="0.00" />
+              </div>
               <div className="space-y-2"><Label>Hire Date</Label><Input type="date" value={form.hire_date} onChange={(e) => setForm({ ...form, hire_date: e.target.value })} /></div>
               <div className="space-y-2"><Label>Status</Label><Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem><SelectItem value="resigned">Resigned</SelectItem></SelectContent></Select></div>
               <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>

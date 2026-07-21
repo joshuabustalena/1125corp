@@ -153,7 +153,7 @@ export default function EmployeeDetailPage() {
               </div>
             )}
             <div className="flex justify-between text-sm pt-2 border-t border-border">
-              <span className="text-muted-foreground">Daily Rate:</span>
+              <span className="text-muted-foreground">{employee.pay_type === 'monthly' ? 'Monthly Salary:' : 'Daily Rate:'}</span>
               <span className="font-bold text-primary">{formatCurrency(employee.salary)}</span>
             </div>
           </CardContent>

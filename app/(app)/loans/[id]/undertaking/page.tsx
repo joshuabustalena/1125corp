@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
+import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { ArrowLeft, FileText, Download, Loader2 } from 'lucide-react';
 
 function formatLongDate(date: string | Date | null | undefined): string {
@@ -63,8 +64,8 @@ const UNDERTAKING_CLAUSES = [
   },
   {
     n: 10, title: 'Mode of Payment / Paraan ng Pagbabayad',
-    en: "Payments shall only be made to authorized collectors, the Company's office, or other payment channels officially designated by 1125 Lending Corporation.",
-    tl: "(Ang mga bayad ay dapat gawin lamang sa mga awtorisadong collector, opisina ng kompanya, o iba pang payment channels na opisyal na pinahihintulutan ng 1125 Lending Corporation.)",
+    en: "Payments shall only be made to authorized collectors, the Company's office, or other payment channels officially designated by 1125 Credit Collection Services.",
+    tl: "(Ang mga bayad ay dapat gawin lamang sa mga awtorisadong collector, opisina ng kompanya, o iba pang payment channels na opisyal na pinahihintulutan ng 1125 Credit Collection Services.)",
   },
   {
     n: 11, title: 'Receipt of Loan Proceeds / Pagtanggap ng Loan',
@@ -96,7 +97,7 @@ export default function UndertakingPage() {
     const id = params.id as string;
     const { data } = await supabase
       .from('loans')
-      .select('*, customers(first_name, last_name, address, barangay, city, province)')
+      .select('*, customers(first_name, last_name, address, barangay, city, province), branches(name)')
       .eq('id', id)
       .maybeSingle();
     setLoan(data);
@@ -116,6 +117,7 @@ export default function UndertakingPage() {
     borrowerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),
     residenceAddress: addressParts.join(', '),
   };
+  const branding = getDocumentBranding(loan.branches?.name);
 
   async function handlePrint() {
     const refs = [page1Ref, page2Ref].filter(r => r.current);
@@ -158,7 +160,8 @@ export default function UndertakingPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      // 8.5" x 13" (Philippine "folio"/long bond paper), in points (72pt/in).
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
       const pxToPt = 0.75;
@@ -194,11 +197,11 @@ export default function UndertakingPage() {
 
       <div className="max-w-[1000px] mx-auto">
         <div className="flex flex-col items-center gap-4 bg-secondary/30 p-4 rounded-lg overflow-x-auto">
-          <div ref={page1Ref} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
+          <div ref={page1Ref} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
             <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>1125 LENDING CORPORATION</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>NATIONAL HIWAY, LAYAC, DINALUPIHAN, BATAAN</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: 0950-931-9848</div>
+              <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>
             </div>
 
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15 }}>BORROWER'S UNDERTAKING</div>
@@ -206,7 +209,7 @@ export default function UndertakingPage() {
 
             <p style={{ textAlign: 'justify', marginBottom: 12, textIndent: 48 }}>
               I <span style={{ textDecoration: 'underline' }}>{undertakingData.borrowerName}</span> of legal age, residing at{' '}
-              <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span> voluntarily agree to the following terms and conditions as a borrower of 1125 Lending Corporation.
+              <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span> voluntarily agree to the following terms and conditions as a borrower of {COMPANY_NAME_DISPLAY}.
             </p>
 
             {UNDERTAKING_CLAUSES.slice(0, 6).map(c => (
@@ -216,7 +219,7 @@ export default function UndertakingPage() {
             ))}
           </div>
 
-          <div ref={page2Ref} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 13 }}>
+          <div ref={page2Ref} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
             {UNDERTAKING_CLAUSES.slice(6).map(c => (
               <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
                 <strong>{c.n}. {c.title}</strong> - {c.en} <em style={{ color: '#333' }}>{c.tl}</em>
@@ -224,7 +227,7 @@ export default function UndertakingPage() {
             ))}
 
             <p style={{ textAlign: 'justify', fontSize: 12, marginTop: 4, marginBottom: 20 }}>
-              I hereby authorize 1125 Lending Corporation to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act of 2012.
+              I hereby authorize {COMPANY_NAME_DISPLAY} to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act of 2012.
             </p>
 
             <p style={{ fontSize: 13, marginBottom: 24 }}>

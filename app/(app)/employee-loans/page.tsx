@@ -29,9 +29,10 @@ export default function EmployeeLoansPage() {
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const isAdmin = profile?.role_name === 'Administrator';
+  const isBranchManager = profile?.role_name === 'Branch Manager';
   const [loans, setLoans] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
-  const [myEmployee, setMyEmployee] = useState<{ id: string } | null>(null);
+  const [myEmployee, setMyEmployee] = useState<{ id: string; position?: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -56,7 +57,10 @@ export default function EmployeeLoansPage() {
   }, [profile]);
 
   async function loadEmployees() {
-    const { data } = await supabase.from('employees').select('id, first_name, last_name, salary').eq('status', 'active');
+    let q = supabase.from('employees').select('id, first_name, last_name, salary, position, branch_id').eq('status', 'active');
+    // A Branch Manager can only apply on behalf of their own branch's staff.
+    if (isBranchManager && profile?.branch_id) q = q.eq('branch_id', profile.branch_id);
+    const { data } = await q;
     setEmployees(data ?? []);
   }
 
@@ -64,15 +68,25 @@ export default function EmployeeLoansPage() {
     setLoading(true);
     let empId: string | null = null;
     if (!canApprove) {
-      const { data: emp } = await supabase.from('employees').select('id').eq('profile_id', profile?.id ?? '').maybeSingle();
+      const { data: emp } = await supabase.from('employees').select('id, position').eq('profile_id', profile?.id ?? '').maybeSingle();
       setMyEmployee(emp);
       empId = emp?.id ?? '00000000-0000-0000-0000-000000000000';
     }
-    let q = supabase.from('employee_loans').select('*, employees(first_name, last_name)').order('created_at', { ascending: false });
+    let q = supabase.from('employee_loans').select('*, employees(first_name, last_name, position, branch_id)').order('created_at', { ascending: false });
     if (empId) q = q.eq('employee_id', empId);
     const { data } = await q;
-    setLoans(data ?? []);
+    // A Branch Manager only sees/acts on their own branch's applications —
+    // a Manager-tier applicant's own loan is Admin-only regardless (handled
+    // on the detail page), but the list itself is still branch-scoped here.
+    const scoped = isBranchManager && profile?.branch_id
+      ? (data ?? []).filter((l: any) => l.employees?.branch_id === profile.branch_id)
+      : (data ?? []);
+    setLoans(scoped);
     setLoading(false);
+  }
+
+  function maxLoanAmount(position: string | null | undefined) {
+    return position === 'Branch Manager' ? 20000 : 15000;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -87,9 +101,24 @@ export default function EmployeeLoansPage() {
       return;
     }
 
-    // Check max 15,000
-    if (Number(form.amount) > 15000) {
-      toast({ title: 'Error', description: 'Maximum employee loan is ₱15,000', variant: 'destructive' });
+    // Check max amount — 20,000 for a Branch Manager applicant, 15,000 for
+    // everyone else.
+    const targetPosition = canApprove
+      ? employees.find(e => e.id === form.employee_id)?.position
+      : myEmployee?.position;
+    const maxAmount = maxLoanAmount(targetPosition);
+    if (Number(form.amount) > maxAmount) {
+      toast({ title: 'Error', description: `Maximum employee loan is ${formatCurrency(maxAmount)}`, variant: 'destructive' });
+      setSaving(false);
+      return;
+    }
+
+    // Maximum deduction per cutoff is amount / 12 — spreads repayment over
+    // at least 12 semi-monthly cutoffs (6 months) instead of paying it off
+    // in one or two large deductions.
+    const maxDeduction = Number(form.amount) / 12;
+    if (Number(form.deduction_amount) > maxDeduction) {
+      toast({ title: 'Error', description: `Maximum deduction per cutoff for this amount is ${formatCurrency(maxDeduction)} (loan amount ÷ 12)`, variant: 'destructive' });
       setSaving(false);
       return;
     }
@@ -119,6 +148,13 @@ export default function EmployeeLoansPage() {
   async function handleEditLoan(e: React.FormEvent) {
     e.preventDefault();
     if (!editTarget) return;
+
+    const maxDeduction = Number(editForm.amount) / 12;
+    if (Number(editForm.deduction_amount) > maxDeduction) {
+      toast({ title: 'Error', description: `Maximum deduction per cutoff for this amount is ${formatCurrency(maxDeduction)} (loan amount ÷ 12)`, variant: 'destructive' });
+      return;
+    }
+
     setEditSaving(true);
     const { error } = await supabase.from('employee_loans').update({
       amount: Number(editForm.amount),
@@ -227,6 +263,10 @@ export default function EmployeeLoansPage() {
 
   const calendarSchedule = calendarLoan ? computeEmployeeSchedule(calendarLoan) : [];
   const scheduleByDate = new Map(calendarSchedule.map(s => [dateKey(s.date), s]));
+
+  const applicantMaxAmount = maxLoanAmount(
+    canApprove ? employees.find(e => e.id === form.employee_id)?.position : myEmployee?.position
+  );
 
   const filteredLoans = loans.filter(l => {
     const name = `${l.employees?.first_name ?? ''} ${l.employees?.last_name ?? ''}`.toLowerCase();
@@ -350,9 +390,17 @@ export default function EmployeeLoansPage() {
               </div>
             )}
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Amount (₱) *</Label><Input type="number" required max="15000" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="Max 15000" /></div>
+              <div className="space-y-2">
+                <Label>Amount (₱) *</Label>
+                <Input type="number" required max={applicantMaxAmount} value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder={`Max ${applicantMaxAmount}`} />
+                <p className="text-xs text-muted-foreground">Max {formatCurrency(applicantMaxAmount)}{applicantMaxAmount > 15000 ? ' (Branch Manager tier)' : ''}</p>
+              </div>
               <div className="space-y-2"><Label>Term (Months)</Label><Input type="number" max="6" value={form.term_months} onChange={(e) => setForm({ ...form, term_months: e.target.value })} /></div>
-              <div className="space-y-2 col-span-2"><Label>Deduction per Payroll (₱)</Label><Input type="number" value={form.deduction_amount} onChange={(e) => setForm({ ...form, deduction_amount: e.target.value })} placeholder="0.00" /></div>
+              <div className="space-y-2 col-span-2">
+                <Label>Deduction per Payroll (₱)</Label>
+                <Input type="number" value={form.deduction_amount} onChange={(e) => setForm({ ...form, deduction_amount: e.target.value })} placeholder="0.00" />
+                {form.amount && <p className="text-xs text-muted-foreground">Max {formatCurrency(Number(form.amount) / 12)} per cutoff (loan amount ÷ 12)</p>}
+              </div>
             </div>
 
             {form.amount && form.deduction_amount && (
@@ -489,7 +537,11 @@ export default function EmployeeLoansPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Amount (₱)</Label><Input type="number" required value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} /></div>
               <div className="space-y-2"><Label>Remaining Balance (₱)</Label><Input type="number" value={editForm.remaining_balance} onChange={(e) => setEditForm({ ...editForm, remaining_balance: e.target.value })} /></div>
-              <div className="space-y-2"><Label>Deduction per Payroll (₱)</Label><Input type="number" value={editForm.deduction_amount} onChange={(e) => setEditForm({ ...editForm, deduction_amount: e.target.value })} /></div>
+              <div className="space-y-2">
+                <Label>Deduction per Payroll (₱)</Label>
+                <Input type="number" value={editForm.deduction_amount} onChange={(e) => setEditForm({ ...editForm, deduction_amount: e.target.value })} />
+                {editForm.amount && <p className="text-xs text-muted-foreground">Max {formatCurrency(Number(editForm.amount) / 12)} per cutoff</p>}
+              </div>
               <div className="space-y-2"><Label>Term (Months)</Label><Input type="number" value={editForm.term_months} onChange={(e) => setEditForm({ ...editForm, term_months: e.target.value })} /></div>
               <div className="space-y-2 col-span-2">
                 <Label>Status</Label>

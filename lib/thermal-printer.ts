@@ -202,7 +202,7 @@ export function buildPaymentReceiptLines(data: {
 
   const lines: ThermalReceiptLine[] = [];
   lines.push({ text: bar, align: 'left' });
-  lines.push({ text: '1125 LENDING CORPORATION', align: 'center', bold: true });
+  lines.push({ text: '1125 CREDIT COLLECTION SERVICES', align: 'center', bold: true });
   lines.push({ text: bar, align: 'left' });
   lines.push({ text: 'ACKNOWLEDGEMENT RECEIPT', align: 'center', bold: true });
   lines.push({ text: rule, align: 'left' });

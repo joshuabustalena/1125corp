@@ -21,6 +21,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
+import { COMPANY_NAME, getDocumentBranding } from '@/lib/document-branding';
 import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer } from 'lucide-react';
 
 // Semi-monthly period boundaries: the "15" period covers the 1st–15th of
@@ -70,7 +71,7 @@ export default function PayrollPage() {
   useEffect(() => { load(); loadEmployees(); }, []);
 
   async function loadEmployees() {
-    const { data } = await supabase.from('employees').select('id, first_name, last_name, salary, status, branches(name)').eq('status', 'active');
+    const { data } = await supabase.from('employees').select('id, first_name, last_name, salary, pay_type, status, branches(name)').eq('status', 'active');
     setEmployees(data ?? []);
   }
 
@@ -81,7 +82,7 @@ export default function PayrollPage() {
 
     const employeeIds = Array.from(new Set((data ?? []).map(p => p.employee_id)));
     if (employeeIds.length > 0) {
-      const { data: att } = await supabase.from('attendance').select('employee_id, date, status').in('employee_id', employeeIds);
+      const { data: att } = await supabase.from('attendance').select('employee_id, date, status, review_status').in('employee_id', employeeIds);
       setAttendanceRecords(att ?? []);
     } else {
       setAttendanceRecords([]);
@@ -93,7 +94,7 @@ export default function PayrollPage() {
     const { start, end } = getPeriodRange(p.pay_date, p.period);
     const present = attendanceRecords.filter(a =>
       a.employee_id === p.employee_id && a.date >= start && a.date <= end &&
-      (a.status === 'present' || a.status === 'late')
+      (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected'
     ).length;
     return { present, total: countWorkingDays(start, end) };
   }
@@ -108,13 +109,14 @@ export default function PayrollPage() {
     const loanDeduction = Number(target.loan_deduction) || 0;
     const carryOverDeduction = Number(target.carry_over_deduction) || 0;
     const deductions = Number(target.sss) + Number(target.philhealth) + Number(target.pag_ibig) + Number(target.incentive_retention) + loanDeduction + carryOverDeduction;
+    const branding = getDocumentBranding(target.employees?.branches?.name);
     return (
       <div ref={opts.ref} style={{ width: opts.fixed ? 600 : '100%', maxWidth: 600, background: '#ffffff', color: '#1a1a1a', padding: 28, fontFamily: 'Arial, sans-serif', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, borderBottom: '3px solid #0B1F3A', paddingBottom: 14, marginBottom: 16 }}>
           <img src="/image/1125_Corp_Logo.png" alt="1125Corp" style={{ width: 44, height: 44, objectFit: 'contain' }} />
           <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#0B1F3A' }}>1125 LENDING CORPORATION</div>
-            <div style={{ fontSize: 10, color: '#666' }}>1125corp.org</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
+            <div style={{ fontSize: 9, color: '#666' }}>{branding.address} · {branding.contact}</div>
           </div>
           <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: '#0B1F3A' }}>PAYSLIP</div>
@@ -177,7 +179,7 @@ export default function PayrollPage() {
     // salary/2 split.
     const { start, end } = getPeriodRange(payDate, period);
     const employeeIds = employees.map(e => e.id);
-    const { data: att } = await supabase.from('attendance').select('employee_id, status').in('employee_id', employeeIds).gte('date', start).lte('date', end);
+    const { data: att } = await supabase.from('attendance').select('employee_id, status, review_status').in('employee_id', employeeIds).gte('date', start).lte('date', end);
 
     // Employees with an active salary loan get its per-payroll deduction
     // amount (capped at whatever's left on the loan) taken out automatically
@@ -209,14 +211,20 @@ export default function PayrollPage() {
 
     const totalWorkingDays = countWorkingDays(start, end);
     const records = employees.map(e => {
-      const presentDays = (att ?? []).filter(a => a.employee_id === e.id && (a.status === 'present' || a.status === 'late')).length;
+      const presentDays = (att ?? []).filter(a => a.employee_id === e.id && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected').length;
+      const isMonthly = e.pay_type === 'monthly';
+      // A fixed-monthly employee (e.g. Branch Manager) is paid half their
+      // monthly salary each semi-monthly cutoff regardless of attendance —
+      // everyone else is daily-rate × actual days present.
       const dailyRate = Number(e.salary) || 0;
-      const basicSalary = dailyRate * presentDays;
+      const basicSalary = isMonthly ? dailyRate / 2 : dailyRate * presentDays;
       // SSS/PhilHealth/Pag-IBIG are statutory contributions for the whole
       // cutoff — they're based on the full period's expected pay (daily
-      // rate × total working days), not scaled down by actual attendance,
-      // the same way they'd still be deducted even with a few absences.
-      const fullPeriodBasic = dailyRate * totalWorkingDays;
+      // rate × total working days for daily-rate staff, or the same
+      // half-month salary for fixed-monthly staff), not scaled down by
+      // actual attendance, the same way they'd still be deducted even with
+      // a few absences.
+      const fullPeriodBasic = isMonthly ? dailyRate / 2 : dailyRate * totalWorkingDays;
       const sss = fullPeriodBasic * 0.045;
       const philhealth = fullPeriodBasic * 0.035;
       const pagIbig = fullPeriodBasic * 0.02;

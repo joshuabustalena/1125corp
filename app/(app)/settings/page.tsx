@@ -143,7 +143,7 @@ export default function SettingsPage() {
             <CardContent className="space-y-4 max-w-lg">
               <div className="space-y-2"><Label>Company Name</Label><Input value={settings.company_name ?? '1125Corp'} onChange={(e) => setSettings({ ...settings, company_name: `"${e.target.value}"` })} /></div>
               <div className="space-y-2"><Label>Domain</Label><Input value={settings.company_domain ?? '1125corp.org'} onChange={(e) => setSettings({ ...settings, company_domain: `"${e.target.value}"` })} /></div>
-              <div className="space-y-2"><Label>Max Customer Loan (₱)</Label><Input type="number" value={settings.max_customer_loan ?? '80000'} onChange={(e) => setSettings({ ...settings, max_customer_loan: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Max Customer Loan (₱)</Label><Input type="number" value={settings.max_customer_loan ?? '30000'} onChange={(e) => setSettings({ ...settings, max_customer_loan: e.target.value })} /></div>
               <div className="space-y-2"><Label>Max Employee Loan (₱)</Label><Input type="number" value={settings.max_employee_loan ?? '15000'} onChange={(e) => setSettings({ ...settings, max_employee_loan: e.target.value })} /></div>
               <Button onClick={saveSettings} disabled={saving || !isAdmin}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}<Save className="w-4 h-4 mr-2" />Save Changes</Button>
             </CardContent>

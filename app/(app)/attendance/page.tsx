@@ -22,7 +22,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatDate, formatTime, formatDuration, exportToCSV } from '@/lib/format';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search } from 'lucide-react';
+import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle } from 'lucide-react';
 
 type CameraMode = 'checkin' | 'checkout';
 
@@ -293,6 +293,20 @@ export default function AttendancePage() {
     load();
   }
 
+  // Only an Administrator can accept/reject an attendance record, across
+  // every employee — a rejected record is excluded from payroll's
+  // days-present count, while pending/accepted both count normally.
+  async function handleReview(id: string, reviewStatus: 'accepted' | 'rejected') {
+    const { error } = await supabase.from('attendance').update({ review_status: reviewStatus }).eq('id', id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      return;
+    }
+    setRecords(prev => prev.map(r => r.id === id ? { ...r, review_status: reviewStatus } : r));
+  }
+
+  const reviewVariant = (s: string | null | undefined) => s === 'accepted' ? 'default' : s === 'rejected' ? 'destructive' : 'outline';
+
   function handleExport() {
     exportToCSV(records.map(r => ({
       Employee: `${r.employees?.first_name} ${r.employees?.last_name}`,
@@ -411,6 +425,7 @@ export default function AttendancePage() {
                     <TableHead>Status</TableHead>
                     <TableHead>Late</TableHead>
                     <TableHead>Location</TableHead>
+                    <TableHead>Review</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -467,12 +482,27 @@ export default function AttendancePage() {
                           </a>
                         ) : '—'}
                       </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <Badge variant={reviewVariant(r.review_status)}>{r.review_status ?? 'pending'}</Badge>
+                      </TableCell>
                       <TableCell className="text-right whitespace-nowrap">
-                        {!r.time_out && (
-                          <Button variant="ghost" size="sm" onClick={() => openCamera('checkout', r.id)}>
-                            <Clock className="w-4 h-4 mr-1" />Check Out
-                          </Button>
-                        )}
+                        <div className="flex items-center justify-end gap-1">
+                          {!r.time_out && (
+                            <Button variant="ghost" size="sm" onClick={() => openCamera('checkout', r.id)}>
+                              <Clock className="w-4 h-4 mr-1" />Check Out
+                            </Button>
+                          )}
+                          {isAdmin && r.review_status !== 'accepted' && (
+                            <Button variant="ghost" size="icon" onClick={() => handleReview(r.id, 'accepted')} title="Accept">
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            </Button>
+                          )}
+                          {isAdmin && r.review_status !== 'rejected' && (
+                            <Button variant="ghost" size="icon" onClick={() => handleReview(r.id, 'rejected')} title="Reject">
+                              <XCircle className="w-4 h-4 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
