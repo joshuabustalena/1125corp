@@ -50,8 +50,9 @@ export default function EmployeesPage() {
 
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', department: '', position: '',
-    branch_id: '', area_id: '', salary: '', pay_type: 'daily', status: 'active', hire_date: '', phone: '', email: '', address: '',
+    branch_id: '', area_id: '', salary: '', pay_type: 'daily', status: 'active', hire_date: '', birth_date: '', phone: '', email: '', address: '',
     sss_number: '', philhealth_number: '', pagibig_number: '', tin_number: '',
+    contact_person_name: '', contact_person_relationship: '', contact_person_phone: '',
   });
 
   useEffect(() => { load(); loadBranches(); loadAreas(); loadPositions(); }, [search, branchFilter, positionFilter, statusFilter, page]);
@@ -88,8 +89,9 @@ export default function EmployeesPage() {
   function openCreate() {
     setEditing(null);
     setForm({
-      first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', area_id: '', salary: '', pay_type: 'daily', status: 'active', hire_date: '', phone: '', email: '', address: '',
+      first_name: '', last_name: '', middle_name: '', department: '', position: '', branch_id: '', area_id: '', salary: '', pay_type: 'daily', status: 'active', hire_date: '', birth_date: '', phone: '', email: '', address: '',
       sss_number: '', philhealth_number: '', pagibig_number: '', tin_number: '',
+      contact_person_name: '', contact_person_relationship: '', contact_person_phone: '',
     });
     setCreateLogin(true);
     setDialogOpen(true);
@@ -100,9 +102,10 @@ export default function EmployeesPage() {
     setForm({
       first_name: e.first_name, last_name: e.last_name, middle_name: e.middle_name ?? '',
       department: e.department ?? '', position: e.position ?? '', branch_id: e.branch_id ?? '', area_id: e.area_id ?? '',
-      salary: String(e.salary ?? ''), pay_type: e.pay_type ?? 'daily', status: e.status, hire_date: e.hire_date ?? '',
+      salary: String(e.salary ?? ''), pay_type: e.pay_type ?? 'daily', status: e.status, hire_date: e.hire_date ?? '', birth_date: e.birth_date ?? '',
       phone: e.phone ?? '', email: e.email ?? '', address: e.address ?? '',
       sss_number: e.sss_number ?? '', philhealth_number: e.philhealth_number ?? '', pagibig_number: e.pagibig_number ?? '', tin_number: e.tin_number ?? '',
+      contact_person_name: e.contact_person_name ?? '', contact_person_relationship: e.contact_person_relationship ?? '', contact_person_phone: e.contact_person_phone ?? '',
     });
     setDialogOpen(true);
   }
@@ -129,6 +132,10 @@ export default function EmployeesPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!form.birth_date) {
+      toast({ title: 'Error', description: 'Birth date is required (used for birthday leave/pay)', variant: 'destructive' });
+      return;
+    }
     setSaving(true);
     const payload = {
       first_name: form.first_name, last_name: form.last_name, middle_name: form.middle_name || null,
@@ -136,10 +143,13 @@ export default function EmployeesPage() {
       branch_id: form.branch_id || null,
       area_id: form.position === 'Branch Field Collector' ? (form.area_id || null) : null,
       salary: Number(form.salary) || 0, pay_type: form.pay_type,
-      status: form.status, hire_date: form.hire_date || null,
+      status: form.status, hire_date: form.hire_date || null, birth_date: form.birth_date,
       phone: form.phone || null, email: form.email || null, address: form.address || null,
       sss_number: form.sss_number || null, philhealth_number: form.philhealth_number || null,
       pagibig_number: form.pagibig_number || null, tin_number: form.tin_number || null,
+      contact_person_name: form.contact_person_name || null,
+      contact_person_relationship: form.contact_person_relationship || null,
+      contact_person_phone: form.contact_person_phone || null,
     };
     if (editing) {
       const { error } = await supabase.from('employees').update(payload).eq('id', editing.id);
@@ -230,6 +240,7 @@ export default function EmployeesPage() {
       Name: `${e.first_name} ${e.last_name}`, Department: e.department ?? '', Position: e.position ?? '',
       Branch: e.branches?.name ?? '', PayType: e.pay_type ?? 'daily', Salary: e.salary, Status: e.status, Hired: e.hire_date ?? '',
       SSS: e.sss_number ?? '', PhilHealth: e.philhealth_number ?? '', PagIBIG: e.pagibig_number ?? '', TIN: e.tin_number ?? '',
+      ContactPerson: e.contact_person_name ?? '', ContactRelationship: e.contact_person_relationship ?? '', ContactPhone: e.contact_person_phone ?? '',
     })), 'employees.csv');
   }
 
@@ -392,6 +403,11 @@ export default function EmployeesPage() {
                 <Input type="number" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} placeholder="0.00" />
               </div>
               <div className="space-y-2"><Label>Hire Date</Label><Input type="date" value={form.hire_date} onChange={(e) => setForm({ ...form, hire_date: e.target.value })} /></div>
+              <div className="space-y-2">
+                <Label>Birth Date *</Label>
+                <Input type="date" required value={form.birth_date} onChange={(e) => setForm({ ...form, birth_date: e.target.value })} />
+                <p className="text-xs text-muted-foreground">Used for birthday leave/pay on payroll</p>
+              </div>
               <div className="space-y-2"><Label>Status</Label><Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem><SelectItem value="resigned">Resigned</SelectItem></SelectContent></Select></div>
               <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
               <div className="space-y-2"><Label>Email</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
@@ -405,6 +421,15 @@ export default function EmployeesPage() {
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">PhilHealth Number</Label><Input value={form.philhealth_number} onChange={(e) => setForm({ ...form, philhealth_number: e.target.value })} /></div>
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">Pag-IBIG Number</Label><Input value={form.pagibig_number} onChange={(e) => setForm({ ...form, pagibig_number: e.target.value })} /></div>
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">TIN</Label><Input value={form.tin_number} onChange={(e) => setForm({ ...form, tin_number: e.target.value })} /></div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Contact Person</Label>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2 col-span-2"><Label className="text-xs text-muted-foreground">Name</Label><Input value={form.contact_person_name} onChange={(e) => setForm({ ...form, contact_person_name: e.target.value })} placeholder="e.g. Juan Dela Cruz" /></div>
+                <div className="space-y-2"><Label className="text-xs text-muted-foreground">Relationship</Label><Input value={form.contact_person_relationship} onChange={(e) => setForm({ ...form, contact_person_relationship: e.target.value })} placeholder="e.g. Spouse, Parent" /></div>
+                <div className="space-y-2"><Label className="text-xs text-muted-foreground">Contact Number</Label><Input value={form.contact_person_phone} onChange={(e) => setForm({ ...form, contact_person_phone: e.target.value })} /></div>
               </div>
             </div>
 

@@ -10,7 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials } from '@/lib/format';
 import {
-  ArrowLeft, User, Briefcase, ClipboardCheck, Loader2, Landmark, IdCard,
+  ArrowLeft, User, Briefcase, ClipboardCheck, Loader2, Landmark, IdCard, Contact,
 } from 'lucide-react';
 
 export default function EmployeeDetailPage() {
@@ -120,6 +120,10 @@ export default function EmployeeDetailPage() {
               <span>{employee.hire_date ? formatDate(employee.hire_date) : '—'}</span>
             </div>
             <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Birth Date:</span>
+              <span>{employee.birth_date ? formatDate(employee.birth_date) : '—'}</span>
+            </div>
+            <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Paid Leaves Used:</span>
               <span>{employee.paid_leaves_used ?? 0}</span>
             </div>
@@ -184,6 +188,31 @@ export default function EmployeeDetailPage() {
             <div>
               <p className="text-xs text-muted-foreground">TIN</p>
               <p className="text-sm font-medium">{employee.tin_number ?? '—'}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card border-border">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Contact className="w-5 h-5 text-primary" />
+            Contact Person
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <p className="text-xs text-muted-foreground">Name</p>
+              <p className="text-sm font-medium">{employee.contact_person_name ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Relationship</p>
+              <p className="text-sm font-medium">{employee.contact_person_relationship ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Contact Number</p>
+              <p className="text-sm font-medium">{employee.contact_person_phone ?? '—'}</p>
             </div>
           </div>
         </CardContent>

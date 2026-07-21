@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 
-// Narrow, purpose-built endpoint: lets a Branch Manager raise a customer's
-// max_loan_limit specifically while approving a loan that exceeds it.
+// Narrow, purpose-built endpoint: lets an Administrator raise a customer's
+// max_loan_limit directly while approving a loan that exceeds it.
 // customers.max_loan_limit is otherwise Admin-only to edit (customers_update
 // RLS policy), so this uses the service role and checks the role itself
-// rather than loosening that policy for customers in general.
+// rather than loosening that policy for customers in general. A Branch
+// Manager can no longer bump this directly — they submit a request via
+// credit_limit_requests instead, which an Administrator approves on
+// /credit-limit-requests (that approval is what actually updates this
+// column for a Manager-initiated increase).
 export async function POST(request: NextRequest) {
   const supabaseAdmin = getSupabaseAdmin();
   const authHeader = request.headers.get('authorization') ?? '';
@@ -26,8 +30,8 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
 
   const requesterRole = (requesterProfile as any)?.roles?.name;
-  if (requesterRole !== 'Administrator' && requesterRole !== 'Branch Manager') {
-    return NextResponse.json({ error: 'Only a Branch Manager or Administrator can adjust a customer\'s max loan limit' }, { status: 403 });
+  if (requesterRole !== 'Administrator') {
+    return NextResponse.json({ error: 'Only an Administrator can directly adjust a customer\'s max loan limit' }, { status: 403 });
   }
 
   const { customer_id, new_limit } = await request.json();

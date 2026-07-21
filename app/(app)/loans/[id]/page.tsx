@@ -33,6 +33,7 @@ export default function LoanDetailPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const canDisburse = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
   const canManageCollateral = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
@@ -52,6 +53,12 @@ export default function LoanDetailPage() {
   const [approveOpen, setApproveOpen] = useState(false);
   const [approving, setApproving] = useState(false);
   const [bumpingLimit, setBumpingLimit] = useState(false);
+  const [approveAmount, setApproveAmount] = useState('');
+  const [approveDailyPayment, setApproveDailyPayment] = useState('');
+  const [pendingLimitRequest, setPendingLimitRequest] = useState<any>(null);
+  const [requestingLimit, setRequestingLimit] = useState(false);
+  const [previewScheduleOpen, setPreviewScheduleOpen] = useState(false);
+  const [previewScheduleMonth, setPreviewScheduleMonth] = useState(new Date());
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState('');
   const [declining, setDeclining] = useState(false);
@@ -381,11 +388,84 @@ export default function LoanDetailPage() {
     setReapplying(false);
   }
 
-  function openApprove() {
-    setApproveOpen(true);
+  async function loadPendingLimitRequest() {
+    if (!loan.customer_id) return;
+    const { data } = await supabase
+      .from('credit_limit_requests')
+      .select('*')
+      .eq('customer_id', loan.customer_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    setPendingLimitRequest(data);
   }
 
-  const overLimit = loan.customers?.max_loan_limit != null && Number(loan.amount) > Number(loan.customers.max_loan_limit);
+  async function openApprove() {
+    setApproveAmount(String(loan.amount));
+    setApproveDailyPayment(String(Number(loan.daily_payment) || 0));
+    setApproveOpen(true);
+    // Re-fetch the customer's current max limit (an Admin may have just
+    // approved a pending credit-limit-increase request) and the latest
+    // request status, so the dialog reflects reality every time it opens.
+    await loadLoan();
+    await loadPendingLimitRequest();
+  }
+
+  const approveAmountNum = Number(approveAmount) || 0;
+  const exceedsLimit = loan.customers?.max_loan_limit != null && approveAmountNum > Number(loan.customers.max_loan_limit);
+  // An Administrator can approve any custom amount directly; a Branch
+  // Manager is blocked until the customer's limit actually covers it
+  // (either they lower the approved amount, or a requested increase gets
+  // approved by an Administrator).
+  const overLimit = !isAdmin && exceedsLimit;
+
+  // The daily payment must be enough to actually pay off the approved
+  // amount within the loan's term — e.g. ₱10,000 over 30 days needs at
+  // least ₱333.33/day. Anything less would never fully collect the loan.
+  const minDailyPayment = Number(loan.term_days) > 0 ? approveAmountNum / Number(loan.term_days) : 0;
+  const dailyPaymentTooLow = Number(approveDailyPayment) < Math.round(minDailyPayment * 100) / 100 - 0.001;
+
+  // Preview of the collection calendar the loan WOULD get if approved right
+  // now with the amount/daily payment currently typed in the dialog — lets
+  // the Branch Manager see the schedule before committing. Same "last day
+  // absorbs the remainder, Sundays are not collection days, first day is
+  // auto-settled out of the release proceeds" rules as the real post-
+  // approval schedule (computeDayStatuses), just without any payment
+  // history overlay since nothing's been paid yet.
+  function computeApprovePreviewSchedule() {
+    const map = new Map<string, { amount: number; isFirst: boolean }>();
+    if (!loan.release_date || !loan.due_date || approveAmountNum <= 0) return map;
+    const amountChanged = approveAmountNum !== Number(loan.amount);
+    const totalPayable = amountChanged
+      ? computeLoanDetails(approveAmountNum, Number(loan.interest_rate), Number(loan.term_days)).totalPayable
+      : Number(loan.total_payable);
+    const dailyAmt = Number(approveDailyPayment) || 0;
+    const end = new Date(loan.due_date);
+    end.setHours(0, 0, 0, 0);
+
+    const collectionDays: Date[] = [];
+    for (let d = new Date(loan.release_date); d <= end; d.setDate(d.getDate() + 1)) {
+      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      if (day.getDay() !== 0) collectionDays.push(day);
+    }
+
+    let remaining = totalPayable;
+    collectionDays.forEach((day, i) => {
+      const isFirst = i === 0;
+      const isLast = i === collectionDays.length - 1;
+      const scheduled = isLast ? Math.max(0, remaining) : Math.min(dailyAmt, remaining);
+      remaining = Math.max(0, remaining - scheduled);
+      map.set(dateKey(day), { amount: scheduled, isFirst });
+    });
+    return map;
+  }
+
+  function openPreviewSchedule() {
+    setPreviewScheduleMonth(loan.release_date ? new Date(loan.release_date) : new Date());
+    setPreviewScheduleOpen(true);
+  }
+
+  const approvePreviewSchedule = computeApprovePreviewSchedule();
 
   async function handleBumpLimit() {
     setBumpingLimit(true);
@@ -393,58 +473,75 @@ export default function LoanDetailPage() {
     const res = await fetch('/api/customers/bump-loan-limit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-      body: JSON.stringify({ customer_id: loan.customer_id, new_limit: Number(loan.amount) }),
+      body: JSON.stringify({ customer_id: loan.customer_id, new_limit: approveAmountNum }),
     });
     const result = await res.json();
     if (!res.ok) {
       toast({ title: 'Error', description: result.error ?? 'Failed to update max loan limit', variant: 'destructive' });
     } else {
-      toast({ title: 'Max loan limit updated', description: `${loan.customers?.first_name}'s max loan limit is now ${formatCurrency(Number(loan.amount))}.` });
+      toast({ title: 'Max loan limit updated', description: `${loan.customers?.first_name}'s max loan limit is now ${formatCurrency(approveAmountNum)}.` });
       await loadLoan();
     }
     setBumpingLimit(false);
   }
 
+  // Branch Manager can't raise a customer's limit directly — they request
+  // it and an Administrator has to approve it on /credit-limit-requests
+  // before this loan can be approved at that higher amount.
+  async function handleRequestLimitIncrease() {
+    if (!loan.customers?.max_loan_limit) return;
+    setRequestingLimit(true);
+    const { error } = await supabase.from('credit_limit_requests').insert({
+      customer_id: loan.customer_id,
+      requested_by: profile?.id ?? null,
+      current_limit: loan.customers.max_loan_limit,
+      requested_limit: approveAmountNum,
+      reason: `Needed to approve loan ${loan.loan_number} (${formatCurrency(approveAmountNum)})`,
+      status: 'pending',
+    });
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      setRequestingLimit(false);
+      return;
+    }
+    await supabase.from('notifications').insert({
+      type: 'credit_limit_request',
+      recipient_type: 'administrator',
+      message: `${profile?.full_name ?? 'A Branch Manager'} requested a credit limit increase for ${loan.customers.first_name} ${loan.customers.last_name} to approve loan ${loan.loan_number} (${formatCurrency(loan.customers.max_loan_limit)} → ${formatCurrency(approveAmountNum)}).`,
+      channel: 'in_app',
+      status: 'sent',
+      sent_at: new Date().toISOString(),
+    });
+    toast({ title: 'Request sent', description: 'Waiting for Administrator approval before you can approve this loan at that amount.' });
+    await loadPendingLimitRequest();
+    setRequestingLimit(false);
+  }
+
   async function handleConfirmApprove() {
-    if (overLimit) return;
+    if (overLimit || approveAmountNum <= 0 || dailyPaymentTooLow) return;
     setApproving(true);
     const now = new Date().toISOString();
-    const { error } = await supabase.from('loans').update({
+    const amountChanged = approveAmountNum !== Number(loan.amount);
+    const payload: any = {
       status: 'approved',
       approved_by: profile?.id ?? null,
       approved_at: now,
-    }).eq('id', loan.id);
+      daily_payment: Number(approveDailyPayment) || 0,
+    };
+    if (amountChanged) {
+      const details = computeLoanDetails(approveAmountNum, Number(loan.interest_rate), Number(loan.term_days));
+      payload.amount = approveAmountNum;
+      payload.interest_amount = details.interestAmount;
+      payload.service_fee = details.serviceFee;
+      payload.release_amount = details.releaseAmount;
+      payload.total_payable = details.totalPayable;
+      payload.remaining_balance = details.totalPayable;
+    }
+    const { error } = await supabase.from('loans').update(payload).eq('id', loan.id);
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
       toast({ title: 'Loan approved', description: `${loan.loan_number} is awaiting disbursement by a Cashier.` });
-      setApproveOpen(false);
-      router.push(`/loans/${loan.id}/agreement`);
-    }
-    setApproving(false);
-  }
-
-  async function handleApproveAtLimit() {
-    if (!loan.customers?.max_loan_limit) return;
-    setApproving(true);
-    const now = new Date().toISOString();
-    const newAmount = Number(loan.customers.max_loan_limit);
-    const details = computeLoanDetails(newAmount, Number(loan.interest_rate), Number(loan.term_days));
-    const { error } = await supabase.from('loans').update({
-      amount: newAmount,
-      interest_amount: details.interestAmount,
-      service_fee: details.serviceFee,
-      release_amount: details.releaseAmount,
-      total_payable: details.totalPayable,
-      remaining_balance: details.totalPayable,
-      status: 'approved',
-      approved_by: profile?.id ?? null,
-      approved_at: now,
-    }).eq('id', loan.id);
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Loan approved at max limit', description: `Loan amount adjusted to ${formatCurrency(newAmount)} and approved.` });
       setApproveOpen(false);
       router.push(`/loans/${loan.id}/agreement`);
     }
@@ -1071,34 +1168,155 @@ export default function LoanDetailPage() {
             )}
           </div>
 
-          {overLimit && (
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-sm">Approved Amount (₱)</Label>
+              <Input
+                type="number"
+                value={approveAmount}
+                onChange={(e) => setApproveAmount(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Requested: {formatCurrency(loan.amount)} · Customer's max limit: {formatCurrency(loan.customers?.max_loan_limit ?? 0)}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-sm">Daily Payment (₱)</Label>
+              <Input
+                type="number"
+                value={approveDailyPayment}
+                onChange={(e) => setApproveDailyPayment(e.target.value)}
+                className={dailyPaymentTooLow ? 'border-destructive focus-visible:ring-destructive' : undefined}
+              />
+              {dailyPaymentTooLow ? (
+                <p className="text-xs text-destructive">
+                  Must be at least {formatCurrency(minDailyPayment)} ({formatCurrency(approveAmountNum)} ÷ {loan.term_days} days) to fully collect the loan within its term.{' '}
+                  <button type="button" className="underline" onClick={() => setApproveDailyPayment(String(Math.round(minDailyPayment * 100) / 100))}>
+                    Use minimum
+                  </button>
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Minimum {formatCurrency(minDailyPayment)} for this amount/term — you can set it higher.</p>
+              )}
+            </div>
+          </div>
+
+          <Button
+            type="button" variant="outline" size="sm" className="w-fit"
+            disabled={!loan.release_date || !loan.due_date || approveAmountNum <= 0}
+            onClick={openPreviewSchedule}
+          >
+            <CalendarDays className="w-4 h-4 mr-2" />
+            Preview Payment Calendar
+          </Button>
+
+          {exceedsLimit && (
             <div className="flex items-start gap-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
               <AlertTriangle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0 space-y-2">
                 <p className="text-sm text-destructive">
-                  This loan ({formatCurrency(loan.amount)}) exceeds {loan.customers?.first_name}'s max loan limit of {formatCurrency(loan.customers?.max_loan_limit ?? 0)}.
-                  Either raise the customer's limit to match, or approve the loan capped at their current limit instead.
+                  {formatCurrency(approveAmountNum)} exceeds {loan.customers?.first_name}'s max loan limit of {formatCurrency(loan.customers?.max_loan_limit ?? 0)}.
+                  {isAdmin
+                    ? " Either raise the customer's limit to match, or approve at their current limit instead."
+                    : " You can request a limit increase from an Administrator, or lower the approved amount to their current limit instead."}
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" size="sm" variant="outline" disabled={bumpingLimit || approving} onClick={handleBumpLimit}>
-                    {bumpingLimit && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    Set max loan limit to {formatCurrency(loan.amount)}
-                  </Button>
-                  <Button type="button" size="sm" disabled={bumpingLimit || approving} onClick={handleApproveAtLimit}>
-                    {approving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    Approve at max limit ({formatCurrency(loan.customers?.max_loan_limit ?? 0)})
-                  </Button>
-                </div>
+                {pendingLimitRequest && pendingLimitRequest.status === 'pending' ? (
+                  <p className="text-xs font-medium text-warning">
+                    A request to raise the limit to {formatCurrency(pendingLimitRequest.requested_limit)} is pending Administrator approval.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {isAdmin ? (
+                      <Button type="button" size="sm" variant="outline" disabled={bumpingLimit || approving} onClick={handleBumpLimit}>
+                        {bumpingLimit && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                        Set max loan limit to {formatCurrency(approveAmountNum)}
+                      </Button>
+                    ) : (
+                      <Button type="button" size="sm" variant="outline" disabled={requestingLimit || approving} onClick={handleRequestLimitIncrease}>
+                        {requestingLimit && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                        Request limit increase to {formatCurrency(approveAmountNum)}
+                      </Button>
+                    )}
+                    <Button
+                      type="button" size="sm" variant="outline" disabled={approving}
+                      onClick={() => setApproveAmount(String(loan.customers?.max_loan_limit ?? 0))}
+                    >
+                      Approve at max limit ({formatCurrency(loan.customers?.max_loan_limit ?? 0)})
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
-            <Button type="button" disabled={overLimit || approving} onClick={handleConfirmApprove}>
+            <Button type="button" disabled={overLimit || approving || approveAmountNum <= 0 || dailyPaymentTooLow} onClick={handleConfirmApprove}>
               {approving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Approve Loan
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Preview of the collection calendar for the amount/daily payment
+          currently typed in the Approve dialog — not yet saved. */}
+      <Dialog open={previewScheduleOpen} onOpenChange={setPreviewScheduleOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl">Payment Calendar Preview</DialogTitle>
+            <DialogDescription className="text-base">
+              {formatCurrency(Number(approveDailyPayment) || 0)} due per day for {formatCurrency(approveAmountNum)}, covering {formatDate(loan.release_date)} to {formatDate(loan.due_date)}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
+            <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-muted-foreground/20 border border-muted-foreground/40" /> Auto-settled (release day)</span>
+            <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-primary/10 border border-primary/30" /> Scheduled collection</span>
+          </div>
+
+          <div className="flex items-center justify-between mb-2">
+            <Button type="button" variant="outline" size="icon" className="h-10 w-10"
+              onClick={() => setPreviewScheduleMonth(new Date(previewScheduleMonth.getFullYear(), previewScheduleMonth.getMonth() - 1, 1))}>
+              <ChevronLeft className="w-5 h-5" />
+            </Button>
+            <p className="text-lg font-semibold">
+              {previewScheduleMonth.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })}
+            </p>
+            <Button type="button" variant="outline" size="icon" className="h-10 w-10"
+              onClick={() => setPreviewScheduleMonth(new Date(previewScheduleMonth.getFullYear(), previewScheduleMonth.getMonth() + 1, 1))}>
+              <ChevronRight className="w-5 h-5" />
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-7 gap-1.5 text-center">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+              <div key={d} className="text-sm font-medium text-muted-foreground py-1.5">{d}</div>
+            ))}
+            {getMonthGrid(previewScheduleMonth).map(({ date, inCurrentMonth }, i) => {
+              const info = inCurrentMonth ? approvePreviewSchedule.get(dateKey(date)) : undefined;
+              return (
+                <div
+                  key={i}
+                  className={`relative rounded-lg py-3 text-sm ${
+                    !inCurrentMonth ? 'text-muted-foreground/30' :
+                    info?.isFirst ? 'bg-muted-foreground/10 text-muted-foreground font-medium' :
+                    info ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'
+                  }`}
+                >
+                  <p className="text-base">{date.getDate()}</p>
+                  {info && (
+                    <p className="text-[10px] leading-tight mt-0.5">
+                      {info.isFirst ? 'Auto-settled' : formatCurrency(info.amount)}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPreviewScheduleOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

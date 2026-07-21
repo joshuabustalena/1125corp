@@ -50,6 +50,20 @@ function countWorkingDays(startStr: string, endStr: string) {
   return count;
 }
 
+// If the employee's birthday (month/day, any birth year) falls somewhere
+// inside this pay period, returns that exact date ('YYYY-MM-DD') so callers
+// can check attendance on that specific day. Otherwise null.
+function getBirthdayInPeriod(birthDate: string | null | undefined, startStr: string, endStr: string): string | null {
+  if (!birthDate) return null;
+  const birth = new Date(birthDate);
+  const start = new Date(startStr);
+  const end = new Date(endStr);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    if (d.getMonth() === birth.getMonth() && d.getDate() === birth.getDate()) return toDateStr(d);
+  }
+  return null;
+}
+
 export default function PayrollPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -71,7 +85,7 @@ export default function PayrollPage() {
   useEffect(() => { load(); loadEmployees(); }, []);
 
   async function loadEmployees() {
-    const { data } = await supabase.from('employees').select('id, first_name, last_name, salary, pay_type, status, branches(name)').eq('status', 'active');
+    const { data } = await supabase.from('employees').select('id, first_name, last_name, salary, pay_type, status, birth_date, branches(name)').eq('status', 'active');
     setEmployees(data ?? []);
   }
 
@@ -92,11 +106,18 @@ export default function PayrollPage() {
 
   function daysPresent(p: any) {
     const { start, end } = getPeriodRange(p.pay_date, p.period);
-    const present = attendanceRecords.filter(a =>
+    const attendancePresent = attendanceRecords.filter(a =>
       a.employee_id === p.employee_id && a.date >= start && a.date <= end &&
       (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected'
     ).length;
-    return { present, total: countWorkingDays(start, end) };
+    // Birthday bonus and approved-leave auto-present days are paid days
+    // that don't have (or, for a worked birthday, aren't only reflected by)
+    // an attendance record — fold them into the displayed count so "Days
+    // Present" actually shows the credit instead of just the raw
+    // attendance tally.
+    const birthdayCredit = Number(p.birthday_bonus) > 0 ? 1 : 0;
+    const leaveCredit = Number(p.leave_days_credited) || 0;
+    return { present: attendancePresent + birthdayCredit + leaveCredit, total: countWorkingDays(start, end) };
   }
 
   // Shared markup for both the on-screen preview (fluid, capped at 600px so
@@ -108,6 +129,8 @@ export default function PayrollPage() {
     const { present, total } = daysPresent(target);
     const loanDeduction = Number(target.loan_deduction) || 0;
     const carryOverDeduction = Number(target.carry_over_deduction) || 0;
+    const birthdayBonus = Number(target.birthday_bonus) || 0;
+    const leavePay = Number(target.leave_pay) || 0;
     const deductions = Number(target.sss) + Number(target.philhealth) + Number(target.pag_ibig) + Number(target.incentive_retention) + loanDeduction + carryOverDeduction;
     const branding = getDocumentBranding(target.employees?.branches?.name);
     return (
@@ -137,7 +160,23 @@ export default function PayrollPage() {
           <tbody>
             <tr><td style={{ padding: '5px 0', color: '#666' }}>Basic Pay</td><td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 600 }}>{formatCurrency(target.basic_salary)}</td></tr>
             <tr><td style={{ padding: '5px 0', color: '#666' }}>Incentive</td><td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 600, color: '#0B7A3D' }}>{formatCurrency(target.incentive)}</td></tr>
-            <tr style={{ borderTop: '1px solid #ddd' }}><td style={{ padding: '8px 0 4px', fontWeight: 700 }}>Gross Pay</td><td style={{ padding: '8px 0 4px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(Number(target.basic_salary) + Number(target.incentive))}</td></tr>
+            {birthdayBonus > 0 && (
+              <tr>
+                <td style={{ padding: '5px 0', color: '#666' }}>
+                  🎂 {target.birthday_worked ? 'Birthday Bonus (worked — double pay)' : 'Birthday Leave (auto-present)'}
+                </td>
+                <td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 600, color: '#0B7A3D' }}>{formatCurrency(birthdayBonus)}</td>
+              </tr>
+            )}
+            {leavePay > 0 && (
+              <tr>
+                <td style={{ padding: '5px 0', color: '#666' }}>
+                  Paid Leave ({target.leave_days_credited} day{Number(target.leave_days_credited) !== 1 ? 's' : ''}, auto-present)
+                </td>
+                <td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 600, color: '#0B7A3D' }}>{formatCurrency(leavePay)}</td>
+              </tr>
+            )}
+            <tr style={{ borderTop: '1px solid #ddd' }}><td style={{ padding: '8px 0 4px', fontWeight: 700 }}>Gross Pay</td><td style={{ padding: '8px 0 4px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(Number(target.basic_salary) + Number(target.incentive) + birthdayBonus + leavePay)}</td></tr>
             <tr><td colSpan={2} style={{ padding: '10px 0 2px', fontWeight: 700, color: '#0B1F3A' }}>Deductions</td></tr>
             <tr><td style={{ padding: '3px 0', color: '#666' }}>SSS</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(target.sss)}</td></tr>
             <tr><td style={{ padding: '3px 0', color: '#666' }}>PhilHealth</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(target.philhealth)}</td></tr>
@@ -179,7 +218,45 @@ export default function PayrollPage() {
     // salary/2 split.
     const { start, end } = getPeriodRange(payDate, period);
     const employeeIds = employees.map(e => e.id);
-    const { data: att } = await supabase.from('attendance').select('employee_id, status, review_status').in('employee_id', employeeIds).gte('date', start).lte('date', end);
+    const { data: att } = await supabase.from('attendance').select('employee_id, date, status, review_status').in('employee_id', employeeIds).gte('date', start).lte('date', end);
+
+    // Approved leave counts as a paid present day even with no attendance
+    // record for that day — an employee correctly out on approved leave
+    // shouldn't lose pay just because they didn't clock in. Only credits
+    // days that don't already have a present/late attendance record, so a
+    // day worked despite being on leave isn't paid twice.
+    const { data: approvedLeaves } = await supabase
+      .from('leave_requests')
+      .select('employee_id, start_date, end_date')
+      .in('employee_id', employeeIds)
+      .eq('status', 'approved')
+      .lte('start_date', end)
+      .gte('end_date', start);
+
+    // excludeDate is the employee's birthday (if it falls in this period) —
+    // that specific day is already credited/paid via the birthday bonus
+    // logic below, so it's excluded here to avoid paying the same physical
+    // day twice just because it happens to be both a birthday and an
+    // approved leave day.
+    function countLeaveDaysInPeriod(employeeId: string, excludeDate: string | null): number {
+      const attendedDates = new Set(
+        (att ?? [])
+          .filter(a => a.employee_id === employeeId && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected')
+          .map(a => a.date)
+      );
+      const creditedDates = new Set<string>();
+      for (const leave of (approvedLeaves ?? []).filter(l => l.employee_id === employeeId)) {
+        const leaveStart = new Date(Math.max(new Date(leave.start_date).getTime(), new Date(start).getTime()));
+        const leaveEnd = new Date(Math.min(new Date(leave.end_date).getTime(), new Date(end).getTime()));
+        for (let d = new Date(leaveStart); d <= leaveEnd; d.setDate(d.getDate() + 1)) {
+          if (d.getDay() === 0) continue; // Sundays aren't working days
+          const key = toDateStr(d);
+          if (key === excludeDate) continue;
+          if (!attendedDates.has(key)) creditedDates.add(key);
+        }
+      }
+      return creditedDates.size;
+    }
 
     // Employees with an active salary loan get its per-payroll deduction
     // amount (capped at whatever's left on the loan) taken out automatically
@@ -236,8 +313,32 @@ export default function PayrollPage() {
         .reduce((sum, l) => sum + Math.min(Number(l.deduction_amount) || 0, Number(l.remaining_balance) || 0), 0);
       const previousNetPay = previousNetPayByEmployee.get(e.id);
       const carryOverDeduction = previousNetPay !== undefined && previousNetPay < 0 ? -previousNetPay : 0;
+
+      // Birthday leave/pay (daily-rate employees only — a fixed-monthly
+      // salary already doesn't depend on attendance, so the concept doesn't
+      // apply the same way): if the employee's birthday falls in this
+      // period, they get one extra day's pay regardless. If they clocked in
+      // that day it stacks on top of the day they already earned normally
+      // (double pay for that specific day); if they didn't clock in, this
+      // is the only pay for that day (auto-present paid birthday leave,
+      // no attendance record needed).
+      const birthdayDate = !isMonthly ? getBirthdayInPeriod(e.birth_date, start, end) : null;
+      const birthdayWorked = birthdayDate
+        ? (att ?? []).some(a => a.employee_id === e.id && a.date === birthdayDate && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected')
+        : false;
+      const birthdayBonus = birthdayDate ? dailyRate : 0;
+
+      // Approved leave (daily-rate employees only, same reasoning as
+      // birthday pay above) — days already credited via attendance, or
+      // already paid via the birthday bonus above, are excluded so the same
+      // physical day is never paid twice (e.g. an employee whose birthday
+      // happens to fall on an approved leave day still only gets paid once
+      // for that one day).
+      const leaveDaysCredited = isMonthly ? 0 : countLeaveDaysInPeriod(e.id, birthdayDate);
+      const leavePay = leaveDaysCredited * dailyRate;
+
       const totalDeductions = sss + philhealth + pagIbig + retention + loanDeduction + carryOverDeduction;
-      const netPay = basicSalary + incentive - totalDeductions;
+      const netPay = basicSalary + incentive + birthdayBonus + leavePay - totalDeductions;
 
       return {
         employee_id: e.id,
@@ -252,6 +353,10 @@ export default function PayrollPage() {
         incentive_retention: Math.round(retention * 100) / 100,
         loan_deduction: Math.round(loanDeduction * 100) / 100,
         carry_over_deduction: Math.round(carryOverDeduction * 100) / 100,
+        birthday_bonus: Math.round(birthdayBonus * 100) / 100,
+        birthday_worked: birthdayDate ? birthdayWorked : null,
+        leave_pay: Math.round(leavePay * 100) / 100,
+        leave_days_credited: leaveDaysCredited,
         net_pay: Math.round(netPay * 100) / 100,
         status: 'pending',
       };
