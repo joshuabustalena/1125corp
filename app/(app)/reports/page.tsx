@@ -291,7 +291,7 @@ export default function ReportsPage() {
               </div>
             </div>
           ) : (
-            <div className="flex flex-col sm:flex-row gap-4 items-end">
+            <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
               <div className="space-y-2 flex-1">
                 <Label>Branch</Label>
                 <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); }}>
@@ -314,7 +314,7 @@ export default function ReportsPage() {
               </div>
             </div>
           )}
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
             <div className="space-y-2 flex-1">
               <Label>Report Type</Label>
               <Select value={reportType} onValueChange={setReportType}>

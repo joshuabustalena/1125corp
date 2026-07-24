@@ -10,9 +10,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
@@ -27,7 +24,7 @@ import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exp
 import {
   Landmark, Plus, Search, Download, Eye, Loader2, Calculator, RefreshCw,
   CalendarDays, ChevronLeft, ChevronRight,
-  ChevronDown, Check, Pencil, Trash2,
+  Pencil, Trash2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -499,16 +496,51 @@ export default function LoansPage() {
 
       {/* Filters */}
       <Card className="glass-card border-border">
-        <CardContent className="p-4">
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="Search by loan number..."
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                className="pl-10"
-              />
+        <CardContent className="p-4 space-y-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by loan number..."
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              className="pl-10"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Customer</Label>
+              <Select value={customerFilter} onValueChange={(v) => { setCustomerFilter(v); setPage(1); }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Customers</SelectItem>
+                  {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="declined">Declined</SelectItem>
+                  <SelectItem value="overdue">Overdue</SelectItem>
+                  <SelectItem value="paid">Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Area</Label>
+              <Select value={areaFilter} onValueChange={(v) => { setAreaFilter(v); setPage(1); }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Areas</SelectItem>
+                  {areas.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardContent>
@@ -517,97 +549,73 @@ export default function LoansPage() {
       {/* Table */}
       <Card className="glass-card border-border">
         <CardContent className="p-0">
-              <Table>
+              {loading ? (
+                <div className="py-16 text-center"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" /></div>
+              ) : loans.length === 0 ? (
+                <div className="py-16 text-center">
+                  <Landmark className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
+                  <p className="text-sm text-muted-foreground">No loans found</p>
+                </div>
+              ) : (
+              <>
+              {/* Mobile card list */}
+              <div className="md:hidden divide-y divide-border">
+                {loans.map((l) => (
+                  <div key={l.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/loans/${l.id}`)}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">{l.loan_number}</p>
+                        <p className="text-xs text-muted-foreground truncate">{l.customers?.first_name} {l.customers?.last_name}</p>
+                      </div>
+                      <Badge variant={statusVariant(l.status)} className="shrink-0">{l.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div><p className="text-xs text-muted-foreground">Amount</p><p>{formatCurrency(l.amount)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Balance</p><p className="font-medium">{formatCurrency(l.remaining_balance)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Due Date</p><p>{formatDate(l.due_date)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Area</p><p className="truncate">{l.areas?.name ?? '—'}</p></div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-end gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                      {l.status === 'declined' && !l.reapplied && profile?.role_name !== 'Cashier' && (
+                        <Button variant="outline" size="sm" disabled={reapplyingId === l.id} onClick={() => handleReapply(l)}>
+                          {reapplyingId === l.id ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Re-apply'}
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" onClick={() => router.push(`/loans/${l.id}`)}>
+                        <Eye className="w-3.5 h-3.5 mr-1.5" />View
+                      </Button>
+                      {isAdmin && (
+                        <>
+                          <Button variant="outline" size="sm" onClick={() => openEditLoan(l)}>
+                            <Pencil className="w-3.5 h-3.5 mr-1.5" />Edit
+                          </Button>
+                          <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(l)}>
+                            <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <Table className="hidden md:table">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Loan #</TableHead>
-                    <TableHead>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
-                          Customer
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start">
-                          <DropdownMenuItem onClick={() => { setCustomerFilter('all'); setPage(1); }} className="flex items-center justify-between">
-                            All Customers
-                            {customerFilter === 'all' && <Check className="w-4 h-4" />}
-                          </DropdownMenuItem>
-                          {customers.map(c => (
-                            <DropdownMenuItem key={c.id} onClick={() => { setCustomerFilter(c.id); setPage(1); }} className="flex items-center justify-between">
-                              {c.first_name} {c.last_name}
-                              {customerFilter === c.id && <Check className="w-4 h-4" />}
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableHead>
+                    <TableHead>Customer</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Interest</TableHead>
                     <TableHead>Release</TableHead>
                     <TableHead>Balance</TableHead>
                     <TableHead>Due Date</TableHead>
-                    <TableHead>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
-                          Status
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start">
-                          {[
-                            ['all', 'All Status'],
-                            ['pending', 'Pending'],
-                            ['approved', 'Approved'],
-                            ['active', 'Active'],
-                            ['declined', 'Declined'],
-                            ['overdue', 'Overdue'],
-                            ['paid', 'Paid'],
-                          ].map(([value, label]) => (
-                            <DropdownMenuItem key={value} onClick={() => { setStatusFilter(value); setPage(1); }} className="flex items-center justify-between">
-                              {label}
-                              {statusFilter === value && <Check className="w-4 h-4" />}
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableHead>
-                    <TableHead>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
-                          Area
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start">
-                          <DropdownMenuItem onClick={() => { setAreaFilter('all'); setPage(1); }} className="flex items-center justify-between">
-                            All Areas
-                            {areaFilter === 'all' && <Check className="w-4 h-4" />}
-                          </DropdownMenuItem>
-                          {areas.map(a => (
-                            <DropdownMenuItem key={a.id} onClick={() => { setAreaFilter(a.id); setPage(1); }} className="flex items-center justify-between">
-                              {a.name}
-                              {areaFilter === a.id && <Check className="w-4 h-4" />}
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Area</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loading ? (
-                    <TableRow>
-                      <TableCell colSpan={10} className="py-16 text-center">
-                        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
-                      </TableCell>
-                    </TableRow>
-                  ) : loans.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={10} className="py-16 text-center">
-                        <Landmark className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
-                        <p className="text-sm text-muted-foreground">No loans found</p>
-                      </TableCell>
-                    </TableRow>
-                  ) : loans.map((l) => (
+                  {loans.map((l) => (
                     <TableRow key={l.id} className="cursor-pointer hover:bg-secondary/50" onClick={() => router.push(`/loans/${l.id}`)}>
                       <TableCell className="font-medium text-sm">{l.loan_number}</TableCell>
                       <TableCell className="text-sm">{l.customers?.first_name} {l.customers?.last_name}</TableCell>
@@ -650,7 +658,9 @@ export default function LoansPage() {
                   ))}
                 </TableBody>
               </Table>
-              <div className="flex items-center justify-between p-4 border-t border-border">
+              </>
+              )}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-border">
                 <p className="text-sm text-muted-foreground">
                   Showing {total === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
                 </p>
@@ -706,7 +716,7 @@ export default function LoansPage() {
 
               {/* Form fields on the right */}
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Customer *</Label>
                     <Select value={form.customer_id} onValueChange={handleCustomerChange}>
@@ -773,7 +783,7 @@ export default function LoansPage() {
                     <p className="text-xs text-muted-foreground">How much the customer will pay per collection day. Leave blank to split evenly — the last day absorbs any remaining balance.</p>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <Label>Branch</Label>
                     <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
@@ -872,7 +882,7 @@ export default function LoansPage() {
             <DialogDescription>Directly overwrites this loan's stored data — use with care, this does not recompute related payment history.</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleEditLoan} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Amount (₱)</Label><Input type="number" required value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} /></div>
               <div className="space-y-2"><Label>Interest Rate (%)</Label><Input type="number" value={editForm.interest_rate} onChange={(e) => setEditForm({ ...editForm, interest_rate: e.target.value })} /></div>
               <div className="space-y-2"><Label>Term (Days)</Label><Input type="number" value={editForm.term_days} onChange={(e) => setEditForm({ ...editForm, term_days: e.target.value })} /></div>

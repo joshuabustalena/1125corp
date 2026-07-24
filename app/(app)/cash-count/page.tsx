@@ -193,7 +193,29 @@ export default function CashCountPage() {
               <p className="text-sm text-muted-foreground">No cash counts recorded yet</p>
             </div>
           ) : (
-            <Table>
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {history.map(h => (
+                <div key={h.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-medium text-sm">{formatDate(h.count_date)}</p>
+                    <Badge variant={Number(h.variance) === 0 ? 'default' : 'destructive'} className="shrink-0">
+                      {Number(h.variance) === 0 ? 'Balanced' : formatCurrency(h.variance)}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div><p className="text-xs text-muted-foreground">Vault</p><p>{formatCurrency(h.vault_amount ?? 0)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Bank</p><p>{formatCurrency(h.bank_amount ?? 0)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Petty Cash</p><p>{formatCurrency(h.petty_cash_amount ?? 0)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Expected</p><p>{formatCurrency(h.expected_amount)}</p></div>
+                    <div className="col-span-2"><p className="text-xs text-muted-foreground">Counted</p><p className="font-medium">{formatCurrency(h.counted_amount)}</p></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
@@ -223,6 +245,7 @@ export default function CashCountPage() {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>

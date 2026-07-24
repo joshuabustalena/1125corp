@@ -498,7 +498,7 @@ export default function PayrollPage() {
           <CardDescription>Semi-monthly payroll (15th and 30th)</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
             <div className="space-y-2 flex-1">
               <Label>Period</Label>
               <Select value={period} onValueChange={setPeriod}>
@@ -529,7 +529,49 @@ export default function PayrollPage() {
               <p className="text-sm text-muted-foreground">No payroll records</p>
             </div>
           ) : (
-            <Table>
+            <>
+              {/* Mobile card list */}
+              <div className="md:hidden divide-y divide-border">
+                {payroll.map(p => {
+                  const deductions = Number(p.sss) + Number(p.philhealth) + Number(p.pag_ibig) + Number(p.incentive_retention) + Number(p.loan_deduction || 0) + Number(p.carry_over_deduction || 0);
+                  const { present, total } = daysPresent(p);
+                  return (
+                    <div key={p.id} className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm truncate">{p.employees?.first_name} {p.employees?.last_name}</p>
+                          <p className="text-xs text-muted-foreground">{p.period === '15' ? '15th' : '30th'} cutoff · {formatDate(p.pay_date)}</p>
+                        </div>
+                        <Badge variant={p.status === 'paid' ? 'default' : 'secondary'} className="shrink-0">{p.status}</Badge>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                        <div><p className="text-xs text-muted-foreground">Days Present</p><p>{present} / {total}</p></div>
+                        <div><p className="text-xs text-muted-foreground">Basic</p><p>{formatCurrency(p.basic_salary)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">Incentive</p><p className="text-success">{formatCurrency(p.incentive)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">Deductions</p><p className="text-destructive">{formatCurrency(deductions)}</p></div>
+                        <div className="col-span-2"><p className="text-xs text-muted-foreground">Net Pay</p><p className="font-bold">{formatCurrency(p.net_pay)}</p></div>
+                      </div>
+                      <div className="mt-3 flex items-center justify-end gap-1">
+                        <Button variant="outline" size="sm" onClick={() => setPayslipTarget(p)}>
+                          <Receipt className="w-3.5 h-3.5 mr-1.5" />Payslip
+                        </Button>
+                        {p.status === 'pending' && (
+                          <Button variant="outline" size="sm" onClick={() => approvePayroll(p.id)}>
+                            <CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Approve
+                          </Button>
+                        )}
+                        {isAdmin && (
+                          <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(p)}>
+                            <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Employee</TableHead>
@@ -580,7 +622,8 @@ export default function PayrollPage() {
                   );
                 })}
               </TableBody>
-            </Table>
+              </Table>
+            </>
           )}
         </CardContent>
       </Card>

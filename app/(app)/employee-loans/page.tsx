@@ -333,45 +333,72 @@ export default function EmployeeLoansPage() {
               <p className="text-sm text-muted-foreground">No employee loans found</p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Balance</TableHead>
-                  <TableHead>Deduction</TableHead>
-                  <TableHead>Term</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Applied</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              {/* Mobile card list */}
+              <div className="md:hidden divide-y divide-border">
                 {filteredLoans.map(l => (
-                  <TableRow key={l.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employee-loans/${l.id}`)}>
-                    <TableCell className="text-sm font-medium">{l.employees?.first_name} {l.employees?.last_name}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(l.amount)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(l.remaining_balance)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(l.deduction_amount)}</TableCell>
-                    <TableCell className="text-sm">{l.term_months} months</TableCell>
-                    <TableCell><Badge variant={statusVariant(l.status)}>{l.status}</Badge></TableCell>
-                    <TableCell className="text-sm">{formatDate(l.created_at)}</TableCell>
-                    <TableCell className="text-right">
-                      {isAdmin && (
-                        <div className="flex gap-1 justify-end">
-                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openEditLoan(l); }}>
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(l); }}>
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
+                  <div key={l.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employee-loans/${l.id}`)}>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="font-medium text-sm truncate">{l.employees?.first_name} {l.employees?.last_name}</p>
+                      <Badge variant={statusVariant(l.status)} className="shrink-0">{l.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div><p className="text-xs text-muted-foreground">Amount</p><p>{formatCurrency(l.amount)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Balance</p><p className="font-medium">{formatCurrency(l.remaining_balance)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Deduction</p><p>{formatCurrency(l.deduction_amount)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Term</p><p>{l.term_months} months</p></div>
+                      <div className="col-span-2"><p className="text-xs text-muted-foreground">Applied</p><p>{formatDate(l.created_at)}</p></div>
+                    </div>
+                    {isAdmin && (
+                      <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Button variant="outline" size="sm" onClick={() => openEditLoan(l)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                        <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(l)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
+                      </div>
+                    )}
+                  </div>
                 ))}
-              </TableBody>
-            </Table>
+              </div>
+
+              <Table className="hidden md:table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Balance</TableHead>
+                    <TableHead>Deduction</TableHead>
+                    <TableHead>Term</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Applied</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredLoans.map(l => (
+                    <TableRow key={l.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employee-loans/${l.id}`)}>
+                      <TableCell className="text-sm font-medium">{l.employees?.first_name} {l.employees?.last_name}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(l.amount)}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(l.remaining_balance)}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(l.deduction_amount)}</TableCell>
+                      <TableCell className="text-sm">{l.term_months} months</TableCell>
+                      <TableCell><Badge variant={statusVariant(l.status)}>{l.status}</Badge></TableCell>
+                      <TableCell className="text-sm">{formatDate(l.created_at)}</TableCell>
+                      <TableCell className="text-right">
+                        {isAdmin && (
+                          <div className="flex gap-1 justify-end">
+                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openEditLoan(l); }}>
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(l); }}>
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </>
           )}
         </CardContent>
       </Card>
@@ -389,7 +416,7 @@ export default function EmployeeLoansPage() {
                 </Select>
               </div>
             )}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Amount (₱) *</Label>
                 <Input type="number" required max={applicantMaxAmount} value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder={`Max ${applicantMaxAmount}`} />
@@ -534,7 +561,7 @@ export default function EmployeeLoansPage() {
             <DialogDescription>{editTarget?.employees?.first_name} {editTarget?.employees?.last_name}</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleEditLoan} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Amount (₱)</Label><Input type="number" required value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} /></div>
               <div className="space-y-2"><Label>Remaining Balance (₱)</Label><Input type="number" value={editForm.remaining_balance} onChange={(e) => setEditForm({ ...editForm, remaining_balance: e.target.value })} /></div>
               <div className="space-y-2">

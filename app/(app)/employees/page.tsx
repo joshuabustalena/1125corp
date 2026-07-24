@@ -300,7 +300,37 @@ export default function EmployeesPage() {
             </div>
           ) : (
             <>
-              <Table>
+              {/* Mobile card list */}
+              <div className="md:hidden divide-y divide-border">
+                {employees.map(e => (
+                  <div key={e.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employees/${e.id}`)}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Avatar className="w-9 h-9 shrink-0">
+                          <AvatarImage src={e.photo_url ?? undefined} className="object-cover" />
+                          <AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(`${e.first_name} ${e.last_name}`)}</AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm truncate">{e.first_name} {e.last_name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{e.position ?? '—'}</p>
+                        </div>
+                      </div>
+                      <Badge variant={e.status === 'active' ? 'default' : 'secondary'} className="shrink-0">{e.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div><p className="text-xs text-muted-foreground">Department</p><p className="truncate">{e.department ?? '—'}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Branch</p><p className="truncate">{e.branches?.name ?? '—'}</p></div>
+                      <div className="col-span-2"><p className="text-xs text-muted-foreground">Rate</p><p className="font-medium">{formatCurrency(e.salary)}{e.pay_type === 'monthly' ? '/mo' : '/day'}</p></div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-end gap-1" onClick={(e2) => e2.stopPropagation()}>
+                      <Button variant="outline" size="sm" onClick={() => openEdit(e)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                      <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(e)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <Table className="hidden md:table">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Employee</TableHead>
@@ -340,7 +370,7 @@ export default function EmployeesPage() {
                   ))}
                 </TableBody>
               </Table>
-              <div className="flex items-center justify-between p-4 border-t border-border">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-border">
                 <p className="text-sm text-muted-foreground">Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}</p>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</Button>
@@ -359,7 +389,7 @@ export default function EmployeesPage() {
             <DialogDescription>{editing ? 'Update employee information' : 'Register a new employee'}</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>First Name *</Label><Input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Last Name *</Label><Input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Department</Label><Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="e.g. Operations" /></div>
@@ -416,7 +446,7 @@ export default function EmployeesPage() {
 
             <div className="space-y-2">
               <Label className="text-sm font-medium">Government IDs</Label>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">SSS Number</Label><Input value={form.sss_number} onChange={(e) => setForm({ ...form, sss_number: e.target.value })} /></div>
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">PhilHealth Number</Label><Input value={form.philhealth_number} onChange={(e) => setForm({ ...form, philhealth_number: e.target.value })} /></div>
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">Pag-IBIG Number</Label><Input value={form.pagibig_number} onChange={(e) => setForm({ ...form, pagibig_number: e.target.value })} /></div>
@@ -426,7 +456,7 @@ export default function EmployeesPage() {
 
             <div className="space-y-2">
               <Label className="text-sm font-medium">Contact Person</Label>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2 col-span-2"><Label className="text-xs text-muted-foreground">Name</Label><Input value={form.contact_person_name} onChange={(e) => setForm({ ...form, contact_person_name: e.target.value })} placeholder="e.g. Juan Dela Cruz" /></div>
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">Relationship</Label><Input value={form.contact_person_relationship} onChange={(e) => setForm({ ...form, contact_person_relationship: e.target.value })} placeholder="e.g. Spouse, Parent" /></div>
                 <div className="space-y-2"><Label className="text-xs text-muted-foreground">Contact Number</Label><Input value={form.contact_person_phone} onChange={(e) => setForm({ ...form, contact_person_phone: e.target.value })} /></div>

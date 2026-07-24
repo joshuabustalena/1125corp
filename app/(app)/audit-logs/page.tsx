@@ -94,7 +94,28 @@ export default function AuditLogsPage() {
               <p className="text-sm text-muted-foreground">No audit logs found</p>
             </div>
           ) : (
-            <Table>
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {logs.map(l => (
+                <div key={l.id} className="p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      {actionIcon(l.action)}
+                      <Badge variant="outline" className="capitalize">{l.action}</Badge>
+                    </div>
+                    <span className="text-xs text-muted-foreground">{formatDateTime(l.created_at)}</span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-sm">
+                    <span className="font-medium">{l.profiles?.full_name ?? 'System'}</span>
+                    <span className="text-muted-foreground">{l.entity_type ?? '—'}</span>
+                  </div>
+                  {l.ip_address && <p className="mt-1 text-xs text-muted-foreground font-mono">{l.ip_address}</p>}
+                </div>
+              ))}
+            </div>
+
+            <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Timestamp</TableHead>
@@ -121,6 +142,7 @@ export default function AuditLogsPage() {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>

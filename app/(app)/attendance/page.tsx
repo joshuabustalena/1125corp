@@ -60,6 +60,10 @@ export default function AttendancePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+  const locationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bestAccuracyRef = useRef<number>(Infinity);
+  const bestCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
   // The ?employee= deep-link updates filterEmployee a tick after mount,
   // firing a second load() while the first (unfiltered) one may still be in
   // flight. Without a sequence guard, whichever request's response arrives
@@ -170,20 +174,68 @@ export default function AttendancePage() {
     requestLocation();
   }
 
+  function stopLocationWatch() {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    if (locationTimeoutRef.current !== null) {
+      clearTimeout(locationTimeoutRef.current);
+      locationTimeoutRef.current = null;
+    }
+  }
+
+  // A phone's very first GPS fix is often a coarse Wi-Fi/network estimate
+  // (100-300m). Rather than taking that first reading, this keeps listening
+  // for a few seconds — long enough for the device's actual GPS chip to
+  // lock on — and keeps only the single best (lowest-accuracy-value)
+  // reading it sees, same free browser Geolocation API, tighter result.
   function requestLocation() {
     if (!navigator.geolocation) return;
+    stopLocationWatch();
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setLocation(coords);
-        setLocationAccuracy(pos.coords.accuracy);
-        const address = await reverseGeocode(coords.lat, coords.lng);
-        setLocationAddress(address);
+    setLocationAccuracy(null);
+    bestAccuracyRef.current = Infinity;
+    bestCoordsRef.current = null;
+
+    const GOOD_ENOUGH_ACCURACY_M = 15;
+    const MAX_WAIT_MS = 12000;
+
+    const finish = async (coords: { lat: number; lng: number }) => {
+      stopLocationWatch();
+      const address = await reverseGeocode(coords.lat, coords.lng);
+      setLocationAddress(address);
+      setLocating(false);
+    };
+
+    locationTimeoutRef.current = setTimeout(() => {
+      if (bestCoordsRef.current) {
+        finish(bestCoordsRef.current);
+      } else {
+        stopLocationWatch();
+        setLocating(false);
+      }
+    }, MAX_WAIT_MS);
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const accuracy = pos.coords.accuracy;
+        if (accuracy < bestAccuracyRef.current) {
+          bestAccuracyRef.current = accuracy;
+          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          bestCoordsRef.current = coords;
+          setLocation(coords);
+          setLocationAccuracy(accuracy);
+          if (accuracy <= GOOD_ENOUGH_ACCURACY_M) {
+            finish(coords);
+          }
+        }
+      },
+      () => {
+        stopLocationWatch();
         setLocating(false);
       },
-      () => setLocating(false),
-      { enableHighAccuracy: true, timeout: 8000 }
+      { enableHighAccuracy: true, timeout: MAX_WAIT_MS, maximumAge: 0 }
     );
   }
 
@@ -203,6 +255,7 @@ export default function AttendancePage() {
 
   function closeCamera() {
     stopStream();
+    stopLocationWatch();
     setCameraOpen(false);
     setCapturedBlob(null);
     if (capturedPreviewUrl) URL.revokeObjectURL(capturedPreviewUrl);
@@ -341,7 +394,7 @@ export default function AttendancePage() {
       {/* Check-in panel */}
       <Card className="glass-card border-border">
         <CardContent className="p-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
             {isAdmin ? (
               <div className="space-y-2 flex-1">
                 <Label>Select Employee</Label>
@@ -412,7 +465,80 @@ export default function AttendancePage() {
               <p className="text-sm text-muted-foreground">No attendance records</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {records.map(r => (
+                <div key={r.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => r.photo_in_url && setPreviewImage({ url: r.photo_in_url, label: 'Check-In Photo' })}
+                        title="Check-in photo"
+                        className="shrink-0"
+                      >
+                        <Avatar className="w-9 h-9 rounded-md">
+                          <AvatarImage src={r.photo_in_url ?? undefined} className="object-cover" />
+                          <AvatarFallback className="rounded-md"><ImageOff className="w-4 h-4 text-muted-foreground" /></AvatarFallback>
+                        </Avatar>
+                      </button>
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">{r.employees?.first_name} {r.employees?.last_name}</p>
+                        <p className="text-xs text-muted-foreground">{formatDate(r.date)}</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <Badge variant={statusVariant(r.status)}>{r.status}</Badge>
+                      <Badge variant={reviewVariant(r.review_status)} className="text-[10px]">{r.review_status ?? 'pending'}</Badge>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div><p className="text-xs text-muted-foreground">Time In</p><p>{formatTime(r.time_in)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Time Out</p><p>{formatTime(r.time_out)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Hours</p><p>{formatDuration(r.time_in, r.time_out)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Late</p><p>{r.late_minutes > 0 ? `${r.late_minutes} min` : '—'}</p></div>
+                    {r.gps_lat && r.gps_lng && (
+                      <div className="col-span-2">
+                        <p className="text-xs text-muted-foreground">Location</p>
+                        <a
+                          className="flex items-start gap-1 text-primary hover:underline min-w-0"
+                          href={`https://www.google.com/maps?q=${r.gps_lat},${r.gps_lng}`}
+                          target="_blank" rel="noopener noreferrer"
+                        >
+                          <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span className="truncate min-w-0">{shortenAddress(r.location_address) ?? 'View on map'}</span>
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-3 flex items-center justify-end gap-1 flex-wrap">
+                    {!r.time_out && (
+                      <Button variant="outline" size="sm" onClick={() => openCamera('checkout', r.id)}>
+                        <Clock className="w-3.5 h-3.5 mr-1.5" />Check Out
+                      </Button>
+                    )}
+                    {isAdmin && r.review_status !== 'accepted' && (
+                      <Button variant="outline" size="sm" onClick={() => handleReview(r.id, 'accepted')}>
+                        <CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Accept
+                      </Button>
+                    )}
+                    {isAdmin && r.review_status !== 'rejected' && (
+                      <Button variant="outline" size="sm" onClick={() => handleReview(r.id, 'rejected')}>
+                        <XCircle className="w-3.5 h-3.5 mr-1.5 text-destructive" />Reject
+                      </Button>
+                    )}
+                    {r.photo_out_url && (
+                      <Button variant="outline" size="sm" onClick={() => setPreviewImage({ url: r.photo_out_url, label: 'Check-Out Photo' })}>
+                        Out Photo
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <Table className="min-w-[900px]">
                 <TableHeader>
                   <TableRow>
@@ -509,6 +635,7 @@ export default function AttendancePage() {
                 </TableBody>
               </Table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -543,18 +670,15 @@ export default function AttendancePage() {
               <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
                 {locating
-                  ? 'Getting your location...'
+                  ? (locationAccuracy !== null ? 'Improving accuracy...' : 'Getting your location...')
                   : shortenAddress(locationAddress) ?? (location ? `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}` : 'Location unavailable')}
-                {!locating && locationAccuracy !== null && (
+                {locationAccuracy !== null && (
                   <span className="text-white/40"> (accurate to ±{Math.round(locationAccuracy)}m)</span>
                 )}
               </span>
             </div>
 
             <div className="flex items-center justify-center gap-3">
-              <Button type="button" variant="outline" onClick={closeCamera} className="bg-transparent text-white border-white/30 hover:bg-white/10 hover:text-white">
-                Cancel
-              </Button>
               {capturedPreviewUrl ? (
                 <>
                   <Button type="button" variant="outline" onClick={retake} disabled={submitting} className="bg-transparent text-white border-white/30 hover:bg-white/10 hover:text-white">
@@ -566,9 +690,15 @@ export default function AttendancePage() {
                   </Button>
                 </>
               ) : (
-                <Button type="button" onClick={capturePhoto} disabled={!!cameraError}>
-                  <Camera className="w-4 h-4 mr-2" />Capture
-                </Button>
+                <button
+                  type="button"
+                  onClick={capturePhoto}
+                  disabled={!!cameraError}
+                  aria-label="Capture photo"
+                  className="w-16 h-16 rounded-full border-4 border-white flex items-center justify-center transition-transform active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <span className="w-12 h-12 rounded-full bg-white" />
+                </button>
               )}
             </div>
           </div>

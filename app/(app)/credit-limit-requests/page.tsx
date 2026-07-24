@@ -178,7 +178,42 @@ export default function CreditLimitRequestsPage() {
               <p className="text-sm text-muted-foreground">No credit limit requests</p>
             </div>
           ) : (
-            <Table>
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {requests.map(r => (
+                <div key={r.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/customers/${r.customer_id}`)}>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-medium text-sm truncate">{r.customers?.first_name} {r.customers?.last_name}</p>
+                    <div className="text-right shrink-0">
+                      <Badge variant={statusVariant(r.status)}>{r.status}</Badge>
+                      {r.status === 'denied' && r.denial_reason && (
+                        <p className="text-xs text-muted-foreground mt-1 max-w-[140px] truncate" title={r.denial_reason}>{r.denial_reason}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div><p className="text-xs text-muted-foreground">Current Limit</p><p>{formatCurrency(r.current_limit)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Requested Limit</p><p className="font-medium text-primary">{formatCurrency(r.requested_limit)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Requested By</p><p className="truncate">{r.requested_by_profile?.full_name ?? '—'}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Requested</p><p>{formatDate(r.created_at)}</p></div>
+                    <div className="col-span-2"><p className="text-xs text-muted-foreground">Reason</p><p className="truncate">{r.reason ?? '—'}</p></div>
+                  </div>
+                  {isAdmin && r.status === 'pending' && (
+                    <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                      <Button variant="outline" size="sm" disabled={reviewing === r.id} onClick={() => openConfirm(r, 'approved')}>
+                        <CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Approve
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={reviewing === r.id} onClick={() => openConfirm(r, 'denied')}>
+                        <XCircle className="w-3.5 h-3.5 mr-1.5 text-destructive" />Deny
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Customer</TableHead>
@@ -224,6 +259,7 @@ export default function CreditLimitRequestsPage() {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>

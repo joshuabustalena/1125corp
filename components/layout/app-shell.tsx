@@ -35,7 +35,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-secondary">
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
+      <div className="hidden lg:block">
+        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
+      </div>
 
       {/* Mobile overlay */}
       {mobileOpen && (
@@ -54,7 +56,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         <div className="h-full">
           <div className="h-full w-64 bg-[#0b1f3a]">
-            <Sidebar collapsed={false} onToggle={() => setMobileOpen(false)} />
+            <Sidebar collapsed={false} onToggle={() => setMobileOpen(false)} onNavigate={() => setMobileOpen(false)} />
           </div>
         </div>
       </div>

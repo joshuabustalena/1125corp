@@ -74,7 +74,28 @@ export default function NotificationsPage() {
               <p className="text-sm text-muted-foreground">No notifications sent</p>
             </div>
           ) : (
-            <Table>
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {notifications.map(n => (
+                <div key={n.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {typeIcon(n.type)}
+                      <span className="text-sm font-medium capitalize truncate">{n.type.replace(/_/g, ' ')}</span>
+                    </div>
+                    <Badge variant={n.status === 'sent' ? 'default' : n.status === 'failed' ? 'destructive' : 'secondary'} className="shrink-0">{n.status}</Badge>
+                  </div>
+                  <p className="mt-1.5 text-sm text-muted-foreground">{n.message ?? '—'}</p>
+                  <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{n.recipient_name ?? '—'}</span>
+                    <span className="flex items-center gap-1">{channelIcon(n.channel)}{n.channel} · {formatDateTime(n.sent_at ?? n.created_at)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Type</TableHead>
@@ -98,6 +119,7 @@ export default function NotificationsPage() {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>

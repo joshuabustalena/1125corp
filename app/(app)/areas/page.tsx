@@ -178,7 +178,42 @@ export default function AreasPage() {
 
       <Card className="glass-card border-border">
         <CardContent className="p-0">
-          <Table>
+          {loading ? (
+            <div className="py-16 text-center"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" /></div>
+          ) : filtered.length === 0 ? (
+            <div className="py-16 text-center">
+              <MapPin className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
+              <p className="text-sm text-muted-foreground">No areas found</p>
+            </div>
+          ) : (
+          <>
+          {/* Mobile card list */}
+          <div className="md:hidden divide-y divide-border">
+            {filtered.map(a => (
+              <div key={a.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/areas/${a.id}`)}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Avatar className="w-9 h-9 shrink-0"><AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(a.name)}</AvatarFallback></Avatar>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{a.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{a.branches?.name ?? '—'}</p>
+                    </div>
+                  </div>
+                  <Badge variant={a.status === 'active' ? 'default' : 'secondary'} className="shrink-0">{a.status}</Badge>
+                </div>
+                <div className="mt-3 flex items-center gap-4 text-sm">
+                  <span className="inline-flex items-center gap-1"><UserCheck className="w-3.5 h-3.5 text-muted-foreground" />{collectorCounts[a.id] ?? 0} collectors</span>
+                  <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5 text-muted-foreground" />{customerCounts[a.id] ?? 0} clients</span>
+                </div>
+                <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                  <Button variant="outline" size="sm" onClick={() => openEdit(a)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                  <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(a)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <Table className="hidden md:table">
             <TableHeader>
               <TableRow>
                 <TableHead>Area</TableHead>
@@ -190,45 +225,32 @@ export default function AreasPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="py-16 text-center">
-                    <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
+              {filtered.map(a => (
+                <TableRow key={a.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/areas/${a.id}`)}>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <Avatar className="w-9 h-9"><AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(a.name)}</AvatarFallback></Avatar>
+                      <p className="font-medium text-sm">{a.name}</p>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-sm">{a.branches?.name ?? '—'}</TableCell>
+                  <TableCell className="text-sm">
+                    <span className="inline-flex items-center gap-1"><UserCheck className="w-3.5 h-3.5 text-muted-foreground" />{collectorCounts[a.id] ?? 0}</span>
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5 text-muted-foreground" />{customerCounts[a.id] ?? 0}</span>
+                  </TableCell>
+                  <TableCell><Badge variant={a.status === 'active' ? 'default' : 'secondary'}>{a.status}</Badge></TableCell>
+                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                    <Button variant="ghost" size="icon" onClick={() => openEdit(a)}><Pencil className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(a)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                   </TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="py-16 text-center">
-                    <MapPin className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
-                    <p className="text-sm text-muted-foreground">No areas found</p>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map(a => (
-                  <TableRow key={a.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/areas/${a.id}`)}>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <Avatar className="w-9 h-9"><AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(a.name)}</AvatarFallback></Avatar>
-                        <p className="font-medium text-sm">{a.name}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm">{a.branches?.name ?? '—'}</TableCell>
-                    <TableCell className="text-sm">
-                      <span className="inline-flex items-center gap-1"><UserCheck className="w-3.5 h-3.5 text-muted-foreground" />{collectorCounts[a.id] ?? 0}</span>
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5 text-muted-foreground" />{customerCounts[a.id] ?? 0}</span>
-                    </TableCell>
-                    <TableCell><Badge variant={a.status === 'active' ? 'default' : 'secondary'}>{a.status}</Badge></TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(a)}><Pencil className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(a)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
+              ))}
             </TableBody>
           </Table>
+          </>
+          )}
         </CardContent>
       </Card>
 

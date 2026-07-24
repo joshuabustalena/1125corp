@@ -176,7 +176,35 @@ export default function BranchesPage() {
               <p className="text-sm text-muted-foreground">No branches found</p>
             </div>
           ) : (
-            <Table>
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {filtered.map(b => (
+                <div key={b.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/branches/${b.id}`)}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar className="w-9 h-9 shrink-0"><AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(b.name)}</AvatarFallback></Avatar>
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">{b.name}</p>
+                        <p className="text-xs text-muted-foreground">{b.code}</p>
+                      </div>
+                    </div>
+                    <Badge variant={b.status === 'active' ? 'default' : 'secondary'} className="shrink-0">{b.status}</Badge>
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground truncate">Manager: {(managersByBranch[b.id] ?? []).join(', ') || '—'}</p>
+                  <div className="mt-3 flex items-center gap-4 text-sm">
+                    <span className="inline-flex items-center gap-1"><UserCog className="w-3.5 h-3.5 text-muted-foreground" />{employeeCounts[b.id] ?? 0} employees</span>
+                    <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5 text-muted-foreground" />{customerCounts[b.id] ?? 0} clients</span>
+                  </div>
+                  <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                    <Button variant="outline" size="sm" onClick={() => openEdit(b)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                    <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(b)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Branch</TableHead>
@@ -212,6 +240,7 @@ export default function BranchesPage() {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>
@@ -224,7 +253,7 @@ export default function BranchesPage() {
             <DialogDescription>{editing ? 'Update branch information' : 'Create a new branch office'}</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Name *</Label><Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Code</Label><Input value={form.code} readOnly disabled className="bg-muted" /></div>
               <div className="space-y-2 col-span-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>

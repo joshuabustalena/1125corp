@@ -85,7 +85,7 @@ export default function AccountLedgerPage() {
 
       <Card className="glass-card border-border">
         <CardContent className="p-4">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
             <div className="space-y-2 flex-1">
               <Label>Account</Label>
               <Select value={ledgerAccountId} onValueChange={setLedgerAccountId}>

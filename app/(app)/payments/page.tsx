@@ -23,11 +23,8 @@ import { formatCurrency, formatDate, formatTime, generateORNumber, exportToCSV }
 import { postJournalEntry } from '@/lib/ledger';
 import { connectThermalPrinter, buildPaymentReceiptLines, buildReceiptBytes, writeToPrinter } from '@/lib/thermal-printer';
 import {
-  Wallet, Plus, Search, Download, Eye, Loader2, MapPin, Receipt, Calculator, ChevronDown, Check, Bluetooth, Pencil, Trash2,
+  Wallet, Plus, Search, Download, Loader2, MapPin, Receipt, Calculator, Bluetooth, Pencil, Trash2,
 } from 'lucide-react';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 
 // Collection days = every day in [releaseDate, dueDate] except Sunday —
 // matches the same convention used for the loan's own payment calendar.
@@ -558,7 +555,7 @@ export default function PaymentsPage() {
 
       {/* Filters */}
       <Card className="glass-card border-border">
-        <CardContent className="p-4">
+        <CardContent className="p-4 space-y-4">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -568,37 +565,96 @@ export default function PaymentsPage() {
               className="pl-10"
             />
           </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Customer</Label>
+            <Select value={customerFilter} onValueChange={(v) => { setCustomerFilter(v); setPage(1); }}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Customers</SelectItem>
+                {customerOptions.map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
         </CardContent>
       </Card>
 
       {/* Table */}
       <Card className="glass-card border-border">
         <CardContent className="p-0">
-          <Table>
+          {loading ? (
+            <div className="py-16 text-center"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" /></div>
+          ) : payments.length === 0 ? (
+            <div className="py-16 text-center">
+              <Wallet className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
+              <p className="text-sm text-muted-foreground">No payments recorded</p>
+            </div>
+          ) : (
+          <>
+          {/* Mobile card list */}
+          <div className="md:hidden divide-y divide-border">
+            {payments.map(p => (
+              <div key={p.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/payments/${p.loan_id}`)}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{p.loans?.loan_number ?? '—'}</p>
+                    <p className="text-xs text-muted-foreground truncate">{p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—'}</p>
+                  </div>
+                  <p className="text-sm font-medium text-success shrink-0">{formatCurrency(p.amount_paid)}</p>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div><p className="text-xs text-muted-foreground">Date</p><p>{formatDate(p.payment_date)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Collector</p><p className="truncate">{p.collectors?.profiles?.full_name ?? '—'}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Balance</p><p>{formatCurrency(p.remaining_balance)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">OR #</p><p>{p.receipts?.or_number ?? '—'}</p></div>
+                </div>
+                <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setReceiptData({
+                        orNumber: p.receipts?.or_number ?? '—',
+                        loanNumber: p.loans?.loan_number ?? '—',
+                        releaseDate: p.loans?.release_date ?? null,
+                        dueDate: p.loans?.due_date ?? null,
+                        customerName: p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—',
+                        customerPhone: p.loans?.customers?.phone ?? null,
+                        currentAddress: p.location_address ?? null,
+                        gpsLat: p.gps_lat ?? null,
+                        gpsLng: p.gps_lng ?? null,
+                        branchName: p.loans?.branches?.name ?? null,
+                        areaName: p.loans?.areas?.name ?? null,
+                        collectorName: p.collectors?.profiles?.full_name ?? null,
+                        amount: Number(p.amount_paid),
+                        remainingBalance: Number(p.remaining_balance),
+                        date: p.payment_date,
+                        time: p.payment_time ?? null,
+                      });
+                    }}
+                  >
+                    <Receipt className="w-3.5 h-3.5 mr-1.5" />Receipt
+                  </Button>
+                  {isAdmin && (
+                    <>
+                      <Button variant="outline" size="sm" onClick={() => openEditPayment(p)}>
+                        <Pencil className="w-3.5 h-3.5 mr-1.5" />Edit
+                      </Button>
+                      <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(p)}>
+                        <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <Table className="hidden md:table">
             <TableHeader>
               <TableRow>
                 <TableHead>Date</TableHead>
                 <TableHead>Loan #</TableHead>
-                <TableHead>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger className="flex items-center gap-1 hover:text-foreground">
-                      Customer
-                      <ChevronDown className="w-3.5 h-3.5" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuItem onClick={() => { setCustomerFilter('all'); setPage(1); }} className="flex items-center justify-between">
-                        All Customers
-                        {customerFilter === 'all' && <Check className="w-4 h-4" />}
-                      </DropdownMenuItem>
-                      {customerOptions.map(([id, name]) => (
-                        <DropdownMenuItem key={id} onClick={() => { setCustomerFilter(id); setPage(1); }} className="flex items-center justify-between">
-                          {name}
-                          {customerFilter === id && <Check className="w-4 h-4" />}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableHead>
+                <TableHead>Customer</TableHead>
                 <TableHead>Collector</TableHead>
                 <TableHead>Amount</TableHead>
                 <TableHead>Balance</TableHead>
@@ -607,75 +663,62 @@ export default function PaymentsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="py-16 text-center">
-                    <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
+              {payments.map(p => (
+                <TableRow key={p.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/payments/${p.loan_id}`)}>
+                  <TableCell className="text-sm">{formatDate(p.payment_date)}</TableCell>
+                  <TableCell className="font-medium text-sm">{p.loans?.loan_number ?? '—'}</TableCell>
+                  <TableCell className="text-sm">{p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—'}</TableCell>
+                  <TableCell className="text-sm">{p.collectors?.profiles?.full_name ?? '—'}</TableCell>
+                  <TableCell className="text-sm font-medium text-success">{formatCurrency(p.amount_paid)}</TableCell>
+                  <TableCell className="text-sm">{formatCurrency(p.remaining_balance)}</TableCell>
+                  <TableCell className="text-sm">{p.receipts?.or_number ?? '—'}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setReceiptData({
+                          orNumber: p.receipts?.or_number ?? '—',
+                          loanNumber: p.loans?.loan_number ?? '—',
+                          releaseDate: p.loans?.release_date ?? null,
+                          dueDate: p.loans?.due_date ?? null,
+                          customerName: p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—',
+                          customerPhone: p.loans?.customers?.phone ?? null,
+                          currentAddress: p.location_address ?? null,
+                          gpsLat: p.gps_lat ?? null,
+                          gpsLng: p.gps_lng ?? null,
+                          branchName: p.loans?.branches?.name ?? null,
+                          areaName: p.loans?.areas?.name ?? null,
+                          collectorName: p.collectors?.profiles?.full_name ?? null,
+                          amount: Number(p.amount_paid),
+                          remainingBalance: Number(p.remaining_balance),
+                          date: p.payment_date,
+                          time: p.payment_time ?? null,
+                        });
+                      }}
+                    >
+                      <Receipt className="w-4 h-4" />
+                    </Button>
+                    {isAdmin && (
+                      <>
+                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openEditPayment(p); }}>
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p); }}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
-              ) : payments.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="py-16 text-center">
-                    <Wallet className="w-12 h-12 text-muted-foreground/50 mb-3 mx-auto" />
-                    <p className="text-sm text-muted-foreground">No payments recorded</p>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                payments.map(p => (
-                  <TableRow key={p.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/payments/${p.loan_id}`)}>
-                    <TableCell className="text-sm">{formatDate(p.payment_date)}</TableCell>
-                    <TableCell className="font-medium text-sm">{p.loans?.loan_number ?? '—'}</TableCell>
-                    <TableCell className="text-sm">{p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—'}</TableCell>
-                    <TableCell className="text-sm">{p.collectors?.profiles?.full_name ?? '—'}</TableCell>
-                    <TableCell className="text-sm font-medium text-success">{formatCurrency(p.amount_paid)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(p.remaining_balance)}</TableCell>
-                    <TableCell className="text-sm">{p.receipts?.or_number ?? '—'}</TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setReceiptData({
-                            orNumber: p.receipts?.or_number ?? '—',
-                            loanNumber: p.loans?.loan_number ?? '—',
-                            releaseDate: p.loans?.release_date ?? null,
-                            dueDate: p.loans?.due_date ?? null,
-                            customerName: p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—',
-                            customerPhone: p.loans?.customers?.phone ?? null,
-                            currentAddress: p.location_address ?? null,
-                            gpsLat: p.gps_lat ?? null,
-                            gpsLng: p.gps_lng ?? null,
-                            branchName: p.loans?.branches?.name ?? null,
-                            areaName: p.loans?.areas?.name ?? null,
-                            collectorName: p.collectors?.profiles?.full_name ?? null,
-                            amount: Number(p.amount_paid),
-                            remainingBalance: Number(p.remaining_balance),
-                            date: p.payment_date,
-                            time: p.payment_time ?? null,
-                          });
-                        }}
-                      >
-                        <Receipt className="w-4 h-4" />
-                      </Button>
-                      {isAdmin && (
-                        <>
-                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); openEditPayment(p); }}>
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p); }}>
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
-                        </>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
+              ))}
             </TableBody>
           </Table>
+          </>
+          )}
           {!loading && payments.length > 0 && (
-            <div className="flex items-center justify-between p-4 border-t border-border">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-border">
               <p className="text-sm text-muted-foreground">
                 Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
               </p>
@@ -723,7 +766,7 @@ export default function PaymentsPage() {
                 <p className="text-xs text-muted-foreground">Defaulted to the daily payment amount — adjust if the customer paid a different amount.</p>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Date</Label>
                 <Input type="date" value={form.payment_date} disabled className="bg-muted" />

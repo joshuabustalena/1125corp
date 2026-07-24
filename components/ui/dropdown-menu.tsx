@@ -6,7 +6,14 @@ import { Check, ChevronRight, Circle } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
-const DropdownMenu = DropdownMenuPrimitive.Root;
+// modal={false} by default: Radix's modal mode locks/hides body scroll while
+// open, which conflicts with this app's own sticky topbar + global overflow
+// rules and made the whole header disappear whenever a dropdown opened.
+const DropdownMenu = ({
+  ...props
+}: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Root>) => (
+  <DropdownMenuPrimitive.Root modal={false} {...props} />
+);
 
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 

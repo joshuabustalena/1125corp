@@ -16,6 +16,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateLoanNumber, generateVoucherNumber, computeLoanDetails } from '@/lib/format';
@@ -24,7 +27,7 @@ import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/do
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
-  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle,
+  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -715,29 +718,42 @@ export default function LoanDetailPage() {
             Disburse
           </Button>
         )}
-        {loan.disbursed_at && (
-          <Link href={`/loans/${loan.id}/voucher`}>
-            <Button size="sm" variant="outline">
-              <Banknote className="w-4 h-4 mr-2" />
-              View Voucher
-            </Button>
-          </Link>
-        )}
-        {loan.approved_at && (
-          <Link href={`/loans/${loan.id}/agreement`}>
-            <Button size="sm" variant="outline">
-              <FileText className="w-4 h-4 mr-2" />
-              View Agreement
-            </Button>
-          </Link>
-        )}
-        {loan.approved_at && (
-          <Link href={`/loans/${loan.id}/undertaking`}>
-            <Button size="sm" variant="outline">
-              <FileText className="w-4 h-4 mr-2" />
-              View Undertaking
-            </Button>
-          </Link>
+        {(loan.disbursed_at || loan.approved_at) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline">
+                <FileText className="w-4 h-4 mr-2" />
+                Documents
+                <ChevronDown className="w-4 h-4 ml-2" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {loan.disbursed_at && (
+                <DropdownMenuItem asChild>
+                  <Link href={`/loans/${loan.id}/voucher`}>
+                    <Banknote className="w-4 h-4 mr-2" />
+                    View Voucher
+                  </Link>
+                </DropdownMenuItem>
+              )}
+              {loan.approved_at && (
+                <DropdownMenuItem asChild>
+                  <Link href={`/loans/${loan.id}/agreement`}>
+                    <FileText className="w-4 h-4 mr-2" />
+                    View Agreement
+                  </Link>
+                </DropdownMenuItem>
+              )}
+              {loan.approved_at && (
+                <DropdownMenuItem asChild>
+                  <Link href={`/loans/${loan.id}/undertaking`}>
+                    <FileText className="w-4 h-4 mr-2" />
+                    View Undertaking
+                  </Link>
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
         {loan.status === 'declined' && !loan.reapplied && !isCashier && (
           <Button size="sm" onClick={handleReapply} disabled={reapplying}>
@@ -1076,7 +1092,7 @@ export default function LoanDetailPage() {
                     {loan.customers?.first_name} {loan.customers?.last_name}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Loan Amount (₱) *</Label>
                     <Input type="number" required value={renewForm.amount} onChange={(e) => setRenewForm({ ...renewForm, amount: e.target.value })} />
@@ -1168,7 +1184,7 @@ export default function LoanDetailPage() {
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label className="text-sm">Approved Amount (₱)</Label>
               <Input

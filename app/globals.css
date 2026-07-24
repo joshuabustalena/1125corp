@@ -3,10 +3,30 @@
 @tailwind utilities;
 
 html {
+  /* Belt-and-suspenders: no page should ever be able to trigger a
+     horizontal side-scroll on mobile, even if some inner element
+     briefly overflows its container.
+     NOTE: deliberately not also set on <body> — that would force the
+     browser to give body its own overflow-y (auto) too, turning it into
+     a separate scroll container instead of the page scrolling via the
+     viewport, which breaks position:sticky (e.g. the topbar) on mobile. */
+  overflow-x: hidden;
+}
+
+html {
   /* Scales every rem-based Tailwind utility (text sizes, padding, gaps,
      icon sizing, radii) down together, since the whole UI was rendering
      too large/zoomed-in on normal screens. */
   font-size: 70%;
+}
+
+@media (min-width: 1024px) {
+  html {
+    /* On larger screens the 70% base reads as too "zoomed out" — bump it
+       back up a bit so sizing isn't thrown off, while phones/tablets keep
+       the more compact 70% scale. */
+    font-size: 85%;
+  }
 }
 
 @layer base {

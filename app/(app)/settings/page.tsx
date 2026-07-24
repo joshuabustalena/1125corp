@@ -9,6 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
@@ -36,12 +39,21 @@ export default function SettingsPage() {
   const [branchDialog, setBranchDialog] = useState(false);
   const [areaDialog, setAreaDialog] = useState(false);
   const [holidayDialog, setHolidayDialog] = useState(false);
+  const [activeTab, setActiveTab] = useState('general');
 
   const [branchForm, setBranchForm] = useState({ name: '', code: '', address: '', phone: '', email: '' });
   const [areaForm, setAreaForm] = useState({ name: '', branch_id: '' });
   const [holidayForm, setHolidayForm] = useState({ name: '', holiday_date: '', type: 'regular' });
 
   const isAdmin = profile?.role_name === 'Administrator';
+
+  const SETTINGS_TABS = [
+    { value: 'general', label: 'General' },
+    { value: 'loan', label: 'Loan & Interest' },
+    { value: 'branches', label: 'Branches' },
+    { value: 'holidays', label: 'Holidays' },
+    { value: 'notifications', label: 'Notifications' },
+  ];
 
   useEffect(() => { load(); }, []);
 
@@ -127,13 +139,23 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <PageHeader title="Settings" description="System configuration and preferences" />
 
-      <Tabs defaultValue="general">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5">
-          <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="loan">Loan & Interest</TabsTrigger>
-          <TabsTrigger value="branches">Branches</TabsTrigger>
-          <TabsTrigger value="holidays">Holidays</TabsTrigger>
-          <TabsTrigger value="notifications">Notifications</TabsTrigger>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        {/* Dropdown on mobile so 5 tabs don't wrap into a messy multi-row grid */}
+        <Select value={activeTab} onValueChange={setActiveTab}>
+          <SelectTrigger className="sm:hidden">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SETTINGS_TABS.map(t => (
+              <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <TabsList className="hidden sm:grid w-full grid-cols-5 gap-1">
+          {SETTINGS_TABS.map(t => (
+            <TabsTrigger key={t.value} value={t.value}>{t.label}</TabsTrigger>
+          ))}
         </TabsList>
 
         {/* General Settings */}
@@ -155,7 +177,7 @@ export default function SettingsPage() {
           <Card className="glass-card border-border">
             <CardHeader><CardTitle className="flex items-center gap-2"><Percent className="w-5 h-5" />Interest & Loan Settings</CardTitle></CardHeader>
             <CardContent className="space-y-4 max-w-lg">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>Default Interest Rate (%)</Label><Input type="number" value={settings.default_interest_rate ?? '8'} onChange={(e) => setSettings({ ...settings, default_interest_rate: e.target.value })} /></div>
                 <div className="space-y-2"><Label>Default Term (Days)</Label><Input type="number" value={settings.default_term_days ?? '60'} onChange={(e) => setSettings({ ...settings, default_term_days: e.target.value })} /></div>
                 <div className="space-y-2"><Label>Service Charge ≥ ₱10,000 (%)</Label><Input type="number" value={settings.service_charge_above_10000 ?? '3'} onChange={(e) => setSettings({ ...settings, service_charge_above_10000: e.target.value })} /></div>
@@ -301,12 +323,12 @@ export default function SettingsPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>Add Branch</DialogTitle><DialogDescription>Create a new branch office</DialogDescription></DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Name *</Label><Input value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Code</Label><Input value={branchForm.code} readOnly disabled className="bg-muted" /></div>
             </div>
             <div className="space-y-2"><Label>Address</Label><Input value={branchForm.address} onChange={(e) => setBranchForm({ ...branchForm, address: e.target.value })} /></div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Phone</Label><Input value={branchForm.phone} onChange={(e) => setBranchForm({ ...branchForm, phone: e.target.value })} /></div>
               <div className="space-y-2"><Label>Email</Label><Input value={branchForm.email} onChange={(e) => setBranchForm({ ...branchForm, email: e.target.value })} /></div>
             </div>

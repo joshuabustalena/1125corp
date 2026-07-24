@@ -10,7 +10,7 @@ import { useAuth } from '@/lib/auth-context';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+export function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onToggle: () => void; onNavigate?: () => void }) {
   const pathname = usePathname();
   const { profile } = useAuth();
 
@@ -34,7 +34,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
       <div className="relative z-10 flex flex-col h-full">
         {/* Logo */}
         <div className="h-16 flex items-center px-4 border-b border-white/10 shrink-0">
-          <Link href="/dashboard" className="flex items-center gap-3 min-w-0">
+          <Link href="/dashboard" className="flex items-center gap-3 min-w-0" onClick={onNavigate}>
             <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shrink-0 overflow-hidden">
               <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={40} height={40} className="object-contain" />
             </div>
@@ -70,6 +70,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
                       key={item.href}
                       href={item.href}
                       title={collapsed ? item.label : undefined}
+                      onClick={onNavigate}
                       className={cn(
                         'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative',
                         isActive

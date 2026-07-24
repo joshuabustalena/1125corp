@@ -7,10 +7,8 @@ import { hasPermission } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Menu,
-  Search,
   Sun,
   Moon,
   Bell,
@@ -60,7 +58,6 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   const { profile, signOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const router = useRouter();
-  const [search, setSearch] = useState('');
   const [notifications, setNotifications] = useState<any[]>([]);
   const notifCount = notifications.filter(n => !n.read_at).length;
 
@@ -108,22 +105,7 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
         <Menu className="w-5 h-5" />
       </button>
 
-      {/* Search */}
-      <div className="relative flex-1 max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <Input
-          type="text"
-          placeholder="Search customers, loans, payments..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && search.trim()) {
-              router.push(`/search?q=${encodeURIComponent(search)}`);
-            }
-          }}
-          className="pl-10 h-10 bg-secondary border-0 focus-visible:ring-1"
-        />
-      </div>
+      <span className="lg:hidden font-bold text-xl text-[#0b1f3a] dark:text-white">1125Corp</span>
 
       <div className="flex items-center gap-2 ml-auto">
         {/* Theme toggle */}

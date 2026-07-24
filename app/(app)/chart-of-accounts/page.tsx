@@ -139,7 +139,7 @@ export default function ChartOfAccountsPage() {
             <DialogDescription>Add a new account to the chart of accounts</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleAddAccount} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Code *</Label>
                 <Input required value={accountForm.code} onChange={(e) => setAccountForm({ ...accountForm, code: e.target.value })} placeholder="e.g. 1020" />

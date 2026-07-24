@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
+import { DocumentScaler } from '@/components/document-scaler';
 import { ArrowLeft, FileText, Download, Loader2 } from 'lucide-react';
 
 function formatLongDate(date: string | Date | null | undefined): string {
@@ -196,7 +197,9 @@ export default function UndertakingPage() {
       </PageHeader>
 
       <div className="max-w-[1000px] mx-auto">
-        <div className="flex flex-col items-center gap-4 bg-secondary/30 p-4 rounded-lg overflow-x-auto">
+        <div className="bg-secondary/30 p-4 rounded-lg">
+        <DocumentScaler width={780}>
+        <div className="flex flex-col items-center gap-4">
           <div ref={page1Ref} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
             <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>{COMPANY_NAME}</div>
@@ -241,6 +244,8 @@ export default function UndertakingPage() {
               </div>
             </div>
           </div>
+        </div>
+        </DocumentScaler>
         </div>
       </div>
     </div>

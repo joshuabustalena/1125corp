@@ -8,6 +8,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/format';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
+import { DocumentScaler } from '@/components/document-scaler';
 import { ArrowLeft, Banknote, Download, Loader2 } from 'lucide-react';
 
 function formatVoucherDate(date: string | Date | null | undefined): string {
@@ -172,7 +173,9 @@ export default function VoucherPage() {
       </PageHeader>
 
       <div className="max-w-[1000px] mx-auto">
-        <div className="space-y-6 flex flex-col items-center bg-secondary/30 p-4 rounded-lg overflow-x-auto">
+        <div className="bg-secondary/30 p-4 rounded-lg">
+        <DocumentScaler width={780}>
+        <div className="space-y-6 flex flex-col items-center">
           {/* PAGE 1 — Loan Release Cash Voucher */}
           <div ref={page1Ref} style={pageStyle}>
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#0B1F3A', marginBottom: 12, textDecoration: 'underline' }}>
@@ -318,6 +321,8 @@ export default function VoucherPage() {
               (Ang halaga ng aking loan ay makikita sa Customer List ng Field Collector kasama ang kaukulang panimulang balanse. Nakalakip dito ang mga kopya ng Loan Agreement at Kasunduan na magsisilbing patunay ng maayos, tama, at naaayon sa batas na pagpapalabas ng loan proceeds ng mga awtorisadong kolektor ng {COMPANY_NAME_DISPLAY}.)
             </p>
           </div>
+        </div>
+        </DocumentScaler>
         </div>
       </div>
     </div>

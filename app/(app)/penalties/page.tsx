@@ -119,7 +119,33 @@ export default function PenaltiesPage() {
               <p className="text-sm text-muted-foreground">No penalties applied</p>
             </div>
           ) : (
-            <Table>
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {penalties.map(p => (
+                <div key={p.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{p.customers?.first_name} {p.customers?.last_name}</p>
+                      <p className="text-xs text-muted-foreground">{p.loans?.loan_number ?? '—'}</p>
+                    </div>
+                    <p className="text-sm font-medium text-destructive shrink-0">{formatCurrency(p.amount)}</p>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <Badge variant="outline">{penaltyTypeLabel[p.penalty_type] ?? p.penalty_type}</Badge>
+                    <span className="text-xs text-muted-foreground">{formatDate(p.applied_at)}</span>
+                  </div>
+                  {p.reason && <p className="mt-2 text-sm text-muted-foreground">{p.reason}</p>}
+                  <div className="mt-3 flex items-center justify-end">
+                    <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(p)}>
+                      <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Customer</TableHead>
@@ -149,6 +175,7 @@ export default function PenaltiesPage() {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>
@@ -180,7 +207,7 @@ export default function PenaltiesPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Penalty Type *</Label>
                 <Select value={form.penalty_type} onValueChange={(v) => setForm({ ...form, penalty_type: v })}>

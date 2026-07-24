@@ -266,7 +266,7 @@ export default function GeneralLedgerPage() {
         <TabsContent value="trial" className="space-y-4">
           <Card className="glass-card border-border">
             <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-end">
+              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
                 <div className="space-y-2 flex-1">
                   <Label>As Of Date</Label>
                   <Input type="date" value={trialBalanceDate} onChange={(e) => setTrialBalanceDate(e.target.value)} />
@@ -321,7 +321,7 @@ export default function GeneralLedgerPage() {
         <TabsContent value="income" className="space-y-4">
           <Card className="glass-card border-border">
             <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-end">
+              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
                 <div className="space-y-2 flex-1">
                   <Label>Start Date</Label>
                   <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
@@ -372,7 +372,7 @@ export default function GeneralLedgerPage() {
         <TabsContent value="balance" className="space-y-4">
           <Card className="glass-card border-border">
             <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-end">
+              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
                 <div className="space-y-2 flex-1">
                   <Label>As Of Date</Label>
                   <Input type="date" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
@@ -425,7 +425,7 @@ export default function GeneralLedgerPage() {
         <TabsContent value="trends" className="space-y-4">
           <Card className="glass-card border-border">
             <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-end">
+              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
                 <div className="space-y-2 flex-1">
                   <Label>Start Date</Label>
                   <Input type="date" value={trendStartDate} onChange={(e) => setTrendStartDate(e.target.value)} />
@@ -585,7 +585,7 @@ export default function GeneralLedgerPage() {
               <Label>Name *</Label>
               <Input required value={shareholderForm.name} onChange={(e) => setShareholderForm({ ...shareholderForm, name: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Capital Contributed (₱) *</Label>
                 <Input type="number" required value={shareholderForm.capital_contributed} onChange={(e) => setShareholderForm({ ...shareholderForm, capital_contributed: e.target.value })} placeholder="0.00" />

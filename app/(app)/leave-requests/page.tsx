@@ -201,12 +201,12 @@ export default function LeaveRequestsPage() {
 
       {myEmployee && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-2 sm:gap-4">
             <StatCard title="Annual Paid Leaves" value={annualLeaves.toString()} icon={<CalendarClock className="w-5 h-5" />} />
             <StatCard title="Used" value={(myEmployee.paid_leaves_used ?? 0).toString()} icon={<CalendarClock className="w-5 h-5" />} variant="warning" />
             <StatCard title="Remaining Balance" value={balance.toString()} icon={<CalendarClock className="w-5 h-5" />} variant={balance > 0 ? 'success' : 'danger'} />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-2 sm:gap-4">
             <StatCard title="Special Leave Allowance" value={specialLeavesAnnual.toString()} icon={<CalendarClock className="w-5 h-5" />} />
             <StatCard title="Special Leave Used" value={(myEmployee.special_leaves_used ?? 0).toString()} icon={<CalendarClock className="w-5 h-5" />} variant="warning" />
             <StatCard title="Special Leave Remaining" value={specialBalance.toString()} icon={<CalendarClock className="w-5 h-5" />} variant={specialBalance > 0 ? 'success' : 'danger'} />
@@ -255,47 +255,82 @@ export default function LeaveRequestsPage() {
               <p className="text-sm text-muted-foreground">No leave requests found</p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {canApprove && <TableHead>Employee</TableHead>}
-                  <TableHead>Type</TableHead>
-                  <TableHead>Start</TableHead>
-                  <TableHead>End</TableHead>
-                  <TableHead>Days</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Status</TableHead>
-                  {canApprove && <TableHead className="text-right">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              {/* Mobile card list */}
+              <div className="md:hidden divide-y divide-border">
                 {filteredRequests.map(r => (
-                  <TableRow key={r.id} className="hover:bg-secondary/50">
-                    {canApprove && <TableCell className="text-sm font-medium">{r.employees?.first_name} {r.employees?.last_name}</TableCell>}
-                    <TableCell className="text-sm capitalize">{r.leave_type}</TableCell>
-                    <TableCell className="text-sm">{formatDate(r.start_date)}</TableCell>
-                    <TableCell className="text-sm">{formatDate(r.end_date)}</TableCell>
-                    <TableCell className="text-sm">{r.days}</TableCell>
-                    <TableCell className="text-sm">{r.reason ?? '—'}</TableCell>
-                    <TableCell><Badge variant={statusVariant(r.status)}>{r.status}</Badge></TableCell>
-                    {canApprove && (
-                      <TableCell className="text-right">
-                        {r.status === 'pending' && (
-                          canApproveRequest(r) ? (
-                            <div className="flex gap-1 justify-end">
-                              <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-4 h-4 text-success" /></Button>
-                              <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">Pending Admin approval</span>
-                          )
+                  <div key={r.id} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        {canApprove && <p className="font-medium text-sm truncate">{r.employees?.first_name} {r.employees?.last_name}</p>}
+                        <p className="text-sm capitalize">{r.leave_type}</p>
+                      </div>
+                      <Badge variant={statusVariant(r.status)} className="shrink-0">{r.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div><p className="text-xs text-muted-foreground">Start</p><p>{formatDate(r.start_date)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">End</p><p>{formatDate(r.end_date)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Days</p><p>{r.days}</p></div>
+                      <div className="col-span-2"><p className="text-xs text-muted-foreground">Reason</p><p>{r.reason ?? '—'}</p></div>
+                    </div>
+                    {canApprove && r.status === 'pending' && (
+                      <div className="mt-3 flex items-center justify-end">
+                        {canApproveRequest(r) ? (
+                          <div className="flex gap-1">
+                            <Button variant="outline" size="sm" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Approve</Button>
+                            <Button variant="outline" size="sm" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-3.5 h-3.5 mr-1.5 text-destructive" />Reject</Button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Pending Admin approval</span>
                         )}
-                      </TableCell>
+                      </div>
                     )}
-                  </TableRow>
+                  </div>
                 ))}
-              </TableBody>
-            </Table>
+              </div>
+
+              <Table className="hidden md:table">
+                <TableHeader>
+                  <TableRow>
+                    {canApprove && <TableHead>Employee</TableHead>}
+                    <TableHead>Type</TableHead>
+                    <TableHead>Start</TableHead>
+                    <TableHead>End</TableHead>
+                    <TableHead>Days</TableHead>
+                    <TableHead>Reason</TableHead>
+                    <TableHead>Status</TableHead>
+                    {canApprove && <TableHead className="text-right">Actions</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredRequests.map(r => (
+                    <TableRow key={r.id} className="hover:bg-secondary/50">
+                      {canApprove && <TableCell className="text-sm font-medium">{r.employees?.first_name} {r.employees?.last_name}</TableCell>}
+                      <TableCell className="text-sm capitalize">{r.leave_type}</TableCell>
+                      <TableCell className="text-sm">{formatDate(r.start_date)}</TableCell>
+                      <TableCell className="text-sm">{formatDate(r.end_date)}</TableCell>
+                      <TableCell className="text-sm">{r.days}</TableCell>
+                      <TableCell className="text-sm">{r.reason ?? '—'}</TableCell>
+                      <TableCell><Badge variant={statusVariant(r.status)}>{r.status}</Badge></TableCell>
+                      {canApprove && (
+                        <TableCell className="text-right">
+                          {r.status === 'pending' && (
+                            canApproveRequest(r) ? (
+                              <div className="flex gap-1 justify-end">
+                                <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-4 h-4 text-success" /></Button>
+                                <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">Pending Admin approval</span>
+                            )
+                          )}
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </>
           )}
         </CardContent>
       </Card>
@@ -331,7 +366,7 @@ export default function LeaveRequestsPage() {
                 <p className="text-xs text-muted-foreground">Uses the separate +{specialLeavesAnnual}-day special leave allowance, on top of the regular annual leave balance. Please specify the qualifying reason below.</p>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Start Date *</Label>
                 <Input type="date" required value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />

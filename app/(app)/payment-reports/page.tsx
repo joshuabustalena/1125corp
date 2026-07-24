@@ -242,9 +242,9 @@ export default function PaymentReportsPage() {
 
       {/* Filters */}
       <Card className="glass-card border-border">
-        <CardContent className="p-4">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
-            <div className="space-y-2 flex-1">
+        <CardContent className="p-4 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-2">
               <Label>Branch</Label>
               {isAdmin ? (
                 <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); setCustomerFilter('all'); }}>
@@ -260,7 +260,7 @@ export default function PaymentReportsPage() {
                 </div>
               )}
             </div>
-            <div className="space-y-2 flex-1">
+            <div className="space-y-2">
               <Label>Area</Label>
               <Select value={areaFilter} onValueChange={(v) => { setAreaFilter(v); setCustomerFilter('all'); }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -270,7 +270,7 @@ export default function PaymentReportsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2 flex-1">
+            <div className="space-y-2">
               <Label>Customer</Label>
               <Select value={customerFilter} onValueChange={setCustomerFilter}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -280,7 +280,9 @@ export default function PaymentReportsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <Button onClick={generateReport}>Apply Filters</Button>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={generateReport} className="w-full sm:w-auto">Apply Filters</Button>
           </div>
         </CardContent>
       </Card>
@@ -334,7 +336,24 @@ export default function PaymentReportsPage() {
           ) : payments.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8">No payments found for this filter</p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {payments.map(p => (
+                <div key={p.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{p.customers ? `${p.customers.first_name} ${p.customers.last_name}` : '—'}</p>
+                      <p className="text-xs text-muted-foreground">{p.loans?.loan_number ?? '—'} · {formatDate(p.payment_date)}</p>
+                    </div>
+                    <p className="text-sm font-medium text-success shrink-0">{formatCurrency(p.amount_paid)}</p>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{p.customers?.branches?.name ?? '—'} · {p.customers?.areas?.name ?? '—'}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -360,6 +379,7 @@ export default function PaymentReportsPage() {
                 </TableBody>
               </Table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

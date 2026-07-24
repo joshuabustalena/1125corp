@@ -141,7 +141,31 @@ export default function RemittancePage() {
               <p className="text-sm text-muted-foreground">No collections recorded for this date</p>
             </div>
           ) : (
-            <Table>
+            <>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-border">
+              {rows.map(r => (
+                <div key={r.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-medium text-sm truncate">{r.name}</p>
+                    <Badge variant={r.owed > 0 ? 'destructive' : 'default'} className="shrink-0">{formatCurrency(r.owed)}</Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div><p className="text-xs text-muted-foreground">Collected</p><p>{formatCurrency(r.collected)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Remitted</p><p>{formatCurrency(r.remitted)}</p></div>
+                  </div>
+                  {canRecordRemittance && (
+                    <div className="mt-3 flex justify-end">
+                      <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id)}>
+                        Record Remittance
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <Table className="hidden md:table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Collector</TableHead>
@@ -171,6 +195,7 @@ export default function RemittancePage() {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>

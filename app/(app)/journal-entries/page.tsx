@@ -177,7 +177,7 @@ export default function JournalEntriesPage() {
             <DialogDescription>Debits must equal credits before this can be saved</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmitEntry} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Date *</Label>
                 <Input type="date" required value={entryForm.entry_date} onChange={(e) => setEntryForm({ ...entryForm, entry_date: e.target.value })} />

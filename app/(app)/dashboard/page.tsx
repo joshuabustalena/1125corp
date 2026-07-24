@@ -19,6 +19,11 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 
+function formatCompact(value: number): string {
+  if (value >= 1000) return `₱${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}K`;
+  return `₱${value}`;
+}
+
 interface DashboardStats {
   totalCustomers: number;
   activeLoans: number;
@@ -204,7 +209,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Secondary stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="Collector Attendance" value="8/10" icon={<UserCheck className="w-5 h-5" />} variant="success" subtitle="Active today" />
         <StatCard title="Employee Attendance" value="24/28" icon={<UserCheck className="w-5 h-5" />} variant="default" subtitle="Present today" />
         <StatCard title="Payroll Summary" value="₱285,400" icon={<ScrollText className="w-5 h-5" />} variant="warning" subtitle="Current period" />
@@ -219,33 +224,40 @@ export default function DashboardPage() {
             <CardDescription>Collection amounts and revenue over the past week</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <AreaChart data={dailyData}>
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={dailyData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorCollections" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0B1F3A" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#0B1F3A" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#0B1F3A" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#0B1F3A" stopOpacity={0.02} />
                   </linearGradient>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#16A34A" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#16A34A" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#16A34A" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#16A34A" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="name" className="text-xs" tick={{ fontSize: 12 }} />
-                <YAxis className="text-xs" tick={{ fontSize: 12 }} />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                <XAxis dataKey="name" className="text-xs" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} interval={0} />
+                <YAxis className="text-xs" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={formatCompact} width={48} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'rgb(var(--card))',
                     border: '1px solid rgb(var(--border))',
                     borderRadius: '8px',
                     fontSize: '12px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
                   }}
                   formatter={(value: number) => formatCurrency(value)}
                 />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Area type="monotone" dataKey="collections" stroke="#0B1F3A" strokeWidth={2} fill="url(#colorCollections)" />
-                <Area type="monotone" dataKey="revenue" stroke="#16A34A" strokeWidth={2} fill="url(#colorRevenue)" />
+                <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
+                <Area
+                  type="monotone" dataKey="collections" name="Collections" stroke="#0B1F3A" strokeWidth={2.5}
+                  fill="url(#colorCollections)" dot={{ r: 3, fill: '#0B1F3A', strokeWidth: 0 }} activeDot={{ r: 5 }}
+                />
+                <Area
+                  type="monotone" dataKey="revenue" name="Revenue" stroke="#16A34A" strokeWidth={2.5}
+                  fill="url(#colorRevenue)" dot={{ r: 3, fill: '#16A34A', strokeWidth: 0 }} activeDot={{ r: 5 }}
+                />
               </AreaChart>
             </ResponsiveContainer>
           </CardContent>
@@ -288,22 +300,24 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={cashFlowData}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
+              <BarChart data={cashFlowData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }} barGap={4} barCategoryGap="25%">
+                <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} interval={0} />
+                <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={formatCompact} width={48} />
                 <Tooltip
+                  cursor={{ fill: 'rgb(var(--secondary))' }}
                   contentStyle={{
                     backgroundColor: 'rgb(var(--card))',
                     border: '1px solid rgb(var(--border))',
                     borderRadius: '8px',
                     fontSize: '12px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
                   }}
                   formatter={(value: number) => formatCurrency(value)}
                 />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="inflow" fill="#16A34A" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="outflow" fill="#EF4444" radius={[4, 4, 0, 0]} />
+                <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
+                <Bar dataKey="inflow" name="Inflow" fill="#16A34A" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                <Bar dataKey="outflow" name="Outflow" fill="#EF4444" radius={[4, 4, 0, 0]} maxBarSize={40} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>

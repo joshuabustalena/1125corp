@@ -432,7 +432,7 @@ export default function CustomersPage() {
 
   const infoFormContent = (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>First Name *</Label>
           <Input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} />
@@ -464,7 +464,7 @@ export default function CustomersPage() {
           <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="space-y-2">
           <Label>Branch</Label>
           <Select
@@ -506,7 +506,7 @@ export default function CustomersPage() {
           </Select>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>Government ID</Label>
           <Input value={form.government_id} onChange={(e) => setForm({ ...form, government_id: e.target.value })} placeholder="SSS / UMID / Driver's License" />
@@ -525,7 +525,7 @@ export default function CustomersPage() {
         <Label>Address</Label>
         <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Street address" />
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="space-y-2">
           <Label>Barangay</Label>
           <Input value={form.barangay} onChange={(e) => setForm({ ...form, barangay: e.target.value })} />
@@ -624,7 +624,60 @@ export default function CustomersPage() {
             </div>
           ) : (
             <>
-              <Table>
+              {/* Mobile card list — replaces the table below md so nothing
+                  gets cramped or forces horizontal scrolling on a phone. */}
+              <div className="md:hidden divide-y divide-border">
+                {customers.map((c) => (
+                  <div
+                    key={c.id}
+                    className="p-4 active:bg-secondary/50 cursor-pointer"
+                    onClick={() => router.push(`/customers/${c.id}`)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Avatar className="w-9 h-9 shrink-0">
+                          <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                            {getInitials(`${c.first_name} ${c.last_name}`)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm truncate">{c.first_name} {c.last_name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{c.barangay ?? '—'}</p>
+                        </div>
+                      </div>
+                      <Badge variant={c.status === 'active' ? 'default' : 'secondary'} className="shrink-0">
+                        {c.status}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Contact</p>
+                        <p className="truncate">{c.phone ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Branch / Area</p>
+                        <p className="truncate">{c.branches?.name ?? '—'}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-xs text-muted-foreground">Max Loan</p>
+                        <p className="font-medium">{formatCurrency(c.max_loan_limit)}</p>
+                      </div>
+                    </div>
+                    {isAdmin && (
+                      <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Button variant="outline" size="sm" onClick={() => openEdit(c)}>
+                          <Pencil className="w-3.5 h-3.5 mr-1.5" />Edit
+                        </Button>
+                        <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(c)}>
+                          <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <Table className="hidden md:table">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Customer</TableHead>
@@ -692,7 +745,7 @@ export default function CustomersPage() {
               </Table>
 
               {/* Pagination */}
-              <div className="flex items-center justify-between p-4 border-t border-border">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-border">
                 <p className="text-sm text-muted-foreground">
                   Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
                 </p>
