@@ -20,6 +20,9 @@ import {
   CalendarClock,
   BookOpen,
   TrendingUp,
+  BookMarked,
+  FileText,
+  Scale,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -74,7 +77,10 @@ export const navSections: NavSection[] = [
     title: 'Finance',
     items: [
       { label: 'Accounting', href: '/accounting', icon: Calculator },
-      { label: 'General Ledger', href: '/general-ledger', icon: BookOpen },
+      { label: 'Journal Entries', href: '/journal-entries', icon: FileText },
+      { label: 'General Ledger', href: '/account-ledger', icon: BookOpen },
+      { label: 'Chart of Accounts', href: '/chart-of-accounts', icon: BookMarked },
+      { label: 'Financial Statements', href: '/general-ledger', icon: Scale },
       { label: 'Cash Count', href: '/cash-count', icon: Banknote },
       { label: 'Remittance', href: '/remittance', icon: ArrowRightLeft },
       { label: 'Reports', href: '/reports', icon: FileBarChart },
