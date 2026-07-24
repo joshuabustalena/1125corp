@@ -660,7 +660,7 @@ export default function AttendancePage() {
               // eslint-disable-next-line @next/next/no-img-element
               <img src={capturedPreviewUrl} alt="Captured" className="w-full h-full object-contain" />
             ) : (
-              <video ref={videoRef} className="w-full h-full object-contain" muted playsInline />
+              <video ref={videoRef} className="w-full h-full object-contain -scale-x-100" muted playsInline />
             )}
             <canvas ref={canvasRef} className="hidden" />
           </div>

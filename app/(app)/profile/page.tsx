@@ -12,11 +12,13 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { getInitials } from '@/lib/format';
-import { Loader2, Save, KeyRound, User as UserIcon, Camera, Eye, EyeOff } from 'lucide-react';
+import { useInstallPrompt } from '@/hooks/use-install-prompt';
+import { Loader2, Save, KeyRound, User as UserIcon, Camera, Eye, EyeOff, Download } from 'lucide-react';
 
 export default function ProfilePage() {
   const { toast } = useToast();
   const { profile, refreshProfile } = useAuth();
+  const { installed, promptInstall } = useInstallPrompt();
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -122,13 +124,32 @@ export default function ProfilePage() {
     setSavingPassword(false);
   }
 
+  async function handleInstallClick() {
+    if (installed) {
+      toast({ title: 'Already installed', description: '1125Corp is already installed on this device.' });
+      return;
+    }
+    const shown = await promptInstall();
+    if (!shown) {
+      toast({
+        title: 'Install 1125Corp',
+        description: 'Open your browser menu and choose "Install app" (Chrome/Edge) or "Add to Home Screen" (Safari/iOS) to install.',
+      });
+    }
+  }
+
   if (!profile) {
     return <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>;
   }
 
   return (
     <div className="space-y-6">
-      <PageHeader title="My Profile" description="Manage your personal information and password" />
+      <PageHeader title="My Profile" description="Manage your personal information and password">
+        <Button variant="outline" size="sm" onClick={handleInstallClick}>
+          <Download className="w-4 h-4 mr-2" />
+          Install App
+        </Button>
+      </PageHeader>
 
       <Card className="glass-card border-border">
         <CardHeader>

@@ -7,6 +7,8 @@ import { hasPermission } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 import { Button } from '@/components/ui/button';
+import { useInstallPrompt } from '@/hooks/use-install-prompt';
+import { useToast } from '@/hooks/use-toast';
 import {
   Menu,
   Sun,
@@ -20,6 +22,7 @@ import {
   LogOut,
   Settings as SettingsIcon,
   ChevronDown,
+  Download,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -57,7 +60,23 @@ function timeAgo(iso: string): string {
 export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   const { profile, signOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { installed, promptInstall } = useInstallPrompt();
+  const { toast } = useToast();
   const router = useRouter();
+
+  async function handleInstallClick() {
+    if (installed) {
+      toast({ title: 'Already installed', description: '1125Corp is already installed on this device.' });
+      return;
+    }
+    const shown = await promptInstall();
+    if (!shown) {
+      toast({
+        title: 'Install 1125Corp',
+        description: 'Open your browser menu and choose "Install app" (Chrome/Edge) or "Add to Home Screen" (Safari/iOS) to install.',
+      });
+    }
+  }
   const [notifications, setNotifications] = useState<any[]>([]);
   const notifCount = notifications.filter(n => !n.read_at).length;
 
@@ -200,6 +219,10 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
                 </Link>
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem onClick={handleInstallClick} className="cursor-pointer">
+              <Download className="w-4 h-4 mr-2" />
+              Install App
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() => signOut().then(() => router.push('/login'))}

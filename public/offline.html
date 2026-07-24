@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>1125Corp — Offline</title>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+    background: #0b1f3a;
+    color: #fff;
+  }
+  .wrap {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 24px;
+    text-align: center;
+  }
+  img { width: 64px; height: 64px; border-radius: 16px; background: #fff; object-fit: contain; padding: 8px; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  p { color: rgba(255,255,255,0.6); margin: 0; font-size: 0.9rem; }
+  button {
+    margin-top: 8px;
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: none;
+    background: #2563eb;
+    color: #fff;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <img src="/image/1125_Corp_Logo.png" alt="1125Corp" />
+    <h1>You're offline</h1>
+    <p>1125Corp needs an internet connection to load your data. Check your connection and try again.</p>
+    <button onclick="location.reload()">Retry</button>
+  </div>
+</body>
+</html>

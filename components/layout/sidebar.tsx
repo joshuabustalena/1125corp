@@ -10,7 +10,7 @@ import { useAuth } from '@/lib/auth-context';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onToggle: () => void; onNavigate?: () => void }) {
+export function Sidebar({ collapsed, onToggle, onNavigate, widthClassName, showCollapseToggle = true }: { collapsed: boolean; onToggle: () => void; onNavigate?: () => void; widthClassName?: string; showCollapseToggle?: boolean }) {
   const pathname = usePathname();
   const { profile } = useAuth();
 
@@ -18,7 +18,7 @@ export function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolea
     <aside
       className={cn(
         'fixed left-0 top-0 z-40 h-screen text-white transition-all duration-300 flex flex-col overflow-hidden',
-        collapsed ? 'w-16' : 'w-64'
+        widthClassName ?? (collapsed ? 'w-16' : 'w-64')
       )}
     >
       {/* Textured cover background — same brand image as the login page,
@@ -40,8 +40,8 @@ export function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolea
             </div>
             {!collapsed && (
               <div className="min-w-0">
-                <p className="font-bold text-base leading-tight truncate">1125Corp</p>
-                <p className="text-xs text-white/50 leading-tight">1125corp.org</p>
+                <p className="font-bold text-lg leading-tight truncate">1125Corp</p>
+                <p className="text-sm text-white/50 leading-tight">1125corp.org</p>
               </div>
             )}
           </Link>
@@ -57,7 +57,7 @@ export function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolea
             return (
             <div key={section.title}>
               {!collapsed && (
-                <p className="px-3 mb-2 text-xs font-semibold text-white/40 uppercase tracking-wider">
+                <p className="px-3 mb-2 text-sm font-semibold text-white/40 uppercase tracking-wider">
                   {section.title}
                 </p>
               )}
@@ -72,7 +72,7 @@ export function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolea
                       title={collapsed ? item.label : undefined}
                       onClick={onNavigate}
                       className={cn(
-                        'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative',
+                        'flex items-center gap-3 px-3 py-2.5 rounded-lg text-base font-medium transition-all duration-200 group relative',
                         isActive
                           ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
                           : 'text-white/60 hover:text-white hover:bg-white/5'
@@ -93,19 +93,21 @@ export function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolea
         </nav>
 
         {/* Collapse toggle */}
-        <div className="p-2 border-t border-white/10 shrink-0">
-          <button
-            onClick={onToggle}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-white/60 hover:text-white hover:bg-white/5 transition-colors text-sm"
-          >
-            {collapsed ? <ChevronRight className="w-5 h-5" /> : (
-              <>
-                <ChevronLeft className="w-5 h-5" />
-                <span>Collapse</span>
-              </>
-            )}
-          </button>
-        </div>
+        {showCollapseToggle && (
+          <div className="p-2 border-t border-white/10 shrink-0">
+            <button
+              onClick={onToggle}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-white/60 hover:text-white hover:bg-white/5 transition-colors text-sm"
+            >
+              {collapsed ? <ChevronRight className="w-5 h-5" /> : (
+                <>
+                  <ChevronLeft className="w-5 h-5" />
+                  <span>Collapse</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

@@ -115,7 +115,7 @@ export default function LoginPage() {
 
         {/* Right - form */}
         <div className="w-full max-w-lg mx-auto lg:mx-0 lg:ml-auto animate-slide-up">
-          <div className="relative rounded-3xl p-6 sm:p-8 lg:p-11 border border-white/10 bg-[rgb(11,31,58)]/70 backdrop-blur-2xl shadow-2xl shadow-black/50 overflow-hidden">
+          <div className="relative rounded-3xl p-8 sm:p-10 lg:p-11 border border-white/10 bg-[rgb(11,31,58)]/70 backdrop-blur-2xl shadow-2xl shadow-black/50 overflow-hidden">
             <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 via-sky-400 to-blue-500" />
 
             <div className="lg:hidden flex items-center gap-3 mb-6 justify-center text-white">

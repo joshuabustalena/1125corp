@@ -56,7 +56,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         <div className="h-full">
           <div className="h-full w-64 bg-[#0b1f3a]">
-            <Sidebar collapsed={false} onToggle={() => setMobileOpen(false)} onNavigate={() => setMobileOpen(false)} />
+            <Sidebar
+              collapsed={false}
+              onToggle={() => setMobileOpen(false)}
+              onNavigate={() => setMobileOpen(false)}
+              showCollapseToggle={false}
+            />
           </div>
         </div>
       </div>

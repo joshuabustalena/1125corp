@@ -18,7 +18,7 @@ export function LoadingScreen({ label = 'Loading 1125Corp' }: { label?: string }
           <div className="absolute inset-0 rounded-full border-4 border-white/10" />
           <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-blue-400 border-r-blue-400 animate-spin" />
           <div className="w-16 h-16 rounded-2xl bg-white flex items-center justify-center overflow-hidden shadow-xl shadow-black/30">
-            <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={64} height={64} className="object-contain" />
+            <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={64} height={64} className="object-contain" priority />
           </div>
         </div>
 

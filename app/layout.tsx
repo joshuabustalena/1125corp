@@ -4,14 +4,27 @@ import { Inter } from 'next/font/google';
 import { AuthProvider } from '@/lib/auth-context';
 import { ThemeProvider } from '@/lib/theme-context';
 import { Toaster } from '@/components/ui/toaster';
+import { PwaRegister } from '@/components/pwa-register';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: '1125Corp — Enterprise Loan Management System',
+  title: '1125Corp',
   description: '1125Corp — Professional loan management, collections, payroll, and accounting platform for lending corporations.',
+  manifest: '/manifest.webmanifest',
+  themeColor: '#0b1f3a',
+  viewport: 'width=device-width, initial-scale=1',
   icons: {
     icon: '/image/1125_Corp_Logo.png',
+    apple: '/icons/apple-touch-icon.png',
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: '1125Corp',
+  },
+  other: {
+    'mobile-web-app-capable': 'yes',
   },
   openGraph: {
     title: '1125Corp',
@@ -32,6 +45,7 @@ export default function RootLayout({
           <AuthProvider>
             {children}
             <Toaster />
+            <PwaRegister />
           </AuthProvider>
         </ThemeProvider>
       </body>
