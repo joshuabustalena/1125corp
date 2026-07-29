@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase/client';
+import { sendPushNotification } from '@/lib/push';
 
 const UPCOMING_DUE_WINDOW_DAYS = 3;
 
@@ -15,7 +16,7 @@ export async function checkDueDateAlerts(): Promise<void> {
 
     const { data: loans } = await supabase
       .from('loans')
-      .select('id, loan_number, due_date, remaining_balance, customers(first_name, last_name)')
+      .select('id, loan_number, due_date, remaining_balance, branch_id, customers(first_name, last_name)')
       .eq('status', 'active')
       .gt('remaining_balance', 0)
       .lte('due_date', windowEnd);
@@ -46,6 +47,7 @@ export async function checkDueDateAlerts(): Promise<void> {
       toInsert.push({
         type,
         recipient_type: 'branch_manager',
+        branch_id: loan.branch_id ?? null,
         message,
         channel: 'in_app',
         status: 'sent',
@@ -56,6 +58,9 @@ export async function checkDueDateAlerts(): Promise<void> {
 
     if (toInsert.length > 0) {
       await supabase.from('notifications').insert(toInsert);
+      for (const n of toInsert) {
+        sendPushNotification({ recipientType: n.recipient_type, branchId: n.branch_id ?? undefined, title: n.type === 'overdue' ? 'Loan Overdue' : 'Loan Due Soon', body: n.message, url: `/loans/${n.loan_id}` });
+      }
     }
   } catch {
     // Alerting must never block the page that triggered the check.

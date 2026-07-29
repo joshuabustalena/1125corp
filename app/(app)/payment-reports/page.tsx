@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -26,6 +27,7 @@ export default function PaymentReportsPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [dateFilter, setDateFilter] = useState(new Date().toISOString().split('T')[0]);
   const [branchFilter, setBranchFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
   const [customerFilter, setCustomerFilter] = useState('all');
@@ -88,6 +90,9 @@ export default function PaymentReportsPage() {
       .select('*, customers(first_name, last_name, branches(name), areas(name)), loans(loan_number)')
       .order('payment_date', { ascending: false });
 
+    if (dateFilter) {
+      query = query.eq('payment_date', dateFilter);
+    }
     if (customerIds) {
       query = query.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
     }
@@ -176,7 +181,8 @@ export default function PaymentReportsPage() {
       const contentWidthPt = (canvas.width / scale) * pxToPt;
       const contentHeightPt = (canvas.height / scale) * pxToPt;
 
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      // 8.5" x 13" (Philippine "folio"/long bond paper), in points (72pt/in).
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
       const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
@@ -243,7 +249,11 @@ export default function PaymentReportsPage() {
       {/* Filters */}
       <Card className="glass-card border-border">
         <CardContent className="p-4 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-2">
+              <Label>Date</Label>
+              <Input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} />
+            </div>
             <div className="space-y-2">
               <Label>Branch</Label>
               {isAdmin ? (
@@ -328,7 +338,7 @@ export default function PaymentReportsPage() {
       <Card className="glass-card border-border">
         <CardHeader>
           <CardTitle>Payment Detail</CardTitle>
-          <CardDescription>{payments.length} payments</CardDescription>
+          <CardDescription>{payments.length} payments{dateFilter ? ` for ${formatDate(dateFilter)}` : ''}</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -403,6 +413,7 @@ export default function PaymentReportsPage() {
           </div>
 
           <div style={{ display: 'flex', gap: 28, marginBottom: 20, fontSize: 12 }}>
+            <div><span style={{ color: '#666' }}>Date: </span><strong>{dateFilter ? formatDate(dateFilter) : 'All dates'}</strong></div>
             <div><span style={{ color: '#666' }}>Branch: </span><strong>{branchLabel}</strong></div>
             <div><span style={{ color: '#666' }}>Area: </span><strong>{areaLabel}</strong></div>
             <div><span style={{ color: '#666' }}>Customer: </span><strong>{customerLabel}</strong></div>

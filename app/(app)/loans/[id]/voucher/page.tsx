@@ -269,11 +269,11 @@ export default function VoucherPage() {
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.address.toUpperCase()}</div>
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CEL NO: {branding.contact}</div>
             </div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, color: '#0B1F3A', marginBottom: 16, marginTop: 8 }}>ACKNOWLEDGEMENT RECEIPT OF LOAN</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, color: '#0B1F3A', marginTop: 8 }}>ACKNOWLEDGEMENT RECEIPT OF LOAN</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: '#0B1F3A', marginBottom: 16 }}>(via Field Release)</div>
             <table style={vTable}>
               <tbody>
                 <tr><td style={vCell}>Date of Receipt:</td><td style={vCell}>{formatVoucherDate(voucherData.date)}</td></tr>
-                <tr><td style={vCell}>Loan Received at:</td><td style={vCell}>{voucherData.branchName}</td></tr>
                 <tr><td style={vCell}>Assigned Field Collector:</td><td style={vCell}>{voucherData.fieldCollectorName}</td></tr>
               </tbody>
             </table>

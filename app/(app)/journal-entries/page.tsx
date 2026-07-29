@@ -183,12 +183,8 @@ export default function JournalEntriesPage() {
                 <Input type="date" required value={entryForm.entry_date} onChange={(e) => setEntryForm({ ...entryForm, entry_date: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <Label>Reference</Label>
-                <Input value={entryForm.reference} onChange={(e) => setEntryForm({ ...entryForm, reference: e.target.value })} placeholder="OR#, voucher#, etc." />
-              </div>
-              <div className="space-y-2 col-span-2">
-                <Label>Description</Label>
-                <Input value={entryForm.description} onChange={(e) => setEntryForm({ ...entryForm, description: e.target.value })} />
+                <Label>Reference *</Label>
+                <Input required value={entryForm.reference} onChange={(e) => setEntryForm({ ...entryForm, reference: e.target.value })} placeholder="OR#, voucher#, etc." />
               </div>
             </div>
 
@@ -227,6 +223,11 @@ export default function JournalEntriesPage() {
               <span>Total Debit: {formatCurrency(totalDebit)}</span>
               <span>Total Credit: {formatCurrency(totalCredit)}</span>
               <span>{isBalanced ? 'Balanced' : 'Not balanced'}</span>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Input value={entryForm.description} onChange={(e) => setEntryForm({ ...entryForm, description: e.target.value })} />
             </div>
 
             <DialogFooter>

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"{/\\\\* Hidden printable Payroll Voucher\" \"app/\\(app\\)/payroll/page.tsx\")",
+      "Bash(grep -n \"{/\\\\* Hidden printable 13th Month Voucher\" \"app/\\(app\\)/payroll/page.tsx\")"
+    ]
+  }
+}

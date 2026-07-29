@@ -23,6 +23,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateLoanNumber, generateVoucherNumber, computeLoanDetails } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
+import { notifyRoles } from '@/lib/notify';
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
@@ -507,13 +508,11 @@ export default function LoanDetailPage() {
       setRequestingLimit(false);
       return;
     }
-    await supabase.from('notifications').insert({
+    notifyRoles(['administrator'], {
       type: 'credit_limit_request',
-      recipient_type: 'administrator',
+      title: 'Credit Limit Request',
       message: `${profile?.full_name ?? 'A Branch Manager'} requested a credit limit increase for ${loan.customers.first_name} ${loan.customers.last_name} to approve loan ${loan.loan_number} (${formatCurrency(loan.customers.max_loan_limit)} → ${formatCurrency(approveAmountNum)}).`,
-      channel: 'in_app',
-      status: 'sent',
-      sent_at: new Date().toISOString(),
+      url: '/credit-limit-requests',
     });
     toast({ title: 'Request sent', description: 'Waiting for Administrator approval before you can approve this loan at that amount.' });
     await loadPendingLimitRequest();
@@ -544,6 +543,13 @@ export default function LoanDetailPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
+      const customerName = `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim();
+      notifyRoles(['cashier'], {
+        type: 'loan_approved',
+        title: 'Loan Approved',
+        message: `Loan ${loan.loan_number} for ${customerName} was approved and is awaiting disbursement.`,
+        url: `/loans/${loan.id}`,
+      }, loan.branch_id);
       toast({ title: 'Loan approved', description: `${loan.loan_number} is awaiting disbursement by a Cashier.` });
       setApproveOpen(false);
       router.push(`/loans/${loan.id}/agreement`);
@@ -585,8 +591,23 @@ export default function LoanDetailPage() {
       toast({ title: 'Loan disbursed, but voucher failed', description: voucherError.message, variant: 'destructive' });
     }
 
-    // Auto-post to the general ledger: the full loan amount becomes
-    // receivable, cash goes out net of the service fee we keep as income.
+    // Auto-post to the general ledger. Loans Receivable is booked at the
+    // full total payable (principal + interest) up front, then immediately
+    // reduced by whatever was collected the same instant — the first
+    // day's payment and any carried-over offset balance from a renewal —
+    // since those never actually leave as cash. What's left after also
+    // netting out the service fee is the real cash handed to the borrower.
+    const principal = Number(loan.amount) || 0;
+    const interestAmount = Number(loan.interest_amount) || 0;
+    const totalPayable = Number(loan.total_payable) || (principal + interestAmount);
+    const serviceFee = Number(loan.service_fee) || 0;
+    const offsetBalance = Number(loan.offset_balance) || 0;
+    const firstPayment = loan.daily_payment != null && Number(loan.daily_payment) > 0
+      ? Number(loan.daily_payment)
+      : (loan.term_days > 0 ? totalPayable / loan.term_days : 0);
+    const receivableOffset = firstPayment + offsetBalance;
+    const cashReleased = Math.max(0, principal - serviceFee - offsetBalance - firstPayment);
+
     postJournalEntry({
       entryDate: now.split('T')[0],
       description: `Loan disbursement — ${loan.loan_number}`,
@@ -595,9 +616,11 @@ export default function LoanDetailPage() {
       sourceId: loan.id,
       createdBy: profile?.id ?? null,
       lines: [
-        { accountCode: '1100', debit: Number(loan.amount), memo: 'Loans Receivable' },
-        { accountCode: '1000', credit: Number(loan.release_amount), memo: 'Cash released to borrower' },
-        { accountCode: '4010', credit: Number(loan.service_fee), memo: 'Service fee income' },
+        { accountCode: '1100', debit: totalPayable, memo: 'Loans Receivable' },
+        { accountCode: '1100', credit: receivableOffset, memo: 'First payment and offset balance collected upfront' },
+        { accountCode: '1000', credit: cashReleased, memo: 'Cash released to borrower' },
+        { accountCode: '4010', credit: serviceFee, memo: 'Service fee income' },
+        { accountCode: '4000', credit: interestAmount, memo: 'Interest income' },
       ],
     });
 
@@ -616,6 +639,13 @@ export default function LoanDetailPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
+      const customerName = `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim();
+      notifyRoles(['branch_manager', 'administrator'], {
+        type: 'loan_declined',
+        title: 'Loan Declined',
+        message: `Loan ${loan.loan_number} for ${customerName} was declined. Reason: ${declineReason.trim()}`,
+        url: `/loans/${loan.id}`,
+      }, loan.branch_id);
       toast({ title: 'Loan declined', description: `${loan.loan_number} has been declined.` });
       setDeclineOpen(false);
       setDeclineReason('');

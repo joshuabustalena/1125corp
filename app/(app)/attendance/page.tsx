@@ -19,7 +19,8 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatDate, formatTime, formatDuration, exportToCSV } from '@/lib/format';
+import { formatDate, formatTime, formatDuration, formatCurrency, exportToCSV } from '@/lib/format';
+import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle } from 'lucide-react';
@@ -31,7 +32,13 @@ export default function AttendancePage() {
   const searchParams = useSearchParams();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  const isBranchManager = profile?.role_name === 'Branch Manager';
+  // A Branch Manager can accept/reject their own branch's attendance same
+  // as an Administrator — except for LATE records, which always require
+  // Administrator sign-off (see canActOnRecord below).
+  const canReview = isAdmin || isBranchManager;
   const [records, setRecords] = useState<any[]>([]);
+  const [branchEmployeeIds, setBranchEmployeeIds] = useState<string[] | null>(null);
   const [employees, setEmployees] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
@@ -84,7 +91,17 @@ export default function AttendancePage() {
     const employeeParam = searchParams.get('employee');
     if (employeeParam) setFilterEmployee(employeeParam);
   }, [isAdmin, searchParams]);
-  useEffect(() => { if (profile) load(); }, [filterEmployee, branchFilter, positionFilter, employeeStatusFilter, search, profile, myEmployeeId]);
+  // A Branch Manager reviews attendance for everyone in their own branch
+  // (not just themselves) — resolved separately from `employees` (which for
+  // a Branch Manager stays their own single record, used by the check-in
+  // panel above) so the review table can be scoped without touching that.
+  useEffect(() => {
+    if (!isBranchManager || !profile?.branch_id) return;
+    supabase.from('employees').select('id').eq('branch_id', profile.branch_id).then(({ data }) => {
+      setBranchEmployeeIds((data ?? []).map(e => e.id));
+    });
+  }, [isBranchManager, profile?.branch_id]);
+  useEffect(() => { if (profile) load(); }, [filterEmployee, branchFilter, positionFilter, employeeStatusFilter, search, profile, myEmployeeId, branchEmployeeIds]);
   useEffect(() => () => stopStream(), []);
 
   async function loadEmployees() {
@@ -125,8 +142,11 @@ export default function AttendancePage() {
   async function load() {
     const seq = ++loadSeq.current;
     setLoading(true);
-    let query = supabase.from('attendance').select('*, employees(first_name, last_name)').order('date', { ascending: false });
-    if (!isAdmin) {
+    let query = supabase.from('attendance').select('*, employees(first_name, last_name, profile_id)').order('date', { ascending: false });
+    if (isBranchManager) {
+      const ids = branchEmployeeIds ?? [];
+      query = query.in('employee_id', ids.length > 0 ? ids : ['00000000-0000-0000-0000-000000000000']);
+    } else if (!isAdmin) {
       query = query.eq('employee_id', myEmployeeId ?? '00000000-0000-0000-0000-000000000000');
     } else if (filterEmployee !== 'all') {
       query = query.eq('employee_id', filterEmployee);
@@ -316,7 +336,25 @@ export default function AttendancePage() {
       const today = now.toISOString().split('T')[0];
       const hour = now.getHours();
       const minute = now.getMinutes();
-      const lateMinutes = (hour > 8 || (hour === 8 && minute > 0)) ? (hour - 8) * 60 + minute : 0;
+      // Work schedule is 8:30 AM – 4:30 PM — checking in any time after
+      // 8:30 counts as late.
+      const SCHEDULED_TIME_IN_MINUTES = 8 * 60 + 30;
+      const lateMinutes = Math.max(0, (hour * 60 + minute) - SCHEDULED_TIME_IN_MINUTES);
+
+      // Default late deduction = half a day's rate, computed once at
+      // check-in time. An Administrator can still override the stored
+      // value afterwards from the attendance table's Deduction column.
+      let lateDeduction = 0;
+      if (lateMinutes > 0) {
+        const { data: emp } = await supabase.from('employees').select('salary, pay_type').eq('id', selectedEmployee).maybeSingle();
+        if (emp) {
+          // Fixed-monthly employees (e.g. Branch Manager) have no stored
+          // daily rate — approximate one from ~26 working days/month
+          // (Mon–Sat) purely for this calculation.
+          const dailyRate = emp.pay_type === 'monthly' ? Number(emp.salary) / 26 : Number(emp.salary);
+          lateDeduction = Math.round((dailyRate / 2) * 100) / 100;
+        }
+      }
 
       const { error } = await supabase.from('attendance').insert({
         employee_id: selectedEmployee,
@@ -324,13 +362,25 @@ export default function AttendancePage() {
         time_in: now.toISOString(),
         status: lateMinutes > 0 ? 'late' : 'present',
         late_minutes: lateMinutes,
+        late_deduction: lateDeduction,
         photo_in_url: photoUrl,
         gps_lat: location?.lat ?? null,
         gps_lng: location?.lng ?? null,
         location_address: locationAddress,
       });
-      if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      else toast({ title: 'Success', description: 'Checked in successfully' });
+      if (error) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      } else {
+        const checkedInEmployee = employees.find((e) => e.id === selectedEmployee);
+        const name = checkedInEmployee ? `${checkedInEmployee.first_name} ${checkedInEmployee.last_name}` : 'An employee';
+        notifyRoles(['branch_manager', 'administrator'], {
+          type: 'attendance_pending',
+          title: lateMinutes > 0 ? 'Late Check-in — Needs Review' : 'New Check-in — Needs Review',
+          message: `${name} checked in${lateMinutes > 0 ? ` late (${lateMinutes} min)` : ''} and is awaiting review.`,
+          url: '/attendance',
+        }, checkedInEmployee?.branch_id);
+        toast({ title: 'Success', description: 'Checked in successfully' });
+      }
     } else if (checkoutTargetId) {
       const { error } = await supabase.from('attendance').update({
         time_out: new Date().toISOString(),
@@ -346,16 +396,45 @@ export default function AttendancePage() {
     load();
   }
 
-  // Only an Administrator can accept/reject an attendance record, across
-  // every employee — a rejected record is excluded from payroll's
-  // days-present count, while pending/accepted both count normally.
+  // An Administrator can accept/reject any record. A Branch Manager can too,
+  // but only for their own branch's ON-TIME records — a LATE record always
+  // needs an Administrator's sign-off (see canActOnRecord), since that's
+  // also when a real peso deduction is on the line.
   async function handleReview(id: string, reviewStatus: 'accepted' | 'rejected') {
+    const record = records.find((r) => r.id === id);
     const { error } = await supabase.from('attendance').update({ review_status: reviewStatus }).eq('id', id);
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
       return;
     }
     setRecords(prev => prev.map(r => r.id === id ? { ...r, review_status: reviewStatus } : r));
+    if (record) {
+      notifyProfile(record.employees?.profile_id, {
+        type: 'attendance_reviewed',
+        title: reviewStatus === 'accepted' ? 'Attendance Approved' : 'Attendance Rejected',
+        message: `Your ${formatDate(record.date)} attendance record was ${reviewStatus === 'accepted' ? 'approved' : 'rejected'}.`,
+        url: '/attendance',
+        recipientName: `${record.employees?.first_name ?? ''} ${record.employees?.last_name ?? ''}`.trim(),
+      });
+    }
+  }
+
+  function canActOnRecord(r: any) {
+    return isAdmin || (isBranchManager && r.status !== 'late');
+  }
+
+  // Deduction amount is only ever editable by an Administrator — saving it
+  // marks the record as custom so payroll/future recalculations never
+  // silently overwrite an amount an Administrator specifically chose.
+  async function handleDeductionChange(record: any, value: string) {
+    const amount = Math.round((Number(value) || 0) * 100) / 100;
+    if (amount === Number(record.late_deduction ?? 0)) return;
+    const { error } = await supabase.from('attendance').update({ late_deduction: amount, late_deduction_is_custom: true }).eq('id', record.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      return;
+    }
+    setRecords(prev => prev.map(r => r.id === record.id ? { ...r, late_deduction: amount, late_deduction_is_custom: true } : r));
   }
 
   const reviewVariant = (s: string | null | undefined) => s === 'accepted' ? 'default' : s === 'rejected' ? 'destructive' : 'outline';
@@ -365,7 +444,7 @@ export default function AttendancePage() {
       Employee: `${r.employees?.first_name} ${r.employees?.last_name}`,
       Date: r.date, TimeIn: r.time_in ?? '', TimeOut: r.time_out ?? '',
       Hours: formatDuration(r.time_in, r.time_out),
-      Status: r.status, Late: r.late_minutes, Overtime: r.overtime_minutes,
+      Status: r.status, Late: r.late_minutes, Deduction: r.late_deduction ?? 0, Overtime: r.overtime_minutes,
       Location: r.location_address ?? '',
     })), 'attendance.csv');
   }
@@ -498,6 +577,21 @@ export default function AttendancePage() {
                     <div><p className="text-xs text-muted-foreground">Time Out</p><p>{formatTime(r.time_out)}</p></div>
                     <div><p className="text-xs text-muted-foreground">Hours</p><p>{formatDuration(r.time_in, r.time_out)}</p></div>
                     <div><p className="text-xs text-muted-foreground">Late</p><p>{r.late_minutes > 0 ? `${r.late_minutes} min` : '—'}</p></div>
+                    {r.status === 'late' && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Deduction</p>
+                        {isAdmin ? (
+                          <Input
+                            type="number"
+                            defaultValue={r.late_deduction ?? 0}
+                            onBlur={(e) => handleDeductionChange(r, e.target.value)}
+                            className="h-8 mt-0.5"
+                          />
+                        ) : (
+                          <p className="text-destructive">{formatCurrency(r.late_deduction ?? 0)}</p>
+                        )}
+                      </div>
+                    )}
                     {r.gps_lat && r.gps_lng && (
                       <div className="col-span-2">
                         <p className="text-xs text-muted-foreground">Location</p>
@@ -507,7 +601,7 @@ export default function AttendancePage() {
                           target="_blank" rel="noopener noreferrer"
                         >
                           <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                          <span className="truncate min-w-0">{shortenAddress(r.location_address) ?? 'View on map'}</span>
+                          <span className="truncate min-w-0">View on map</span>
                         </a>
                       </div>
                     )}
@@ -518,15 +612,20 @@ export default function AttendancePage() {
                         <Clock className="w-3.5 h-3.5 mr-1.5" />Check Out
                       </Button>
                     )}
-                    {isAdmin && r.review_status !== 'accepted' && (
+                    {canReview && canActOnRecord(r) && r.review_status !== 'accepted' && (
                       <Button variant="outline" size="sm" onClick={() => handleReview(r.id, 'accepted')}>
                         <CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Accept
                       </Button>
                     )}
-                    {isAdmin && r.review_status !== 'rejected' && (
+                    {canReview && canActOnRecord(r) && r.review_status !== 'rejected' && (
                       <Button variant="outline" size="sm" onClick={() => handleReview(r.id, 'rejected')}>
                         <XCircle className="w-3.5 h-3.5 mr-1.5 text-destructive" />Reject
                       </Button>
+                    )}
+                    {isBranchManager && !canActOnRecord(r) && r.review_status === 'pending' && (
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />Waiting for Admin approval
+                      </span>
                     )}
                     {r.photo_out_url && (
                       <Button variant="outline" size="sm" onClick={() => setPreviewImage({ url: r.photo_out_url, label: 'Check-Out Photo' })}>
@@ -550,6 +649,7 @@ export default function AttendancePage() {
                     <TableHead>Hours</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Late</TableHead>
+                    <TableHead>Deduction</TableHead>
                     <TableHead>Location</TableHead>
                     <TableHead>Review</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -595,6 +695,20 @@ export default function AttendancePage() {
                       <TableCell className="text-sm whitespace-nowrap">{formatDuration(r.time_in, r.time_out)}</TableCell>
                       <TableCell><Badge variant={statusVariant(r.status)}>{r.status}</Badge></TableCell>
                       <TableCell className="text-sm whitespace-nowrap">{r.late_minutes > 0 ? `${r.late_minutes} min` : '—'}</TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {r.status === 'late' ? (
+                          isAdmin ? (
+                            <Input
+                              type="number"
+                              defaultValue={r.late_deduction ?? 0}
+                              onBlur={(e) => handleDeductionChange(r, e.target.value)}
+                              className="h-8 w-24"
+                            />
+                          ) : (
+                            <span className="text-destructive font-medium">{formatCurrency(r.late_deduction ?? 0)}</span>
+                          )
+                        ) : '—'}
+                      </TableCell>
                       <TableCell className="text-sm w-[220px]">
                         {r.gps_lat && r.gps_lng ? (
                           <a
@@ -604,7 +718,7 @@ export default function AttendancePage() {
                             title={r.location_address ?? undefined}
                           >
                             <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                            <span className="truncate min-w-0">{shortenAddress(r.location_address) ?? 'View on map'}</span>
+                            <span className="truncate min-w-0">View on map</span>
                           </a>
                         ) : '—'}
                       </TableCell>
@@ -618,15 +732,18 @@ export default function AttendancePage() {
                               <Clock className="w-4 h-4 mr-1" />Check Out
                             </Button>
                           )}
-                          {isAdmin && r.review_status !== 'accepted' && (
+                          {canReview && canActOnRecord(r) && r.review_status !== 'accepted' && (
                             <Button variant="ghost" size="icon" onClick={() => handleReview(r.id, 'accepted')} title="Accept">
                               <CheckCircle className="w-4 h-4 text-success" />
                             </Button>
                           )}
-                          {isAdmin && r.review_status !== 'rejected' && (
+                          {canReview && canActOnRecord(r) && r.review_status !== 'rejected' && (
                             <Button variant="ghost" size="icon" onClick={() => handleReview(r.id, 'rejected')} title="Reject">
                               <XCircle className="w-4 h-4 text-destructive" />
                             </Button>
+                          )}
+                          {isBranchManager && !canActOnRecord(r) && r.review_status === 'pending' && (
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">Waiting for Admin approval</span>
                           )}
                         </div>
                       </TableCell>

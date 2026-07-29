@@ -84,8 +84,9 @@ export default function CustomersPage() {
 
   const REQUIRED_DOCUMENTS = [
     { type: 'valid_id', label: 'Valid Government ID' },
-    { type: 'clearance', label: 'Barangay Clearance' },
+    { type: 'clearance', label: 'Barangay Business Permit' },
     { type: 'photo_2x2', label: '2x2 Picture' },
+    { type: 'ci_application_form', label: 'CI/Application Form' },
   ];
   const [extraDocRows, setExtraDocRows] = useState<{ id: string; label: string }[]>([]);
   const [activeTab, setActiveTab] = useState<'info' | 'documents'>('info');

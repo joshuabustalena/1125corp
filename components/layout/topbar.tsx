@@ -88,13 +88,24 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   async function loadNotifications() {
     await checkDueDateAlerts();
     const isAdmin = profile?.role_name === 'Administrator';
-    let query = supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(10);
+    // Over-fetch before the branch filter below trims it down, so a branch-
+    // scoped viewer still ends up with a full 10 to show, not fewer just
+    // because other branches' broadcasts happened to be more recent.
+    let query = supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(isAdmin ? 10 : 30);
     if (!isAdmin) {
       const myType = roleToRecipientType(profile?.role_name);
-      query = query.in('recipient_type', [myType, 'all'].filter(Boolean) as string[]);
+      // Role broadcasts meant for me, plus anything addressed to me
+      // personally (recipient_id) regardless of its recipient_type.
+      query = query.or(`recipient_type.in.(${[myType, 'all'].filter(Boolean).join(',')}),recipient_id.eq.${profile?.id}`);
     }
     const { data } = await query;
-    setNotifications(data ?? []);
+    // A role broadcast scoped to a branch (branch_id set) only concerns that
+    // branch's own staff — filter out other branches' broadcasts here since
+    // the .or() above can't express that AND condition on its own.
+    const scoped = isAdmin ? (data ?? []) : (data ?? []).filter((n: any) =>
+      n.recipient_id === profile?.id || !n.branch_id || n.branch_id === profile?.branch_id
+    );
+    setNotifications(scoped.slice(0, 10));
   }
 
   async function handleOpenChange(open: boolean) {

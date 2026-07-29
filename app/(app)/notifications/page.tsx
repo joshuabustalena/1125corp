@@ -12,7 +12,9 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDateTime } from '@/lib/format';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
-import { Bell, Loader2, Mail, MessageSquare, Send } from 'lucide-react';
+import { getPushSubscriptionState, subscribeToPush, unsubscribeFromPush } from '@/lib/push';
+import { useToast } from '@/hooks/use-toast';
+import { Bell, BellOff, BellRing, Loader2, Mail, MessageSquare, Send } from 'lucide-react';
 
 function roleToRecipientType(roleName: string | null | undefined): string | null {
   if (!roleName) return null;
@@ -21,10 +23,32 @@ function roleToRecipientType(roleName: string | null | undefined): string | null
 
 export default function NotificationsPage() {
   const { profile } = useAuth();
+  const { toast } = useToast();
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pushState, setPushState] = useState<'unsupported' | 'denied' | 'subscribed' | 'unsubscribed'>('unsubscribed');
+  const [pushBusy, setPushBusy] = useState(false);
 
   useEffect(() => { if (profile) load(); }, [profile]);
+  useEffect(() => { getPushSubscriptionState().then(setPushState); }, []);
+
+  async function handleTogglePush() {
+    if (!profile) return;
+    setPushBusy(true);
+    if (pushState === 'subscribed') {
+      await unsubscribeFromPush();
+      toast({ title: 'Push notifications turned off' });
+    } else {
+      const ok = await subscribeToPush(profile.id);
+      if (ok) {
+        toast({ title: 'Push notifications enabled', description: 'You’ll get notified on this device even when the app is closed.' });
+      } else {
+        toast({ title: 'Could not enable push notifications', description: 'Check your browser notification permission and try again.', variant: 'destructive' });
+      }
+    }
+    setPushState(await getPushSubscriptionState());
+    setPushBusy(false);
+  }
 
   async function load() {
     setLoading(true);
@@ -33,13 +57,23 @@ export default function NotificationsPage() {
     let query = supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(50);
     if (!isAdmin) {
       const myType = roleToRecipientType(profile?.role_name);
-      query = query.in('recipient_type', [myType, 'all'].filter(Boolean) as string[]);
+      // Role broadcasts meant for me, plus anything addressed to me
+      // personally (recipient_id) regardless of its recipient_type.
+      query = query.or(`recipient_type.in.(${[myType, 'all'].filter(Boolean).join(',')}),recipient_id.eq.${profile?.id}`);
     }
     const { data } = await query;
-    setNotifications(data ?? []);
+    // A role broadcast scoped to a branch (branch_id set) only concerns that
+    // branch's own staff — filter out other branches' broadcasts here since
+    // the .or() above can't express that AND condition on its own. Personal
+    // notifications (recipient_id) and unscoped broadcasts (branch_id null,
+    // e.g. Administrator's) always pass through.
+    const scoped = isAdmin ? (data ?? []) : (data ?? []).filter((n: any) =>
+      n.recipient_id === profile?.id || !n.branch_id || n.branch_id === profile?.branch_id
+    );
+    setNotifications(scoped);
     // Opening this page reads everything currently shown, same as opening
     // the topbar bell dropdown.
-    const unreadIds = (data ?? []).filter((n: any) => !n.read_at).map((n: any) => n.id);
+    const unreadIds = scoped.filter((n: any) => !n.read_at).map((n: any) => n.id);
     if (unreadIds.length > 0) {
       await supabase.from('notifications').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
     }
@@ -61,6 +95,24 @@ export default function NotificationsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Notifications" description="SMS and email notification history">
+        {pushState !== 'unsupported' && (
+          <Button
+            size="sm"
+            variant={pushState === 'subscribed' ? 'default' : 'outline'}
+            onClick={handleTogglePush}
+            disabled={pushBusy || pushState === 'denied'}
+            title={pushState === 'denied' ? 'Notifications are blocked in your browser settings' : undefined}
+          >
+            {pushBusy ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : pushState === 'subscribed' ? (
+              <BellRing className="w-4 h-4 mr-2" />
+            ) : (
+              <BellOff className="w-4 h-4 mr-2" />
+            )}
+            {pushState === 'subscribed' ? 'Push Notifications On' : pushState === 'denied' ? 'Push Blocked' : 'Enable Push Notifications'}
+          </Button>
+        )}
         <Button size="sm" variant="outline"><Send className="w-4 h-4 mr-2" />Send Notification</Button>
       </PageHeader>
 

@@ -20,7 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/format';
-import { BookOpen, Plus, Loader2 } from 'lucide-react';
+import { BookOpen, Plus, Pencil, Trash2, Loader2 } from 'lucide-react';
 
 export default function ChartOfAccountsPage() {
   const { toast } = useToast();
@@ -33,6 +33,9 @@ export default function ChartOfAccountsPage() {
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const [savingAccount, setSavingAccount] = useState(false);
   const [accountForm, setAccountForm] = useState({ code: '', name: '', account_type: 'asset' });
+  const [editingAccount, setEditingAccount] = useState<any>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => { load(); }, []);
 
@@ -66,19 +69,48 @@ export default function ChartOfAccountsPage() {
     setAccountBalances(totals);
   }
 
-  async function handleAddAccount(e: React.FormEvent) {
+  function openAddAccount() {
+    setEditingAccount(null);
+    setAccountForm({ code: '', name: '', account_type: 'asset' });
+    setAccountDialogOpen(true);
+  }
+
+  function openEditAccount(account: any) {
+    setEditingAccount(account);
+    setAccountForm({ code: account.code, name: account.name, account_type: account.account_type });
+    setAccountDialogOpen(true);
+  }
+
+  async function handleSaveAccount(e: React.FormEvent) {
     e.preventDefault();
     setSavingAccount(true);
-    const { error } = await supabase.from('chart_of_accounts').insert(accountForm);
+    const { error } = editingAccount
+      ? await supabase.from('chart_of_accounts').update(accountForm).eq('id', editingAccount.id)
+      : await supabase.from('chart_of_accounts').insert(accountForm);
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Success', description: 'Account added' });
+      toast({ title: 'Success', description: editingAccount ? 'Account updated' : 'Account added' });
       setAccountDialogOpen(false);
+      setEditingAccount(null);
       setAccountForm({ code: '', name: '', account_type: 'asset' });
       load();
     }
     setSavingAccount(false);
+  }
+
+  async function handleDeleteAccount() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const { error } = await supabase.from('chart_of_accounts').delete().eq('id', deleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: 'Account deleted' });
+      setDeleteTarget(null);
+      load();
+    }
+    setDeleting(false);
   }
 
   return (
@@ -92,7 +124,7 @@ export default function ChartOfAccountsPage() {
             <CardDescription>{accounts.length} accounts</CardDescription>
           </div>
           {isAdmin && (
-            <Button size="sm" variant="outline" onClick={() => setAccountDialogOpen(true)}>
+            <Button size="sm" variant="outline" onClick={openAddAccount}>
               <Plus className="w-4 h-4 mr-2" />
               Add Account
             </Button>
@@ -114,6 +146,7 @@ export default function ChartOfAccountsPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead className="text-right">Balance (as of today)</TableHead>
+                  {isAdmin && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -123,6 +156,18 @@ export default function ChartOfAccountsPage() {
                     <TableCell className="text-sm font-medium">{a.name}</TableCell>
                     <TableCell><Badge variant="outline" className="capitalize">{a.account_type}</Badge></TableCell>
                     <TableCell className="text-right text-sm font-medium">{formatCurrency(accountBalances[a.id] ?? 0)}</TableCell>
+                    {isAdmin && (
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button variant="ghost" size="icon" onClick={() => openEditAccount(a)} title="Edit">
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(a)} title="Delete">
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -131,14 +176,18 @@ export default function ChartOfAccountsPage() {
         </CardContent>
       </Card>
 
-      {/* New account (admin) */}
+      {/* Add/Edit account (admin). Balance isn't part of this form at all —
+          it's always computed live from journal entries, never a stored,
+          editable field on the account itself. */}
       <Dialog open={accountDialogOpen} onOpenChange={setAccountDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add Account</DialogTitle>
-            <DialogDescription>Add a new account to the chart of accounts</DialogDescription>
+            <DialogTitle>{editingAccount ? 'Edit Account' : 'Add Account'}</DialogTitle>
+            <DialogDescription>
+              {editingAccount ? 'Update this account\'s details' : 'Add a new account to the chart of accounts'}
+            </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleAddAccount} className="space-y-4">
+          <form onSubmit={handleSaveAccount} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Code *</Label>
@@ -170,6 +219,25 @@ export default function ChartOfAccountsPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete account (admin) */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Account</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete {deleteTarget?.code} — {deleteTarget?.name}? This action cannot be undone, and will fail if the account already has journal entries posted against it.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteAccount} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

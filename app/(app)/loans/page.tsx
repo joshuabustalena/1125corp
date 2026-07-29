@@ -21,6 +21,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exportToCSV } from '@/lib/format';
+import { notifyRoles } from '@/lib/notify';
 import {
   Landmark, Plus, Search, Download, Eye, Loader2, Calculator, RefreshCw,
   CalendarDays, ChevronLeft, ChevronRight,
@@ -346,6 +347,14 @@ export default function LoansPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
+      const customer = customers.find(c => c.id === form.customer_id);
+      const customerName = customer ? `${customer.first_name} ${customer.last_name}` : 'a customer';
+      notifyRoles(['branch_manager', 'administrator'], {
+        type: 'loan_pending',
+        title: 'New Loan Application',
+        message: `${profile?.full_name ?? 'Someone'} submitted a new loan application for ${customerName} (${formatCurrency(Number(form.amount))}) — pending approval.`,
+        url: '/loans',
+      }, form.branch_id);
       toast({ title: 'Submitted for approval', description: `Loan ${loanNumber} is pending — a Branch Manager must approve it before it becomes active.` });
       setDialogOpen(false);
       setForm({ ...form, customer_id: '', amount: '', custom_daily_payment: '' });
@@ -382,6 +391,13 @@ export default function LoansPage() {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
       await supabase.from('loans').update({ reapplied: true }).eq('id', l.id);
+      const customerName = `${l.customers?.first_name ?? ''} ${l.customers?.last_name ?? ''}`.trim() || 'a customer';
+      notifyRoles(['branch_manager', 'administrator'], {
+        type: 'loan_pending',
+        title: 'New Loan Application',
+        message: `${profile?.full_name ?? 'Someone'} re-submitted a loan application for ${customerName} (${formatCurrency(l.amount)}) — pending approval.`,
+        url: '/loans',
+      }, l.branch_id);
       toast({ title: 'Re-submitted for approval', description: `New application ${newLoanNumber} is pending review.` });
       loadLoans();
     }

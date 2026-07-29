@@ -22,6 +22,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDate } from '@/lib/format';
+import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search } from 'lucide-react';
 
 // 5 regular leave terms, plus a separate Special Leave category (solo
@@ -29,9 +30,9 @@ import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search } from 'luci
 // the regular annual allowance, tracked in its own bucket.
 const LEAVE_TYPES = [
   { value: 'vacation', label: 'Vacation' },
-  { value: 'sick', label: 'Sick' },
   { value: 'emergency', label: 'Emergency' },
-  { value: 'bereavement', label: 'Bereavement' },
+  { value: 'paternity', label: 'Paternity' },
+  { value: 'maternity', label: 'Maternity' },
   { value: 'other', label: 'Other' },
 ];
 const SPECIAL_LEAVE_TYPE = 'special';
@@ -81,7 +82,7 @@ export default function LeaveRequestsPage() {
     if (setting?.value) setAnnualLeaves(Number(setting.value));
     if (specialSetting?.value) setSpecialLeavesAnnual(Number(specialSetting.value));
 
-    let q = supabase.from('leave_requests').select('*, employees(first_name, last_name, position, branch_id)').order('created_at', { ascending: false });
+    let q = supabase.from('leave_requests').select('*, employees(first_name, last_name, position, branch_id, profile_id)').order('created_at', { ascending: false });
     if (!canApprove) {
       q = q.eq('employee_id', emp?.id ?? '00000000-0000-0000-0000-000000000000');
     }
@@ -140,11 +141,19 @@ export default function LeaveRequestsPage() {
       return;
     }
 
+    const targetEmployee = employees.find(e => e.id === targetEmployeeId) ?? myEmployee;
     if (autoApprove) {
-      const targetEmployee = employees.find(e => e.id === targetEmployeeId) ?? myEmployee;
       const field = form.leave_type === SPECIAL_LEAVE_TYPE ? 'special_leaves_used' : 'paid_leaves_used';
       const current = form.leave_type === SPECIAL_LEAVE_TYPE ? (targetEmployee?.special_leaves_used ?? 0) : (targetEmployee?.paid_leaves_used ?? 0);
       await supabase.from('employees').update({ [field]: current + days }).eq('id', targetEmployeeId);
+    } else {
+      const employeeName = (targetEmployee as any)?.first_name ? `${(targetEmployee as any).first_name} ${(targetEmployee as any).last_name}` : (profile?.full_name ?? 'An employee');
+      notifyRoles(['branch_manager', 'administrator'], {
+        type: 'leave_request_pending',
+        title: 'New Leave Request',
+        message: `${employeeName} requested ${days} day(s) of ${form.leave_type} leave — pending approval.`,
+        url: '/leave-requests',
+      }, (targetEmployee as any)?.branch_id);
     }
 
     toast({ title: 'Success', description: autoApprove ? 'Leave request added and approved' : 'Leave request submitted' });
@@ -171,6 +180,14 @@ export default function LeaveRequestsPage() {
       const current = (emp as any)?.[field] ?? 0;
       await supabase.from('employees').update({ [field]: current + request.days }).eq('id', request.employee_id);
     }
+
+    notifyProfile(request.employees?.profile_id, {
+      type: 'leave_request_reviewed',
+      title: status === 'approved' ? 'Leave Request Approved' : 'Leave Request Rejected',
+      message: `Your ${request.leave_type} leave request (${formatDate(request.start_date)} – ${formatDate(request.end_date)}) was ${status}.`,
+      url: '/leave-requests',
+      recipientName: `${request.employees?.first_name ?? ''} ${request.employees?.last_name ?? ''}`.trim(),
+    });
 
     toast({ title: 'Success', description: `Leave request ${status}` });
     load();

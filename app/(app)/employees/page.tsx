@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
@@ -18,12 +19,24 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
+import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials, exportToCSV } from '@/lib/format';
-import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye } from 'lucide-react';
+import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, CheckCircle2, Circle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+
+const EMPLOYEE_DOCUMENT_TYPES = [
+  { type: 'employment_contract', label: 'Employment Contract' },
+  { type: 'mdf', label: 'MDF (Member Data Form)' },
+  { type: 'mdr', label: 'MDR (Member Data Record)' },
+  { type: 'e1', label: 'E1 (SSS Form E-1)' },
+  { type: 'form_1902', label: 'BIR Form 1902' },
+  { type: 'medical', label: 'Medical Certificate' },
+  { type: 'valid_id', label: 'Valid ID' },
+  { type: 'background_investigation', label: 'Background Investigation Form' },
+];
 
 export default function EmployeesPage() {
   const router = useRouter();
@@ -46,6 +59,11 @@ export default function EmployeesPage() {
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [createLogin, setCreateLogin] = useState(true);
+  const [activeEmpTab, setActiveEmpTab] = useState<'info' | 'documents'>('info');
+  const [employeeDocs, setEmployeeDocs] = useState<any[]>([]);
+  const [pendingEmpDocs, setPendingEmpDocs] = useState<Record<string, File>>({});
+  const [uploadingEmpDocType, setUploadingEmpDocType] = useState<string | null>(null);
+  const [previewEmpDoc, setPreviewEmpDoc] = useState<PreviewableDocument | null>(null);
   const pageSize = 10;
 
   const [form, setForm] = useState({
@@ -94,7 +112,15 @@ export default function EmployeesPage() {
       contact_person_name: '', contact_person_relationship: '', contact_person_phone: '',
     });
     setCreateLogin(true);
+    setActiveEmpTab('info');
+    setEmployeeDocs([]);
+    setPendingEmpDocs({});
     setDialogOpen(true);
+  }
+
+  async function loadEmployeeDocs(employeeId: string) {
+    const { data } = await supabase.from('employee_documents').select('*').eq('employee_id', employeeId);
+    setEmployeeDocs(data ?? []);
   }
 
   function openEdit(e: any) {
@@ -107,6 +133,9 @@ export default function EmployeesPage() {
       sss_number: e.sss_number ?? '', philhealth_number: e.philhealth_number ?? '', pagibig_number: e.pagibig_number ?? '', tin_number: e.tin_number ?? '',
       contact_person_name: e.contact_person_name ?? '', contact_person_relationship: e.contact_person_relationship ?? '', contact_person_phone: e.contact_person_phone ?? '',
     });
+    setActiveEmpTab('info');
+    setPendingEmpDocs({});
+    loadEmployeeDocs(e.id);
     setDialogOpen(true);
   }
 
@@ -170,14 +199,79 @@ export default function EmployeesPage() {
       }
       toast({ title: 'Success', description: 'Employee added' });
 
+      for (const [docType, file] of Object.entries(pendingEmpDocs)) {
+        await uploadDocForEmployee(inserted.id, docType, file);
+      }
+
       if (createLogin && form.email && form.position) {
         await createLoginAccount(inserted.id);
       }
 
       setDialogOpen(false);
+      setPendingEmpDocs({});
       load();
     }
     setSaving(false);
+  }
+
+  async function uploadDocForEmployee(employeeId: string, docType: string, file: File) {
+    const ext = file.name.split('.').pop();
+    const path = `${employeeId}/${docType}-${Date.now()}.${ext}`;
+    const { error: uploadError } = await supabase.storage.from('employee-documents').upload(path, file, { contentType: file.type });
+    if (uploadError) {
+      toast({ title: 'Upload failed', description: uploadError.message, variant: 'destructive' });
+      return;
+    }
+    const { data: urlData } = supabase.storage.from('employee-documents').getPublicUrl(path);
+    await supabase.from('employee_documents').insert({
+      employee_id: employeeId,
+      document_type: docType,
+      file_name: file.name,
+      file_url: urlData.publicUrl,
+    });
+  }
+
+  // For a brand-new employee (no id yet), the file is just held in state
+  // until the employee record itself is created. For an existing employee
+  // being edited, it uploads immediately since the id is already there.
+  async function handleEmpDocSelect(docType: string, file: File) {
+    if (editing) {
+      setUploadingEmpDocType(docType);
+      await uploadDocForEmployee(editing.id, docType, file);
+      await loadEmployeeDocs(editing.id);
+      setUploadingEmpDocType(null);
+    } else {
+      setPendingEmpDocs(prev => ({ ...prev, [docType]: file }));
+    }
+  }
+
+  async function handleEmpDocReplace(doc: any, file: File) {
+    if (!editing) return;
+    setUploadingEmpDocType(doc.document_type);
+    const ext = file.name.split('.').pop();
+    const path = `${editing.id}/${doc.document_type}-${Date.now()}.${ext}`;
+    const { error: uploadError } = await supabase.storage.from('employee-documents').upload(path, file, { contentType: file.type });
+    if (uploadError) {
+      toast({ title: 'Upload failed', description: uploadError.message, variant: 'destructive' });
+      setUploadingEmpDocType(null);
+      return;
+    }
+    const { data: urlData } = supabase.storage.from('employee-documents').getPublicUrl(path);
+    const { error: updateError } = await supabase.from('employee_documents')
+      .update({ file_name: file.name, file_url: urlData.publicUrl })
+      .eq('id', doc.id);
+    if (updateError) {
+      toast({ title: 'Error', description: updateError.message, variant: 'destructive' });
+    } else {
+      await loadEmployeeDocs(editing.id);
+    }
+    setUploadingEmpDocType(null);
+  }
+
+  async function handleDeleteEmpDoc(doc: any) {
+    const { error } = await supabase.from('employee_documents').delete().eq('id', doc.id);
+    if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    else setEmployeeDocs(prev => prev.filter(d => d.id !== doc.id));
   }
 
   async function createLoginAccount(employeeId: string) {
@@ -389,6 +483,13 @@ export default function EmployeesPage() {
             <DialogDescription>{editing ? 'Update employee information' : 'Register a new employee'}</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
+          <Tabs value={activeEmpTab} onValueChange={(v) => setActiveEmpTab(v as 'info' | 'documents')}>
+            <TabsList className="grid grid-cols-2 w-full">
+              <TabsTrigger value="info">Info</TabsTrigger>
+              <TabsTrigger value="documents">Documents</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="info" className="space-y-4 pt-2">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>First Name *</Label><Input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Last Name *</Label><Input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></div>
@@ -478,6 +579,61 @@ export default function EmployeesPage() {
                 </div>
               </div>
             )}
+            </TabsContent>
+
+            <TabsContent value="documents" className="space-y-3 pt-2">
+              {EMPLOYEE_DOCUMENT_TYPES.map(dt => {
+                const doc = employeeDocs.find(d => d.document_type === dt.type);
+                const pendingFile = pendingEmpDocs[dt.type];
+                const hasDoc = !!doc || !!pendingFile;
+                return (
+                  <div key={dt.type} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {hasDoc ? <CheckCircle2 className="w-4 h-4 text-success shrink-0" /> : <Circle className="w-4 h-4 text-muted-foreground shrink-0" />}
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{dt.label}</p>
+                        {hasDoc && <p className="text-xs text-muted-foreground truncate">{doc?.file_name ?? pendingFile?.name}</p>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {doc && (
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setPreviewEmpDoc(doc)}>View</Button>
+                      )}
+                      <input
+                        type="file"
+                        id={`emp-doc-upload-${dt.type}`}
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            if (doc) handleEmpDocReplace(doc, file); else handleEmpDocSelect(dt.type, file);
+                          }
+                          e.target.value = '';
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={uploadingEmpDocType === dt.type}
+                        onClick={() => document.getElementById(`emp-doc-upload-${dt.type}`)?.click()}
+                      >
+                        {uploadingEmpDocType === dt.type ? <Loader2 className="w-4 h-4 animate-spin" /> : hasDoc ? 'Replace' : 'Upload'}
+                      </Button>
+                      {doc && (
+                        <Button type="button" variant="ghost" size="icon" onClick={() => handleDeleteEmpDoc(doc)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {!editing && (
+                <p className="text-xs text-muted-foreground">Selected files upload automatically once the employee is added.</p>
+              )}
+            </TabsContent>
+          </Tabs>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -499,6 +655,8 @@ export default function EmployeesPage() {
           <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={handleDelete}>Delete</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <DocumentPreviewDialog doc={previewEmpDoc} onClose={() => setPreviewEmpDoc(null)} />
     </div>
   );
 }

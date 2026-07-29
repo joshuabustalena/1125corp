@@ -18,6 +18,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
+import { notifyProfile } from '@/lib/notify';
 import {
   ArrowLeft, Landmark, User, CheckCircle, XCircle, CalendarDays, ChevronLeft, ChevronRight, Loader2, AlertTriangle,
 } from 'lucide-react';
@@ -49,7 +50,7 @@ export default function EmployeeLoanDetailPage() {
     const id = params.id as string;
     const { data } = await supabase
       .from('employee_loans')
-      .select('*, employees(first_name, last_name, department, position, phone, email, branch_id, branches(name)), approved_by_profile:profiles!approved_by(full_name)')
+      .select('*, employees(first_name, last_name, department, position, phone, email, branch_id, profile_id, branches(name)), approved_by_profile:profiles!approved_by(full_name)')
       .eq('id', id)
       .maybeSingle();
     setLoan(data);
@@ -66,6 +67,13 @@ export default function EmployeeLoanDetailPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
+      notifyProfile(loan.employees?.profile_id, {
+        type: 'employee_loan_approved',
+        title: 'Employee Loan Approved',
+        message: `Your employee loan application for ${formatCurrency(loan.amount)} has been approved.`,
+        url: '/employee-loans',
+        recipientName: `${loan.employees?.first_name ?? ''} ${loan.employees?.last_name ?? ''}`.trim(),
+      });
       toast({ title: 'Loan approved' });
       setApproveOpen(false);
       load();
@@ -84,6 +92,13 @@ export default function EmployeeLoanDetailPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
+      notifyProfile(loan.employees?.profile_id, {
+        type: 'employee_loan_rejected',
+        title: 'Employee Loan Rejected',
+        message: `Your employee loan application for ${formatCurrency(loan.amount)} was rejected. Reason: ${rejectReason.trim()}`,
+        url: '/employee-loans',
+        recipientName: `${loan.employees?.first_name ?? ''} ${loan.employees?.last_name ?? ''}`.trim(),
+      });
       toast({ title: 'Loan rejected' });
       setRejectOpen(false);
       setRejectReason('');

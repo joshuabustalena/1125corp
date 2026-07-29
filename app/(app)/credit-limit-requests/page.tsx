@@ -22,6 +22,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
+import { notifyRoles } from '@/lib/notify';
 import { TrendingUp, Plus, Loader2, CheckCircle, XCircle } from 'lucide-react';
 
 export default function CreditLimitRequestsPage() {
@@ -64,7 +65,7 @@ export default function CreditLimitRequestsPage() {
 
   async function load() {
     setLoading(true);
-    let q = supabase.from('credit_limit_requests').select('*, customers(first_name, last_name), requested_by_profile:profiles!requested_by(full_name)').order('created_at', { ascending: false });
+    let q = supabase.from('credit_limit_requests').select('*, customers(first_name, last_name, branch_id), requested_by_profile:profiles!requested_by(full_name)').order('created_at', { ascending: false });
     if (!isAdmin) {
       q = q.eq('requested_by', profile?.id ?? '00000000-0000-0000-0000-000000000000');
     }
@@ -96,13 +97,11 @@ export default function CreditLimitRequestsPage() {
       setSaving(false);
       return;
     }
-    await supabase.from('notifications').insert({
+    notifyRoles(['administrator'], {
       type: 'credit_limit_request',
-      recipient_type: 'administrator',
+      title: 'Credit Limit Request',
       message: `${profile?.full_name ?? 'A Branch Manager'} requested a credit limit increase for ${customer.first_name} ${customer.last_name} (${formatCurrency(customer.max_loan_limit)} → ${formatCurrency(Number(form.requested_limit))}).`,
-      channel: 'in_app',
-      status: 'sent',
-      sent_at: new Date().toISOString(),
+      url: '/credit-limit-requests',
     });
     toast({ title: 'Success', description: 'Credit limit request submitted for Admin approval' });
     setDialogOpen(false);
@@ -134,21 +133,17 @@ export default function CreditLimitRequestsPage() {
       setReviewing(null);
       return;
     }
-    // Notifications are broadcast by role, not to a specific user, so this
-    // reaches every Branch Manager rather than only the one who requested
-    // it — same limitation as every other role-broadcast notification in
-    // this app. Naming the customer and requester keeps it useful anyway.
+    // Scoped to the customer's own branch — only reaches that branch's
+    // Branch Manager(s), not every Branch Manager company-wide.
     const customerName = `${request.customers?.first_name ?? ''} ${request.customers?.last_name ?? ''}`.trim();
-    await supabase.from('notifications').insert({
+    notifyRoles(['branch_manager'], {
       type: 'credit_limit_request',
-      recipient_type: 'branch_manager',
+      title: 'Credit Limit Request',
       message: status === 'approved'
         ? `Credit limit increase approved for ${customerName}: max loan limit is now ${formatCurrency(request.requested_limit)}. You can now approve the loan.`
         : `Credit limit increase request for ${customerName} (to ${formatCurrency(request.requested_limit)}) was denied.${reason ? ` Reason: ${reason}` : ''}`,
-      channel: 'in_app',
-      status: 'sent',
-      sent_at: new Date().toISOString(),
-    });
+      url: '/credit-limit-requests',
+    }, request.customers?.branch_id);
     toast({ title: 'Success', description: `Request ${status}` });
     setConfirmTarget(null);
     load();

@@ -23,6 +23,8 @@ import {
   BookMarked,
   FileText,
   Scale,
+  Fuel,
+  Wallet2,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -81,7 +83,10 @@ export const navSections: NavSection[] = [
       { label: 'General Ledger', href: '/account-ledger', icon: BookOpen },
       { label: 'Chart of Accounts', href: '/chart-of-accounts', icon: BookMarked },
       { label: 'Financial Statements', href: '/general-ledger', icon: Scale },
+      { label: 'Shareholders', href: '/shareholders', icon: TrendingUp },
       { label: 'Cash Count', href: '/cash-count', icon: Banknote },
+      { label: 'Gas Voucher', href: '/gas-voucher', icon: Fuel },
+      { label: 'Cash Vouchers', href: '/cash-vouchers', icon: Wallet2 },
       { label: 'Remittance', href: '/remittance', icon: ArrowRightLeft },
       { label: 'Reports', href: '/reports', icon: FileBarChart },
     ],

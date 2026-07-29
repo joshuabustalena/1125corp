@@ -7,17 +7,31 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials } from '@/lib/format';
 import {
-  ArrowLeft, User, Briefcase, ClipboardCheck, Loader2, Landmark, IdCard, Contact,
+  ArrowLeft, User, Briefcase, ClipboardCheck, Loader2, Landmark, IdCard, Contact, FileText,
 } from 'lucide-react';
+
+const EMPLOYEE_DOCUMENT_LABELS: Record<string, string> = {
+  employment_contract: 'Employment Contract',
+  mdf: 'MDF (Member Data Form)',
+  mdr: 'MDR (Member Data Record)',
+  e1: 'E1 (SSS Form E-1)',
+  form_1902: 'BIR Form 1902',
+  medical: 'Medical Certificate',
+  valid_id: 'Valid ID',
+  background_investigation: 'Background Investigation Form',
+};
 
 export default function EmployeeDetailPage() {
   const params = useParams();
   const router = useRouter();
   const [employee, setEmployee] = useState<any>(null);
   const [employeeLoans, setEmployeeLoans] = useState<any[]>([]);
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [previewDoc, setPreviewDoc] = useState<PreviewableDocument | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => { load(); }, [params.id]);
@@ -25,12 +39,14 @@ export default function EmployeeDetailPage() {
   async function load() {
     setLoading(true);
     const id = params.id as string;
-    const [{ data }, { data: loans }] = await Promise.all([
+    const [{ data }, { data: loans }, { data: docs }] = await Promise.all([
       supabase.from('employees').select('*, branches(name), areas(name)').eq('id', id).maybeSingle(),
       supabase.from('employee_loans').select('*').eq('employee_id', id).in('status', ['active', 'approved']).order('created_at', { ascending: false }),
+      supabase.from('employee_documents').select('*').eq('employee_id', id).order('uploaded_at', { ascending: false }),
     ]);
     setEmployee(data);
     setEmployeeLoans(loans ?? []);
+    setDocuments(docs ?? []);
     setLoading(false);
   }
 
@@ -217,6 +233,34 @@ export default function EmployeeDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Card className="glass-card border-border">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-primary" />
+            Documents
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {documents.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">No documents uploaded yet</p>
+          ) : (
+            <div className="space-y-2">
+              {documents.map(doc => (
+                <div key={doc.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{EMPLOYEE_DOCUMENT_LABELS[doc.document_type] ?? doc.document_type}</p>
+                    <p className="text-xs text-muted-foreground truncate">{doc.file_name}</p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => setPreviewDoc(doc)}>View</Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <DocumentPreviewDialog doc={previewDoc} onClose={() => setPreviewDoc(null)} />
     </div>
   );
 }

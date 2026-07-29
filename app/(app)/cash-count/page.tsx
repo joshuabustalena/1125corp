@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,7 +20,88 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
-import { Banknote, Loader2, TrendingUp, Scale } from 'lucide-react';
+import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
+import { Banknote, Loader2, TrendingUp, Scale, Download } from 'lucide-react';
+
+// Bill and coin denominations exactly as counted on the paper Cash Count
+// Sheet. 20 appears in both lists (a ₱20 bill and a ₱20 coin both exist),
+// so bills and coins are tracked as separate key spaces.
+const BILL_DENOMS = [1000, 500, 200, 100, 50, 20];
+const COIN_DENOMS = [20, 10, 5, 1, 0.25];
+
+type DenomCounts = Record<string, string>;
+
+function billKey(denom: number) { return `bill_${denom}`; }
+function coinKey(denom: number) { return `coin_${denom}`; }
+
+function denomTotal(counts: DenomCounts) {
+  let total = 0;
+  for (const d of BILL_DENOMS) total += d * (Number(counts[billKey(d)]) || 0);
+  for (const d of COIN_DENOMS) total += d * (Number(counts[coinKey(d)]) || 0);
+  return total;
+}
+
+function emptyDenomCounts(): DenomCounts {
+  const counts: DenomCounts = {};
+  for (const d of BILL_DENOMS) counts[billKey(d)] = '';
+  for (const d of COIN_DENOMS) counts[coinKey(d)] = '';
+  return counts;
+}
+
+const dCell: React.CSSProperties = { border: '1px solid #000', padding: '4px 8px' };
+const dCellRight: React.CSSProperties = { ...dCell, textAlign: 'right' };
+const dCellCenter: React.CSSProperties = { ...dCell, textAlign: 'center' };
+
+// One side of the denomination table (Bills then Coins), used identically
+// for both the Vault and PCF columns, in both the live form and the
+// printable document. Declared at module scope (NOT nested inside
+// CashCountPage) — a component defined inside another component's render
+// body gets a new function identity every render, which made React
+// remount this table (and drop the <input>'s focus) on every keystroke,
+// so only the first digit you typed ever seemed to "stick".
+function DenominationTable({ counts, onChange, readOnly }: { counts: DenomCounts; onChange?: (key: string, value: string) => void; readOnly?: boolean }) {
+  const row = (label: string, key: string, denom: number) => {
+    const qty = Number(counts[key]) || 0;
+    return (
+      <tr key={key}>
+        <td style={dCell}>{label}</td>
+        <td style={dCellCenter}>x</td>
+        <td style={{ ...dCell, width: 110 }}>
+          {readOnly ? (
+            <span style={{ display: 'block', textAlign: 'right' }}>{qty || ''}</span>
+          ) : (
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={counts[key]}
+              onChange={(e) => {
+                const digitsOnly = e.target.value.replace(/[^0-9]/g, '');
+                onChange?.(key, digitsOnly);
+              }}
+              style={{ width: '100%', border: 'none', outline: 'none', textAlign: 'right', fontSize: 13, background: 'transparent' }}
+              placeholder="0"
+            />
+          )}
+        </td>
+        <td style={dCellRight}>{(denom * qty).toLocaleString('en-PH', { minimumFractionDigits: denom < 1 ? 2 : 0 })}</td>
+      </tr>
+    );
+  };
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+      <tbody>
+        {BILL_DENOMS.map((d, i) => row(i === 0 ? `Bills: ${d.toFixed(2)}` : d.toFixed(2), billKey(d), d))}
+        {COIN_DENOMS.map((d, i) => row(i === 0 ? `Coins: ${d.toFixed(2)}` : d.toFixed(2), coinKey(d), d))}
+        <tr>
+          <td style={{ ...dCell, fontWeight: 700 }} colSpan={2}>Total:</td>
+          <td style={dCell} />
+          <td style={{ ...dCellRight, fontWeight: 700, color: '#C00000' }}>{formatCurrency(denomTotal(counts))}</td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
 
 export default function CashCountPage() {
   const { toast } = useToast();
@@ -30,14 +112,27 @@ export default function CashCountPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
   const [expected, setExpected] = useState(0);
-  const [vaultAmount, setVaultAmount] = useState('');
-  const [bankAmount, setBankAmount] = useState('');
-  const [pettyCashAmount, setPettyCashAmount] = useState('');
-  const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [pendingRemittanceIds, setPendingRemittanceIds] = useState<string[]>([]);
+  const printRef = useRef<HTMLDivElement>(null);
+
+  const [vaultCounts, setVaultCounts] = useState<DenomCounts>(emptyDenomCounts());
+  const [pcfCounts, setPcfCounts] = useState<DenomCounts>(emptyDenomCounts());
+  const [shortOverVault, setShortOverVault] = useState('');
+  const [shortOverPcf, setShortOverPcf] = useState('');
+  const [totalCollections, setTotalCollections] = useState('');
+  const [beginningBalance, setBeginningBalance] = useState('');
+  const [endingBalance, setEndingBalance] = useState('');
+  const [releaseAmount, setReleaseAmount] = useState('');
+  const [totalExpenses, setTotalExpenses] = useState('');
+  const [cashRelease, setCashRelease] = useState('');
+  const [collectionRelease, setCollectionRelease] = useState('');
+  const [cashierName, setCashierName] = useState('');
+  const [branchManagerName, setBranchManagerName] = useState('');
+  const [notes, setNotes] = useState('');
 
   useEffect(() => {
     if (isAdmin) {
@@ -45,6 +140,7 @@ export default function CashCountPage() {
     } else if (profile?.branch_id) {
       setBranchId(profile.branch_id);
     }
+    if (profile?.full_name) setCashierName(profile.full_name);
   }, [profile]);
 
   useEffect(() => {
@@ -81,21 +177,60 @@ export default function CashCountPage() {
     setLoading(false);
   }
 
+  const vaultTotal = denomTotal(vaultCounts);
+  const pcfTotal = denomTotal(pcfCounts);
+  const countedTotal = vaultTotal + pcfTotal;
+  const variancePreview = countedTotal > 0 ? countedTotal - expected : null;
+
+  function resetForm() {
+    setVaultCounts(emptyDenomCounts());
+    setPcfCounts(emptyDenomCounts());
+    setShortOverVault('');
+    setShortOverPcf('');
+    setTotalCollections('');
+    setBeginningBalance('');
+    setEndingBalance('');
+    setReleaseAmount('');
+    setTotalExpenses('');
+    setCashRelease('');
+    setCollectionRelease('');
+    setBranchManagerName('');
+    setNotes('');
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const counted = Number(vaultAmount || 0) + Number(bankAmount || 0) + Number(pettyCashAmount || 0);
-    if (!branchId || counted <= 0) return;
+    if (!branchId || countedTotal <= 0) return;
     setSaving(true);
-    const variance = counted - expected;
+    const variance = countedTotal - expected;
     const { error } = await supabase.from('cash_counts').insert({
       branch_id: branchId,
       count_date: date,
       expected_amount: expected,
-      counted_amount: counted,
-      vault_amount: Number(vaultAmount || 0),
-      bank_amount: Number(bankAmount || 0),
-      petty_cash_amount: Number(pettyCashAmount || 0),
+      // Kept populated for the existing Expected/Variance stat cards and
+      // any older history rows' shape — vault_amount/petty_cash_amount now
+      // mirror the new denomination totals, bank_amount isn't part of this
+      // process so it's just 0.
+      counted_amount: countedTotal,
+      vault_amount: vaultTotal,
+      bank_amount: 0,
+      petty_cash_amount: pcfTotal,
       variance,
+      vault_denominations: vaultCounts,
+      vault_total: vaultTotal,
+      pcf_denominations: pcfCounts,
+      pcf_total: pcfTotal,
+      short_over_vault: Number(shortOverVault) || 0,
+      short_over_pcf: Number(shortOverPcf) || 0,
+      total_collections: Number(totalCollections) || 0,
+      beginning_balance: Number(beginningBalance) || 0,
+      ending_balance: Number(endingBalance) || 0,
+      release_amount: Number(releaseAmount) || 0,
+      total_expenses: Number(totalExpenses) || 0,
+      cash_release: Number(cashRelease) || 0,
+      collection_release: Number(collectionRelease) || 0,
+      cashier_name: cashierName || null,
+      branch_manager_name: branchManagerName || null,
       counted_by: profile?.id ?? null,
       notes: notes || null,
     });
@@ -108,21 +243,42 @@ export default function CashCountPage() {
         await supabase.from('remittances').update({ status: 'received', received_by: profile?.id ?? null }).in('id', pendingRemittanceIds);
       }
       toast({ title: 'Success', description: 'Cash count recorded' });
-      setVaultAmount('');
-      setBankAmount('');
-      setPettyCashAmount('');
-      setNotes('');
+      resetForm();
       loadData();
     }
     setSaving(false);
   }
 
-  const countedTotal = Number(vaultAmount || 0) + Number(bankAmount || 0) + Number(pettyCashAmount || 0);
-  const variancePreview = (vaultAmount || bankAmount || pettyCashAmount) ? countedTotal - expected : null;
+  async function handleDownloadPdf() {
+    if (!printRef.current) return;
+    setDownloading(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const { jsPDF } = await import('jspdf');
+      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 900, windowWidth: 900 });
+      const imgData = canvas.toDataURL('image/png');
+      const pxToPt = 0.75;
+      const contentWidthPt = canvas.width / 2 * pxToPt;
+      const contentHeightPt = canvas.height / 2 * pxToPt;
+      // 8.5" x 13" (Philippine "folio"/long bond paper), in points (72pt/in).
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
+      const margin = 24;
+      const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
+      const imgWidth = usableWidth;
+      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
+      pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+      pdf.save(`cash-count-${date}.pdf`);
+    } catch (err: any) {
+      toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the cash count PDF', variant: 'destructive' });
+    }
+    setDownloading(false);
+  }
+
+  const branding = getDocumentBranding(branches.find(b => b.id === branchId)?.name);
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Daily Cash Count" description="Reconcile counted cash against expected cash for the day">
+      <PageHeader title="Daily Cash Count" description="Cash Count Sheet — count bills/coins in the vault and petty cash fund">
         <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
         {isAdmin && (
           <Select value={branchId} onValueChange={setBranchId}>
@@ -146,32 +302,60 @@ export default function CashCountPage() {
 
       {canRecordCount && (
         <Card className="glass-card border-border">
-          <CardHeader>
-            <CardTitle>Record Today's Count</CardTitle>
-            <CardDescription>Enter the physical cash counted for {formatDate(date)}, broken down by where it's held</CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <div>
+              <CardTitle>Cash Count Sheet</CardTitle>
+              <CardDescription>Count every bill and coin for {formatDate(date)}</CardDescription>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={handleDownloadPdf} disabled={downloading}>
+              {downloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+              Download PDF
+            </Button>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label>Cash in Vault (₱)</Label>
-                  <Input type="number" value={vaultAmount} onChange={(e) => setVaultAmount(e.target.value)} placeholder="0.00" />
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                  <p className="text-sm font-semibold mb-2">Cash in Vault</p>
+                  <div className="border border-border rounded-lg overflow-hidden">
+                    <DenominationTable counts={vaultCounts} onChange={(k, v) => setVaultCounts(prev => ({ ...prev, [k]: v }))} />
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <Label className="text-xs">Short/Over (₱)</Label>
+                    <Input type="number" value={shortOverVault} onChange={(e) => setShortOverVault(e.target.value)} placeholder="0.00" />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>Cash in Bank (₱)</Label>
-                  <Input type="number" value={bankAmount} onChange={(e) => setBankAmount(e.target.value)} placeholder="0.00" />
-                </div>
-                <div className="space-y-2">
-                  <Label>Petty Cash Fund (₱)</Label>
-                  <Input type="number" value={pettyCashAmount} onChange={(e) => setPettyCashAmount(e.target.value)} placeholder="0.00" />
+                <div>
+                  <p className="text-sm font-semibold mb-2">Petty Cash Fund</p>
+                  <div className="border border-border rounded-lg overflow-hidden">
+                    <DenominationTable counts={pcfCounts} onChange={(k, v) => setPcfCounts(prev => ({ ...prev, [k]: v }))} />
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <Label className="text-xs">Short/Over PCF (₱)</Label>
+                    <Input type="number" value={shortOverPcf} onChange={(e) => setShortOverPcf(e.target.value)} placeholder="0.00" />
+                  </div>
                 </div>
               </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-2"><Label className="text-xs">Total Cash Collections for the Day (₱)</Label><Input type="number" value={totalCollections} onChange={(e) => setTotalCollections(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2"><Label className="text-xs">Beginning Cash Balance (₱)</Label><Input type="number" value={beginningBalance} onChange={(e) => setBeginningBalance(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2"><Label className="text-xs">Ending Cash Balance (₱)</Label><Input type="number" value={endingBalance} onChange={(e) => setEndingBalance(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2"><Label className="text-xs">Release (₱)</Label><Input type="number" value={releaseAmount} onChange={(e) => setReleaseAmount(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2"><Label className="text-xs">Total Expenses for the Day (₱)</Label><Input type="number" value={totalExpenses} onChange={(e) => setTotalExpenses(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2"><Label className="text-xs">Cash Release (₱)</Label><Input type="number" value={cashRelease} onChange={(e) => setCashRelease(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2"><Label className="text-xs">Collection Release (₱)</Label><Input type="number" value={collectionRelease} onChange={(e) => setCollectionRelease(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2"><Label className="text-xs">Cashier Name</Label><Input value={cashierName} onChange={(e) => setCashierName(e.target.value)} /></div>
+                <div className="space-y-2"><Label className="text-xs">Branch Manager Name</Label><Input value={branchManagerName} onChange={(e) => setBranchManagerName(e.target.value)} /></div>
+              </div>
+
               <div className="space-y-2">
                 <Label>Notes</Label>
                 <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={1} placeholder="Explain any variance" />
               </div>
+
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Total Counted: <span className="font-medium text-foreground">{formatCurrency(countedTotal)}</span></p>
+                <p className="text-sm text-muted-foreground">Vault + PCF Total: <span className="font-medium text-foreground">{formatCurrency(countedTotal)}</span></p>
                 <Button type="submit" disabled={saving || loading || !branchId || countedTotal <= 0}>
                   {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Submit Count
@@ -205,11 +389,10 @@ export default function CashCountPage() {
                     </Badge>
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    <div><p className="text-xs text-muted-foreground">Vault</p><p>{formatCurrency(h.vault_amount ?? 0)}</p></div>
-                    <div><p className="text-xs text-muted-foreground">Bank</p><p>{formatCurrency(h.bank_amount ?? 0)}</p></div>
-                    <div><p className="text-xs text-muted-foreground">Petty Cash</p><p>{formatCurrency(h.petty_cash_amount ?? 0)}</p></div>
-                    <div><p className="text-xs text-muted-foreground">Expected</p><p>{formatCurrency(h.expected_amount)}</p></div>
-                    <div className="col-span-2"><p className="text-xs text-muted-foreground">Counted</p><p className="font-medium">{formatCurrency(h.counted_amount)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Vault Total</p><p>{formatCurrency(h.vault_total ?? h.vault_amount ?? 0)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">PCF Total</p><p>{formatCurrency(h.pcf_total ?? h.petty_cash_amount ?? 0)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Short/Over (Vault)</p><p>{formatCurrency(h.short_over_vault ?? 0)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Ending Balance</p><p>{formatCurrency(h.ending_balance ?? 0)}</p></div>
                   </div>
                 </div>
               ))}
@@ -219,11 +402,10 @@ export default function CashCountPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
-                  <TableHead>Vault</TableHead>
-                  <TableHead>Bank</TableHead>
-                  <TableHead>Petty Cash</TableHead>
-                  <TableHead>Expected</TableHead>
-                  <TableHead>Counted</TableHead>
+                  <TableHead>Vault Total</TableHead>
+                  <TableHead>PCF Total</TableHead>
+                  <TableHead>Short/Over (Vault)</TableHead>
+                  <TableHead>Ending Balance</TableHead>
                   <TableHead>Variance</TableHead>
                 </TableRow>
               </TableHeader>
@@ -231,11 +413,10 @@ export default function CashCountPage() {
                 {history.map(h => (
                   <TableRow key={h.id}>
                     <TableCell className="text-sm">{formatDate(h.count_date)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(h.vault_amount ?? 0)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(h.bank_amount ?? 0)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(h.petty_cash_amount ?? 0)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(h.expected_amount)}</TableCell>
-                    <TableCell className="text-sm">{formatCurrency(h.counted_amount)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.vault_total ?? h.vault_amount ?? 0)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.pcf_total ?? h.petty_cash_amount ?? 0)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.short_over_vault ?? 0)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(h.ending_balance ?? 0)}</TableCell>
                     <TableCell className="text-sm">
                       <Badge variant={Number(h.variance) === 0 ? 'default' : 'destructive'}>
                         {Number(h.variance) === 0 ? 'Balanced' : formatCurrency(h.variance)}
@@ -249,6 +430,94 @@ export default function CashCountPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Hidden printable Cash Count Sheet, matching the company's paper form.
+          Portaled onto <body> so no ancestor layout affects the capture. */}
+      {typeof document !== 'undefined' && createPortal(
+        <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
+          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 36, fontFamily: 'Arial, sans-serif' }}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#1F4E79' }}>{branding.address}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#1F4E79' }}>Cel. No. {branding.contact}</div>
+              <div style={{ fontWeight: 700, fontSize: 20, marginTop: 14 }}>Cash Count Sheet</div>
+            </div>
+            <div style={{ textAlign: 'right', fontSize: 13, marginBottom: 10 }}>Date: {formatDate(date)}</div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+              <div>
+                <p style={{ fontSize: 13, marginBottom: 4 }}>Cash in Vault</p>
+                <DenominationTable counts={vaultCounts} readOnly />
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: -1 }}>
+                  <tbody>
+                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Short/over</td><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(shortOverVault) || 0)}</td></tr>
+                  </tbody>
+                </table>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 8 }}>
+                  <tbody>
+                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Cash Collections for the day</td></tr>
+                    <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(totalCollections) || 0)}</td></tr>
+                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Beginning Cash Balance</td></tr>
+                    <tr><td colSpan={2} style={dCellRight}>{formatCurrency(Number(beginningBalance) || 0)}</td></tr>
+                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Ending Cash Balance</td></tr>
+                    <tr><td colSpan={2} style={{ ...dCellRight, fontWeight: 700, color: '#C00000' }}>{formatCurrency(Number(endingBalance) || 0)}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div>
+                <p style={{ fontSize: 13, marginBottom: 4 }}>Petty Cash Fund</p>
+                <DenominationTable counts={pcfCounts} readOnly />
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: -1 }}>
+                  <tbody>
+                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Short/over PCF</td><td style={dCellRight}>{formatCurrency(Number(shortOverPcf) || 0)}</td></tr>
+                  </tbody>
+                </table>
+                <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 22, color: '#C00000', margin: '10px 0' }}>
+                  RELEASE&nbsp;&nbsp;{formatCurrency(Number(releaseAmount) || 0)}
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <tbody>
+                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Expenses for the day</td></tr>
+                    <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(totalExpenses) || 0)}</td></tr>
+                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Cash Release</td><td style={dCellRight}>{formatCurrency(Number(cashRelease) || 0)}</td></tr>
+                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Collection Release</td><td style={dCellRight}>{formatCurrency(Number(collectionRelease) || 0)}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <p style={{ fontSize: 12, marginTop: 20, borderTop: '1px solid #000', paddingTop: 10 }}>
+              The amounts above are true and correct to the best of my knowledge.
+            </p>
+
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 10 }}>
+              <tbody>
+                <tr>
+                  <td style={{ ...dCell, fontWeight: 700, width: '20%' }}>Date</td>
+                  <td style={{ ...dCell, fontWeight: 700, width: '35%' }}>Cashier</td>
+                  <td style={{ ...dCell, fontWeight: 700 }}>Signature</td>
+                </tr>
+                <tr>
+                  <td style={dCell}>{formatDate(date)}</td>
+                  <td style={dCell}>{cashierName || '—'}</td>
+                  <td style={{ ...dCell, height: 32 }}>&nbsp;</td>
+                </tr>
+                <tr>
+                  <td style={{ ...dCell, fontWeight: 700 }}>Date</td>
+                  <td style={{ ...dCell, fontWeight: 700 }}>Branch Manager</td>
+                  <td style={{ ...dCell, fontWeight: 700 }}>Signature</td>
+                </tr>
+                <tr>
+                  <td style={dCell}>{formatDate(date)}</td>
+                  <td style={dCell}>{branchManagerName || '—'}</td>
+                  <td style={{ ...dCell, height: 32 }}>&nbsp;</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

@@ -77,6 +77,82 @@ export function generateEntryNumber(): string {
   return `JE-${year}-${random}`;
 }
 
+export function generateGasVoucherNumber(): string {
+  const year = new Date().getFullYear();
+  const random = Math.floor(100000 + Math.random() * 900000);
+  return `GV-${year}-${random}`;
+}
+
+export function generatePayrollVoucherNumber(): string {
+  const year = new Date().getFullYear();
+  const random = Math.floor(100000 + Math.random() * 900000);
+  return `PV-${year}-${random}`;
+}
+
+export function generateThirteenthMonthVoucherNumber(): string {
+  const year = new Date().getFullYear();
+  const random = Math.floor(100000 + Math.random() * 900000);
+  return `TMV-${year}-${random}`;
+}
+
+export function generateGeneralCashVoucherNumber(): string {
+  const year = new Date().getFullYear();
+  const random = Math.floor(100000 + Math.random() * 900000);
+  return `GCV-${year}-${random}`;
+}
+
+const WORDS_ONES = [
+  '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+  'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen',
+];
+const WORDS_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+function threeDigitsToWords(n: number): string {
+  let str = '';
+  if (n >= 100) {
+    str += `${WORDS_ONES[Math.floor(n / 100)]} Hundred `;
+    n %= 100;
+  }
+  if (n >= 20) {
+    str += `${WORDS_TENS[Math.floor(n / 10)]} `;
+    n %= 10;
+  }
+  if (n > 0) {
+    str += `${WORDS_ONES[n]} `;
+  }
+  return str.trim();
+}
+
+function integerToWords(n: number): string {
+  if (n === 0) return 'Zero';
+  const groups = ['', ' Thousand', ' Million', ' Billion'];
+  let str = '';
+  let groupIndex = 0;
+  while (n > 0) {
+    const chunk = n % 1000;
+    if (chunk > 0) {
+      str = `${threeDigitsToWords(chunk)}${groups[groupIndex]} ${str}`;
+    }
+    n = Math.floor(n / 1000);
+    groupIndex++;
+  }
+  return str.trim();
+}
+
+// "280.00" -> "Two Hundred Eighty Pesos", "280.50" -> "Two Hundred Eighty
+// Pesos and 50/100" — matches how amounts are spelled out on the company's
+// paper vouchers (Gas Voucher, Cash Voucher).
+export function numberToWordsPeso(amount: number): string {
+  const rounded = Math.round((amount || 0) * 100) / 100;
+  const isNegative = rounded < 0;
+  const abs = Math.abs(rounded);
+  const pesos = Math.floor(abs);
+  const centavos = Math.round((abs - pesos) * 100);
+  const pesosWords = `${integerToWords(pesos)} Pesos`;
+  const result = centavos > 0 ? `${pesosWords} and ${centavos}/100` : pesosWords;
+  return isNegative ? `Negative ${result}` : result;
+}
+
 export function computeLoanDetails(
   amount: number,
   interestRate: number,

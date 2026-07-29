@@ -17,11 +17,14 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
-import { Landmark, Plus, Download, Loader2, CalendarDays, ChevronLeft, ChevronRight, Pencil, Trash2, Search } from 'lucide-react';
+import { notifyRoles } from '@/lib/notify';
+import { SPECIAL_LOAN_LABELS, specialLoanLabel } from '@/lib/special-loans';
+import { Landmark, Plus, Download, Loader2, CalendarDays, ChevronLeft, ChevronRight, Pencil, Trash2, Search, Wallet } from 'lucide-react';
 
 export default function EmployeeLoansPage() {
   const { toast } = useToast();
@@ -49,12 +52,94 @@ export default function EmployeeLoansPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [appliedFrom, setAppliedFrom] = useState('');
   const [appliedTo, setAppliedTo] = useState('');
+  const [activeTab, setActiveTab] = useState<'employee' | 'special'>('employee');
+  const [specialLoans, setSpecialLoans] = useState<any[]>([]);
+  const [specialDialogOpen, setSpecialDialogOpen] = useState(false);
+  const [specialForm, setSpecialForm] = useState({ employee_id: '', loan_type: 'sss_loan', original_amount: '', deduction_amount: '', notes: '' });
+  const [specialSaving, setSpecialSaving] = useState(false);
+  const [specialEditTarget, setSpecialEditTarget] = useState<any>(null);
+  const [specialEditForm, setSpecialEditForm] = useState({ remaining_balance: '', deduction_amount: '', status: '' });
+  const [specialEditSaving, setSpecialEditSaving] = useState(false);
+  const [specialDeleteTarget, setSpecialDeleteTarget] = useState<any>(null);
+  const [specialDeleting, setSpecialDeleting] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
     load();
+    loadSpecialLoans();
     if (canApprove) loadEmployees();
   }, [profile]);
+
+  async function loadSpecialLoans() {
+    let q = supabase.from('employee_special_loans').select('*, employees(first_name, last_name, branch_id)').order('created_at', { ascending: false });
+    const { data } = await q;
+    const scoped = isBranchManager && profile?.branch_id
+      ? (data ?? []).filter((l: any) => l.employees?.branch_id === profile.branch_id)
+      : (data ?? []);
+    setSpecialLoans(scoped);
+  }
+
+  async function handleAddSpecialLoan(e: React.FormEvent) {
+    e.preventDefault();
+    if (!specialForm.employee_id || !specialForm.original_amount) return;
+    setSpecialSaving(true);
+    const { error } = await supabase.from('employee_special_loans').insert({
+      employee_id: specialForm.employee_id,
+      loan_type: specialForm.loan_type,
+      original_amount: Number(specialForm.original_amount),
+      remaining_balance: Number(specialForm.original_amount),
+      deduction_amount: Number(specialForm.deduction_amount) || 0,
+      notes: specialForm.notes || null,
+      created_by: profile?.id ?? null,
+    });
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: 'Special loan recorded' });
+      setSpecialDialogOpen(false);
+      setSpecialForm({ employee_id: '', loan_type: 'sss_loan', original_amount: '', deduction_amount: '', notes: '' });
+      loadSpecialLoans();
+    }
+    setSpecialSaving(false);
+  }
+
+  function openEditSpecialLoan(l: any) {
+    setSpecialEditTarget(l);
+    setSpecialEditForm({ remaining_balance: String(l.remaining_balance), deduction_amount: l.deduction_amount ? String(l.deduction_amount) : '', status: l.status });
+  }
+
+  async function handleEditSpecialLoan(e: React.FormEvent) {
+    e.preventDefault();
+    if (!specialEditTarget) return;
+    setSpecialEditSaving(true);
+    const { error } = await supabase.from('employee_special_loans').update({
+      remaining_balance: Number(specialEditForm.remaining_balance) || 0,
+      deduction_amount: Number(specialEditForm.deduction_amount) || 0,
+      status: specialEditForm.status,
+    }).eq('id', specialEditTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Special loan updated' });
+      setSpecialEditTarget(null);
+      loadSpecialLoans();
+    }
+    setSpecialEditSaving(false);
+  }
+
+  async function handleDeleteSpecialLoan() {
+    if (!specialDeleteTarget) return;
+    setSpecialDeleting(true);
+    const { error } = await supabase.from('employee_special_loans').delete().eq('id', specialDeleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Special loan deleted' });
+      setSpecialDeleteTarget(null);
+      loadSpecialLoans();
+    }
+    setSpecialDeleting(false);
+  }
 
   async function loadEmployees() {
     let q = supabase.from('employees').select('id, first_name, last_name, salary, position, branch_id').eq('status', 'active');
@@ -132,8 +217,22 @@ export default function EmployeeLoansPage() {
       status: 'pending',
     });
 
-    if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    else { toast({ title: 'Success', description: 'Employee loan application submitted' }); setDialogOpen(false); setForm({ employee_id: '', amount: '', deduction_amount: '', term_months: '6' }); load(); }
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      const targetEmployee = employees.find(e => e.id === form.employee_id);
+      const employeeName = targetEmployee ? `${targetEmployee.first_name} ${targetEmployee.last_name}` : (profile?.full_name ?? 'An employee');
+      notifyRoles(['branch_manager', 'administrator'], {
+        type: 'employee_loan_pending',
+        title: 'New Employee Loan Application',
+        message: `${employeeName} applied for an employee loan of ${formatCurrency(Number(form.amount))} — pending approval.`,
+        url: '/employee-loans',
+      }, targetEmployee?.branch_id ?? profile?.branch_id);
+      toast({ title: 'Success', description: 'Employee loan application submitted' });
+      setDialogOpen(false);
+      setForm({ employee_id: '', amount: '', deduction_amount: '', term_months: '6' });
+      load();
+    }
     setSaving(false);
   }
 
@@ -281,17 +380,35 @@ export default function EmployeeLoansPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Employee Loans" description="Manage employee loan applications (max ₱15,000, 2 active, 6 months)">
-        <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
-        <Button
-          size="sm"
-          disabled={!canApprove && !myEmployee}
-          onClick={() => { setForm(f => ({ ...f, employee_id: canApprove ? f.employee_id : (myEmployee?.id ?? '') })); setDialogOpen(true); }}
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Apply Loan
-        </Button>
+        {activeTab === 'employee' ? (
+          <>
+            <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
+            <Button
+              size="sm"
+              disabled={!canApprove && !myEmployee}
+              onClick={() => { setForm(f => ({ ...f, employee_id: canApprove ? f.employee_id : (myEmployee?.id ?? '') })); setDialogOpen(true); }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Apply Loan
+            </Button>
+          </>
+        ) : (
+          canApprove && (
+            <Button size="sm" onClick={() => setSpecialDialogOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Add Special Loan
+            </Button>
+          )
+        )}
       </PageHeader>
 
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'employee' | 'special')}>
+        <TabsList className="grid grid-cols-2 w-full sm:w-auto">
+          <TabsTrigger value="employee">Employee Loans</TabsTrigger>
+          <TabsTrigger value="special"><Wallet className="w-4 h-4 mr-1.5" />Special Loans</TabsTrigger>
+        </TabsList>
+
+      <TabsContent value="employee" className="space-y-6 pt-4">
       <Card className="glass-card border-border">
         <CardContent className="p-4 space-y-4">
           <div className="relative">
@@ -402,6 +519,178 @@ export default function EmployeeLoansPage() {
           )}
         </CardContent>
       </Card>
+      </TabsContent>
+
+      <TabsContent value="special" className="pt-4">
+      <Card className="glass-card border-border">
+        <CardContent className="p-0">
+          {specialLoans.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <Wallet className="w-12 h-12 text-muted-foreground/50 mb-3" />
+              <p className="text-sm text-muted-foreground">No special loans recorded</p>
+            </div>
+          ) : (
+            <>
+              {/* Mobile card list */}
+              <div className="md:hidden divide-y divide-border">
+                {specialLoans.map(l => (
+                  <div key={l.id} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-sm">{l.employees?.first_name} {l.employees?.last_name}</p>
+                        <p className="text-xs text-muted-foreground">{specialLoanLabel(l.loan_type)}</p>
+                      </div>
+                      <Badge variant={l.status === 'active' ? 'default' : 'secondary'} className="shrink-0">{l.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div><p className="text-xs text-muted-foreground">Original</p><p>{formatCurrency(l.original_amount)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Balance</p><p className="font-medium">{formatCurrency(l.remaining_balance)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Default Deduction</p><p>{formatCurrency(l.deduction_amount)}</p></div>
+                    </div>
+                    {isAdmin && (
+                      <div className="mt-3 flex items-center justify-end gap-1">
+                        <Button variant="outline" size="sm" onClick={() => openEditSpecialLoan(l)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                        <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setSpecialDeleteTarget(l)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <Table className="hidden md:table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Original Amount</TableHead>
+                    <TableHead>Balance</TableHead>
+                    <TableHead>Default Deduction</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {specialLoans.map(l => (
+                    <TableRow key={l.id} className="hover:bg-secondary/50">
+                      <TableCell className="text-sm font-medium">{l.employees?.first_name} {l.employees?.last_name}</TableCell>
+                      <TableCell className="text-sm">{specialLoanLabel(l.loan_type)}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(l.original_amount)}</TableCell>
+                      <TableCell className="text-sm font-medium">{formatCurrency(l.remaining_balance)}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(l.deduction_amount)}</TableCell>
+                      <TableCell><Badge variant={l.status === 'active' ? 'default' : 'secondary'}>{l.status}</Badge></TableCell>
+                      <TableCell className="text-sm">{formatDate(l.created_at)}</TableCell>
+                      <TableCell className="text-right">
+                        {isAdmin && (
+                          <div className="flex gap-1 justify-end">
+                            <Button variant="ghost" size="icon" onClick={() => openEditSpecialLoan(l)}>
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => setSpecialDeleteTarget(l)}>
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </>
+          )}
+        </CardContent>
+      </Card>
+      </TabsContent>
+      </Tabs>
+
+      <Dialog open={specialDialogOpen} onOpenChange={setSpecialDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Special Loan</DialogTitle><DialogDescription>SSS Loan, Pag-IBIG Loan, and Special Loans (Service Vehicle, Uniform, Cash Shortage) have no fixed term — the amount is just deducted from payroll manually each cutoff until the balance is paid off.</DialogDescription></DialogHeader>
+          <form onSubmit={handleAddSpecialLoan} className="space-y-4">
+            <div className="space-y-2">
+              <Label>Employee *</Label>
+              <Select value={specialForm.employee_id} onValueChange={(v) => setSpecialForm({ ...specialForm, employee_id: v })} required>
+                <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
+                <SelectContent>{employees.map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Type *</Label>
+              <Select value={specialForm.loan_type} onValueChange={(v) => setSpecialForm({ ...specialForm, loan_type: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SPECIAL_LOAN_LABELS.map(({ key, label }) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Amount (₱) *</Label>
+                <Input type="number" required value={specialForm.original_amount} onChange={(e) => setSpecialForm({ ...specialForm, original_amount: e.target.value })} placeholder="0.00" />
+              </div>
+              <div className="space-y-2">
+                <Label>Default Deduction per Cutoff (₱)</Label>
+                <Input type="number" value={specialForm.deduction_amount} onChange={(e) => setSpecialForm({ ...specialForm, deduction_amount: e.target.value })} placeholder="0.00" />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground -mt-2">This just pre-fills the amount on Payroll's "Edit Deductions" each cutoff — still editable there, not a fixed schedule.</p>
+            <div className="space-y-2">
+              <Label>Notes</Label>
+              <Input value={specialForm.notes} onChange={(e) => setSpecialForm({ ...specialForm, notes: e.target.value })} placeholder="Optional" />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setSpecialDialogOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={specialSaving}>{specialSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!specialEditTarget} onOpenChange={(open) => !open && setSpecialEditTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Special Loan</DialogTitle>
+            <DialogDescription>{specialEditTarget?.employees?.first_name} {specialEditTarget?.employees?.last_name} — {specialEditTarget && specialLoanLabel(specialEditTarget.loan_type)}</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditSpecialLoan} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2"><Label>Remaining Balance (₱)</Label><Input type="number" value={specialEditForm.remaining_balance} onChange={(e) => setSpecialEditForm({ ...specialEditForm, remaining_balance: e.target.value })} /></div>
+              <div className="space-y-2"><Label>Default Deduction per Cutoff (₱)</Label><Input type="number" value={specialEditForm.deduction_amount} onChange={(e) => setSpecialEditForm({ ...specialEditForm, deduction_amount: e.target.value })} /></div>
+            </div>
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select value={specialEditForm.status} onValueChange={(v) => setSpecialEditForm({ ...specialEditForm, status: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['active', 'completed'].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setSpecialEditTarget(null)}>Cancel</Button>
+              <Button type="submit" disabled={specialEditSaving}>{specialEditSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!specialDeleteTarget} onOpenChange={(open) => !open && setSpecialDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Special Loan</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete {specialDeleteTarget?.employees?.first_name} {specialDeleteTarget?.employees?.last_name}'s {specialDeleteTarget && specialLoanLabel(specialDeleteTarget.loan_type)}? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSpecialDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteSpecialLoan} disabled={specialDeleting}>
+              {specialDeleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>

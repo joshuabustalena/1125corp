@@ -9,6 +9,9 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
@@ -17,14 +20,18 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency } from '@/lib/format';
-import { ArrowRightLeft, Loader2, Wallet } from 'lucide-react';
+import { formatCurrency, generateEntryNumber } from '@/lib/format';
+import { ArrowRightLeft, Loader2, Wallet, Plus, Trash2 } from 'lucide-react';
+
+type Line = { account_id: string; debit: string; credit: string };
 
 export default function RemittancePage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
-  const canRecordRemittance = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
+  const isAdmin = profile?.role_name === 'Administrator';
+  const isCashier = profile?.role_name === 'Cashier';
+  const canRecordRemittance = isAdmin || isCashier;
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(true);
   const [collectors, setCollectors] = useState<any[]>([]);
@@ -32,12 +39,22 @@ export default function RemittancePage() {
   const [remitted, setRemitted] = useState<Record<string, number>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ collector_id: '', amount: '', notes: '' });
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [form, setForm] = useState({ collector_id: '', collector_name: '', amount: 0, notes: '' });
+  const [lines, setLines] = useState<Line[]>([
+    { account_id: '', debit: '', credit: '' },
+    { account_id: '', debit: '', credit: '' },
+  ]);
 
   useEffect(() => {
     if (!profile) return;
     loadData();
   }, [date, profile]);
+
+  useEffect(() => {
+    if (!canRecordRemittance) return;
+    supabase.from('chart_of_accounts').select('id, code, name').order('code').then(({ data }) => setAccounts(data ?? []));
+  }, [canRecordRemittance]);
 
   async function loadData() {
     setLoading(true);
@@ -67,30 +84,93 @@ export default function RemittancePage() {
     setLoading(false);
   }
 
-  function openRecord(collectorId: string) {
+  function openRecord(collectorId: string, collectorName: string) {
     const owed = (collected[collectorId] ?? 0) - (remitted[collectorId] ?? 0);
-    setForm({ collector_id: collectorId, amount: owed > 0 ? owed.toFixed(2) : '', notes: '' });
+    setForm({ collector_id: collectorId, collector_name: collectorName, amount: owed > 0 ? owed : 0, notes: '' });
+    setLines([
+      { account_id: '', debit: '', credit: '' },
+      { account_id: '', debit: '', credit: '' },
+    ]);
     setDialogOpen(true);
   }
 
+  function addLine() {
+    setLines([...lines, { account_id: '', debit: '', credit: '' }]);
+  }
+
+  function removeLine(i: number) {
+    setLines(lines.filter((_, idx) => idx !== i));
+  }
+
+  function updateLine(i: number, field: keyof Line, value: string) {
+    setLines(lines.map((l, idx) => (idx === i ? { ...l, [field]: value } : l)));
+  }
+
+  // A Cashier records remittances only into cash accounts (Cash on Hand,
+  // Cash in Bank, etc.) — an Administrator sees the full chart of accounts,
+  // since they may need to allocate a remittance to other accounts too.
+  const visibleAccounts = isAdmin ? accounts : accounts.filter(a => a.name.toLowerCase().includes('cash'));
+
+  const totalDebit = lines.reduce((s, l) => s + Number(l.debit || 0), 0);
+  const totalCredit = lines.reduce((s, l) => s + Number(l.credit || 0), 0);
+  // Same balance check as Journal Entries (debits must equal credits), plus
+  // a remittance-specific rule: the split can't fall short of or exceed the
+  // actual amount being remitted — every peso collected has to be accounted
+  // for across the chosen accounts, no more, no less.
+  const isBalanced = totalDebit === totalCredit && totalDebit > 0;
+  const matchesRemittance = Math.abs(totalDebit - form.amount) < 0.01;
+  const canSave = isBalanced && matchesRemittance;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.collector_id || !form.amount) return;
+    if (!form.collector_id || !canSave) return;
     setSaving(true);
-    const { error } = await supabase.from('remittances').insert({
+
+    const { data: remittance, error } = await supabase.from('remittances').insert({
       collector_id: form.collector_id,
-      amount: Number(form.amount),
+      amount: form.amount,
       remittance_date: date,
       received_by: profile?.id ?? null,
       notes: form.notes || null,
-    });
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Success', description: 'Remittance recorded' });
+    }).select('id').single();
+
+    if (error || !remittance) {
+      toast({ title: 'Error', description: error?.message ?? 'Could not record remittance', variant: 'destructive' });
+      setSaving(false);
+      return;
+    }
+
+    const { data: entry, error: entryError } = await supabase.from('journal_entries').insert({
+      entry_number: generateEntryNumber(),
+      entry_date: date,
+      reference: null,
+      description: `Collector remittance — ${form.collector_name}`,
+      source: 'remittance',
+      source_id: remittance.id,
+      created_by: profile?.id ?? null,
+    }).select('id').single();
+
+    if (entryError || !entry) {
+      toast({ title: 'Remittance saved, but ledger post failed', description: entryError?.message, variant: 'destructive' });
       setDialogOpen(false);
       loadData();
+      setSaving(false);
+      return;
     }
+
+    const linesPayload = lines
+      .filter(l => l.account_id && (Number(l.debit) > 0 || Number(l.credit) > 0))
+      .map(l => ({
+        journal_entry_id: entry.id,
+        account_id: l.account_id,
+        debit: Number(l.debit) || 0,
+        credit: Number(l.credit) || 0,
+      }));
+    await supabase.from('journal_entry_lines').insert(linesPayload);
+
+    toast({ title: 'Success', description: 'Remittance recorded' });
+    setDialogOpen(false);
+    loadData();
     setSaving(false);
   }
 
@@ -156,7 +236,7 @@ export default function RemittancePage() {
                   </div>
                   {canRecordRemittance && (
                     <div className="mt-3 flex justify-end">
-                      <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id)}>
+                      <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id, r.name)}>
                         Record Remittance
                       </Button>
                     </div>
@@ -186,7 +266,7 @@ export default function RemittancePage() {
                     </TableCell>
                     {canRecordRemittance && (
                       <TableCell className="text-right">
-                        <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id)}>
+                        <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id, r.name)}>
                           Record Remittance
                         </Button>
                       </TableCell>
@@ -201,25 +281,62 @@ export default function RemittancePage() {
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Record Remittance</DialogTitle>
-            <DialogDescription>Confirm the cash amount turned in by this collector</DialogDescription>
+            <DialogTitle>Record Remittance — {form.collector_name}</DialogTitle>
+            <DialogDescription>
+              Split the {formatCurrency(form.amount)} remittance across accounts. Debits must equal credits, and the total must match the remittance amount exactly.
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label>Amount (₱) *</Label>
-              <Input type="number" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+              {lines.map((line, i) => (
+                <div key={i} className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-6">
+                    {i === 0 && <Label className="text-xs">Account</Label>}
+                    <Select value={line.account_id} onValueChange={(v) => updateLine(i, 'account_id', v)}>
+                      <SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger>
+                      <SelectContent>{visibleAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div className="col-span-3">
+                    {i === 0 && <Label className="text-xs">Debit</Label>}
+                    <Input type="number" value={line.debit} onChange={(e) => updateLine(i, 'debit', e.target.value)} placeholder="0.00" />
+                  </div>
+                  <div className="col-span-2">
+                    {i === 0 && <Label className="text-xs">Credit</Label>}
+                    <Input type="number" value={line.credit} onChange={(e) => updateLine(i, 'credit', e.target.value)} placeholder="0.00" />
+                  </div>
+                  <div className="col-span-1">
+                    <Button type="button" variant="ghost" size="icon" onClick={() => removeLine(i)} disabled={lines.length <= 2}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={addLine}>
+                <Plus className="w-4 h-4 mr-2" />
+                Add Line
+              </Button>
             </div>
+
+            <div className={`flex flex-wrap justify-between gap-2 text-sm p-3 rounded-lg ${canSave ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
+              <span>Total Debit: {formatCurrency(totalDebit)}</span>
+              <span>Total Credit: {formatCurrency(totalCredit)}</span>
+              <span>Remittance Amount: {formatCurrency(form.amount)}</span>
+              <span>{canSave ? 'Balanced' : !isBalanced ? 'Not balanced' : 'Does not match remittance amount'}</span>
+            </div>
+
             <div className="space-y-2">
               <Label>Notes</Label>
-              <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={3} />
+              <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} />
             </div>
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving}>
+              <Button type="submit" disabled={saving || !canSave}>
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Record
+                Save Entry
               </Button>
             </DialogFooter>
           </form>

@@ -24,8 +24,9 @@ html {
   html {
     /* On larger screens the 70% base reads as too "zoomed out" — bump it
        back up a bit so sizing isn't thrown off, while phones/tablets keep
-       the more compact 70% scale. */
-    font-size: 85%;
+       the more compact 70% scale. Dialed back ~10% from 85% per feedback
+       that 85% felt too large/zoomed-in on desktop. */
+    font-size: 76%;
   }
 }
 
