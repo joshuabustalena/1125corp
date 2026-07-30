@@ -23,7 +23,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, generateEntryNumber } from '@/lib/format';
 import { ArrowRightLeft, Loader2, Wallet, Plus, Trash2 } from 'lucide-react';
 
-type Line = { account_id: string; debit: string; credit: string };
+type Line = { account_id: string; amount: string };
 
 export default function RemittancePage() {
   const { toast } = useToast();
@@ -41,10 +41,7 @@ export default function RemittancePage() {
   const [saving, setSaving] = useState(false);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [form, setForm] = useState({ collector_id: '', collector_name: '', amount: 0, notes: '' });
-  const [lines, setLines] = useState<Line[]>([
-    { account_id: '', debit: '', credit: '' },
-    { account_id: '', debit: '', credit: '' },
-  ]);
+  const [lines, setLines] = useState<Line[]>([{ account_id: '', amount: '' }]);
 
   useEffect(() => {
     if (!profile) return;
@@ -87,15 +84,12 @@ export default function RemittancePage() {
   function openRecord(collectorId: string, collectorName: string) {
     const owed = (collected[collectorId] ?? 0) - (remitted[collectorId] ?? 0);
     setForm({ collector_id: collectorId, collector_name: collectorName, amount: owed > 0 ? owed : 0, notes: '' });
-    setLines([
-      { account_id: '', debit: '', credit: '' },
-      { account_id: '', debit: '', credit: '' },
-    ]);
+    setLines([{ account_id: '', amount: '' }]);
     setDialogOpen(true);
   }
 
   function addLine() {
-    setLines([...lines, { account_id: '', debit: '', credit: '' }]);
+    setLines([...lines, { account_id: '', amount: '' }]);
   }
 
   function removeLine(i: number) {
@@ -106,25 +100,30 @@ export default function RemittancePage() {
     setLines(lines.map((l, idx) => (idx === i ? { ...l, [field]: value } : l)));
   }
 
-  // A Cashier records remittances only into cash accounts (Cash on Hand,
-  // Cash in Bank, etc.) — an Administrator sees the full chart of accounts,
-  // since they may need to allocate a remittance to other accounts too.
-  const visibleAccounts = isAdmin ? accounts : accounts.filter(a => a.name.toLowerCase().includes('cash'));
+  // A remittance is always cash physically turned in — the credit side is
+  // always Loans Receivable, applied automatically on submit, so the only
+  // thing anyone (Cashier or Admin) picks here is which cash account(s)
+  // it's going into (e.g. split between Cash on Hand and Cash in Bank if
+  // part of it gets deposited).
+  const visibleAccounts = accounts.filter(a => a.code === '1000' || a.code === '1010');
 
-  const totalDebit = lines.reduce((s, l) => s + Number(l.debit || 0), 0);
-  const totalCredit = lines.reduce((s, l) => s + Number(l.credit || 0), 0);
-  // Same balance check as Journal Entries (debits must equal credits), plus
-  // a remittance-specific rule: the split can't fall short of or exceed the
-  // actual amount being remitted — every peso collected has to be accounted
-  // for across the chosen accounts, no more, no less.
-  const isBalanced = totalDebit === totalCredit && totalDebit > 0;
-  const matchesRemittance = Math.abs(totalDebit - form.amount) < 0.01;
-  const canSave = isBalanced && matchesRemittance;
+  const totalDebit = lines.reduce((s, l) => s + Number(l.amount || 0), 0);
+  // Every peso collected has to land in a cash account — the split can't
+  // fall short of or exceed the actual amount being remitted.
+  const matchesRemittance = totalDebit > 0 && Math.abs(totalDebit - form.amount) < 0.01;
+  const canSave = matchesRemittance;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.collector_id || !canSave) return;
     setSaving(true);
+
+    const loansReceivableAccount = accounts.find(a => a.code === '1100');
+    if (!loansReceivableAccount) {
+      toast({ title: 'Error', description: 'Loans Receivable account (1100) not found in the Chart of Accounts', variant: 'destructive' });
+      setSaving(false);
+      return;
+    }
 
     const { data: remittance, error } = await supabase.from('remittances').insert({
       collector_id: form.collector_id,
@@ -158,14 +157,23 @@ export default function RemittancePage() {
       return;
     }
 
+    // Debit whichever cash account(s) the user picked; the credit side
+    // (Loans Receivable) is always automatic — a remittance is collections
+    // coming in, which pays down what customers owe, never a manual choice.
     const linesPayload = lines
-      .filter(l => l.account_id && (Number(l.debit) > 0 || Number(l.credit) > 0))
+      .filter(l => l.account_id && Number(l.amount) > 0)
       .map(l => ({
         journal_entry_id: entry.id,
         account_id: l.account_id,
-        debit: Number(l.debit) || 0,
-        credit: Number(l.credit) || 0,
+        debit: Number(l.amount) || 0,
+        credit: 0,
       }));
+    linesPayload.push({
+      journal_entry_id: entry.id,
+      account_id: loansReceivableAccount.id,
+      debit: 0,
+      credit: totalDebit,
+    });
     await supabase.from('journal_entry_lines').insert(linesPayload);
 
     toast({ title: 'Success', description: 'Remittance recorded' });
@@ -285,30 +293,26 @@ export default function RemittancePage() {
           <DialogHeader>
             <DialogTitle>Record Remittance — {form.collector_name}</DialogTitle>
             <DialogDescription>
-              Split the {formatCurrency(form.amount)} remittance across accounts. Debits must equal credits, and the total must match the remittance amount exactly.
+              Which cash account(s) is the {formatCurrency(form.amount)} remittance going into? Loans Receivable is credited automatically — the total must match the remittance amount exactly.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               {lines.map((line, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-6">
-                    {i === 0 && <Label className="text-xs">Account</Label>}
+                  <div className="col-span-8">
+                    {i === 0 && <Label className="text-xs">Cash Account</Label>}
                     <Select value={line.account_id} onValueChange={(v) => updateLine(i, 'account_id', v)}>
                       <SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger>
                       <SelectContent>{visibleAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                   <div className="col-span-3">
-                    {i === 0 && <Label className="text-xs">Debit</Label>}
-                    <Input type="number" value={line.debit} onChange={(e) => updateLine(i, 'debit', e.target.value)} placeholder="0.00" />
-                  </div>
-                  <div className="col-span-2">
-                    {i === 0 && <Label className="text-xs">Credit</Label>}
-                    <Input type="number" value={line.credit} onChange={(e) => updateLine(i, 'credit', e.target.value)} placeholder="0.00" />
+                    {i === 0 && <Label className="text-xs">Amount</Label>}
+                    <Input type="number" value={line.amount} onChange={(e) => updateLine(i, 'amount', e.target.value)} placeholder="0.00" />
                   </div>
                   <div className="col-span-1">
-                    <Button type="button" variant="ghost" size="icon" onClick={() => removeLine(i)} disabled={lines.length <= 2}>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => removeLine(i)} disabled={lines.length <= 1}>
                       <Trash2 className="w-4 h-4 text-destructive" />
                     </Button>
                   </div>
@@ -321,10 +325,9 @@ export default function RemittancePage() {
             </div>
 
             <div className={`flex flex-wrap justify-between gap-2 text-sm p-3 rounded-lg ${canSave ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
-              <span>Total Debit: {formatCurrency(totalDebit)}</span>
-              <span>Total Credit: {formatCurrency(totalCredit)}</span>
+              <span>Total: {formatCurrency(totalDebit)}</span>
               <span>Remittance Amount: {formatCurrency(form.amount)}</span>
-              <span>{canSave ? 'Balanced' : !isBalanced ? 'Not balanced' : 'Does not match remittance amount'}</span>
+              <span>{canSave ? 'Matches' : 'Does not match remittance amount'}</span>
             </div>
 
             <div className="space-y-2">

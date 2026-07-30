@@ -28,6 +28,8 @@ interface DashboardStats {
   totalCustomers: number;
   activeLoans: number;
   overdueLoans: number;
+  overdueAmount: number;
+  overdueRate: number;
   todayCollections: number;
   monthlyCollections: number;
   outstandingBalance: number;
@@ -39,6 +41,8 @@ export default function DashboardPage() {
     totalCustomers: 0,
     activeLoans: 0,
     overdueLoans: 0,
+    overdueAmount: 0,
+    overdueRate: 0,
     todayCollections: 0,
     monthlyCollections: 0,
     outstandingBalance: 0,
@@ -65,14 +69,22 @@ export default function DashboardPage() {
 
       const activeLoans = loans.data ?? [];
       const overdue = activeLoans.filter(l => l.due_date && new Date(l.due_date) < new Date());
+      const outstandingBalance = activeLoans.reduce((s, l) => s + Number(l.remaining_balance), 0);
+      // Overdue Rate = portfolio at risk — the share of the whole
+      // receivable that's currently overdue, not just a share of loan
+      // count (which "Overdue Loans" already shows).
+      const overdueAmount = overdue.reduce((s, l) => s + Number(l.remaining_balance), 0);
+      const overdueRate = outstandingBalance > 0 ? (overdueAmount / outstandingBalance) * 100 : 0;
 
       setStats({
         totalCustomers: customers.count ?? 0,
         activeLoans: activeLoans.length,
         overdueLoans: overdue.length,
+        overdueAmount,
+        overdueRate,
         todayCollections: (paymentsToday.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
         monthlyCollections: (paymentsMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
-        outstandingBalance: activeLoans.reduce((s, l) => s + Number(l.remaining_balance), 0),
+        outstandingBalance,
         totalCash: (paymentsMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
       });
 
@@ -171,6 +183,20 @@ export default function DashboardPage() {
           subtitle="Past due date"
         />
         <StatCard
+          title="Overdue Amount"
+          value={formatCurrency(stats.overdueAmount)}
+          icon={<AlertCircle className="w-5 h-5" />}
+          variant="danger"
+          subtitle="Balance past due date"
+        />
+        <StatCard
+          title="Overdue Rate"
+          value={`${stats.overdueRate.toFixed(1)}%`}
+          icon={<AlertCircle className="w-5 h-5" />}
+          variant={stats.overdueRate > 10 ? 'danger' : 'warning'}
+          subtitle="Share of receivable overdue"
+        />
+        <StatCard
           title="Today's Collections"
           value={formatCurrency(stats.todayCollections)}
           icon={<Wallet className="w-5 h-5" />}
@@ -185,7 +211,7 @@ export default function DashboardPage() {
           trend={{ value: '+15% vs last month', positive: true }}
         />
         <StatCard
-          title="Outstanding Balance"
+          title="Receivable"
           value={formatCurrency(stats.outstandingBalance)}
           icon={<Banknote className="w-5 h-5" />}
           variant="warning"

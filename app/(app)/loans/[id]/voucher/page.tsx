@@ -178,9 +178,15 @@ export default function VoucherPage() {
         <div className="space-y-6 flex flex-col items-center">
           {/* PAGE 1 — Loan Release Cash Voucher */}
           <div ref={page1Ref} style={pageStyle}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 18, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.address.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CEL NO: {branding.contact}</div>
+            </div>
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#0B1F3A', marginBottom: 12, textDecoration: 'underline' }}>
               LOAN RELEASE CASH VOUCHER
             </div>
+            <div style={{ textAlign: 'right', fontSize: 12, marginBottom: 6 }}>Voucher No. <strong>{voucherData.voucherNumber}</strong></div>
             <div style={{ display: 'flex', gap: 24, marginBottom: 10, fontSize: 13 }}>
               <span>{vCheckbox(voucherData.isRenewal)}Renewal</span>
               <span>{vCheckbox(!voucherData.isRenewal)}New Loan Account</span>
@@ -249,6 +255,7 @@ export default function VoucherPage() {
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.address.toUpperCase()}</div>
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CEL NO: {branding.contact}</div>
             </div>
+            <div style={{ textAlign: 'right', fontSize: 12, marginBottom: 6 }}>Voucher No. <strong>{voucherData.voucherNumber}</strong></div>
             <table style={vTable}>
               <tbody>
                 <tr><td style={vCell}>Date:</td><td style={vCell}>{formatVoucherDate(voucherData.date)}</td></tr>

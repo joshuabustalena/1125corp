@@ -20,7 +20,8 @@ import { DocumentScaler } from '@/components/document-scaler';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, formatTime, generateGeneralCashVoucherNumber, numberToWordsPeso } from '@/lib/format';
+import { formatCurrency, formatDate, formatTime, numberToWordsPeso } from '@/lib/format';
+import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { postJournalEntry } from '@/lib/ledger';
 import { Wallet2, Plus, Trash2, Download, Loader2, Eye } from 'lucide-react';
 
@@ -44,14 +45,13 @@ export default function CashVouchersPage() {
   const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [voucherNumber, setVoucherNumber] = useState(generateGeneralCashVoucherNumber());
+  const [voucherNumber, setVoucherNumber] = useState('—');
   const [payee, setPayee] = useState('');
   const [particulars, setParticulars] = useState('');
   const [voucherDate, setVoucherDate] = useState(new Date().toISOString().split('T')[0]);
   const [cashAccountCode, setCashAccountCode] = useState('1000');
   const [lines, setLines] = useState<CashVoucherLine[]>([{ account_code: '', amount: '' }]);
   const [preparedByName, setPreparedByName] = useState('');
-  const [checkedByName, setCheckedByName] = useState('');
   const [approvedByName, setApprovedByName] = useState('');
 
   const [saving, setSaving] = useState(false);
@@ -65,6 +65,7 @@ export default function CashVouchersPage() {
     loadAccounts();
     loadBranches();
     loadHistory();
+    getNextVoucherNumber().then(setVoucherNumber);
   }, []);
 
   useEffect(() => {
@@ -119,7 +120,6 @@ export default function CashVouchersPage() {
     setPayee('');
     setParticulars('');
     setLines([{ account_code: '', amount: '' }]);
-    setCheckedByName('');
     setApprovedByName('');
   }
 
@@ -136,7 +136,6 @@ export default function CashVouchersPage() {
       lines: resolvedLines,
       total_amount: totalAmount,
       prepared_by_name: preparedByName || null,
-      checked_by_name: checkedByName || null,
       approved_by_name: approvedByName || null,
       branch_id: branchId || null,
       created_by: profile?.id ?? null,
@@ -163,7 +162,7 @@ export default function CashVouchersPage() {
 
     toast({ title: 'Success', description: 'Cash voucher generated and journal entry posted' });
     await handleDownloadPdf(voucherNumber);
-    setVoucherNumber(generateGeneralCashVoucherNumber());
+    getNextVoucherNumber().then(setVoucherNumber);
     resetForm();
     loadHistory();
     setSaving(false);
@@ -214,7 +213,6 @@ export default function CashVouchersPage() {
   const printedLines: { account_name: string; amount: number }[] = printedVoucher ? (printedVoucher.lines ?? []) : resolvedLines;
   const printedTotal = printedVoucher ? Number(printedVoucher.total_amount) || 0 : totalAmount;
   const printedPreparedBy = printedVoucher ? (printedVoucher.prepared_by_name ?? '') : preparedByName;
-  const printedCheckedBy = printedVoucher ? (printedVoucher.checked_by_name ?? '') : checkedByName;
   const printedApprovedBy = printedVoucher ? (printedVoucher.approved_by_name ?? '') : approvedByName;
 
   // Matches the client's actual system-generated Cash Voucher report
@@ -286,13 +284,11 @@ export default function CashVouchersPage() {
         <table style={{ width: '100%', fontSize: 12, marginTop: 40 }}>
           <tbody>
             <tr>
-              <td style={{ textAlign: 'center', borderTop: '1px solid #000', paddingTop: 4, width: '33%' }}>{printedPreparedBy || ' '}</td>
-              <td style={{ textAlign: 'center', borderTop: '1px solid #000', paddingTop: 4, width: '33%' }}>{printedCheckedBy || ' '}</td>
+              <td style={{ textAlign: 'center', borderTop: '1px solid #000', paddingTop: 4, width: '50%' }}>{printedPreparedBy || ' '}</td>
               <td style={{ textAlign: 'center', borderTop: '1px solid #000', paddingTop: 4 }}>{printedApprovedBy || ' '}</td>
             </tr>
             <tr>
               <td style={{ textAlign: 'center', fontWeight: 700 }}>Prepared By</td>
-              <td style={{ textAlign: 'center', fontWeight: 700 }}>Checked By</td>
               <td style={{ textAlign: 'center', fontWeight: 700 }}>Approved By</td>
             </tr>
           </tbody>
@@ -351,7 +347,7 @@ export default function CashVouchersPage() {
             <div className="space-y-2"><Label>Date *</Label><Input type="date" value={voucherDate} onChange={(e) => setVoucherDate(e.target.value)} /></div>
             <div className="space-y-2 sm:col-span-2"><Label>Particulars *</Label><Input value={particulars} onChange={(e) => setParticulars(e.target.value)} placeholder="e.g. Payment for Employee Loan, Office Repairs" /></div>
             <div className="space-y-2">
-              <Label>Credit Account (source of cash) *</Label>
+              <Label>Cash Account *</Label>
               <Select value={cashAccountCode} onValueChange={setCashAccountCode}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -387,9 +383,8 @@ export default function CashVouchersPage() {
             </Button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label className="text-xs">Prepared By</Label><Input value={preparedByName} onChange={(e) => setPreparedByName(e.target.value)} /></div>
-            <div className="space-y-2"><Label className="text-xs">Checked By</Label><Input value={checkedByName} onChange={(e) => setCheckedByName(e.target.value)} /></div>
             <div className="space-y-2"><Label className="text-xs">Approved By</Label><Input value={approvedByName} onChange={(e) => setApprovedByName(e.target.value)} /></div>
           </div>
 
@@ -464,7 +459,7 @@ export default function CashVouchersPage() {
           </DialogHeader>
           <div className="bg-secondary/30 p-4 rounded-lg">
             <DocumentScaler width={900}>
-              <div style={{ width: 900, background: '#fff', color: '#111', padding: 40, fontFamily: 'Arial, sans-serif' }}>
+              <div style={{ width: 900, background: '#fff', color: '#111', padding: 40, fontFamily: '"Times New Roman", Calibri, serif' }}>
                 {renderVoucherCopy()}
               </div>
             </DocumentScaler>
@@ -482,7 +477,7 @@ export default function CashVouchersPage() {
       {/* Hidden printable Cash Voucher */}
       {typeof document !== 'undefined' && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
-          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 40, fontFamily: 'Arial, sans-serif' }}>
+          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 40, fontFamily: '"Times New Roman", Calibri, serif' }}>
             {renderVoucherCopy()}
           </div>
         </div>,

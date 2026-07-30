@@ -23,7 +23,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
 import {
-  Calculator, Plus, Download, Loader2, TrendingUp, TrendingDown, Banknote, Wallet,
+  Calculator, Plus, Download, Loader2, TrendingUp, TrendingDown, Banknote, Wallet, Landmark,
 } from 'lucide-react';
 
 export default function AccountingPage() {
@@ -34,6 +34,10 @@ export default function AccountingPage() {
   const [receivables, setReceivables] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [ledgerStats, setLedgerStats] = useState({
+    cashVaultBalance: 0, cashBankBalance: 0, todayCollections: 0,
+    todayCashRelease: 0, todayCashExpenses: 0, totalReceivable: 0,
+  });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogType, setDialogType] = useState<'cashflow' | 'expense'>('cashflow');
   const [saving, setSaving] = useState(false);
@@ -42,11 +46,56 @@ export default function AccountingPage() {
     type: 'inflow', category: '', amount: '', reference: '', notes: '', expense_date: '', expense_category: '', description: '',
   });
 
-  useEffect(() => { load(); loadBranches(); }, []);
+  useEffect(() => { load(); loadBranches(); loadLedgerStats(); }, []);
 
   async function loadBranches() {
     const { data } = await supabase.from('branches').select('id, name').eq('status', 'active');
     setBranches(data ?? []);
+  }
+
+  // Real cash position and today's movement, derived straight from the
+  // general ledger (journal_entry_lines) instead of the separate manual
+  // cash_flow/expenses tables below — those are only as good as whoever
+  // remembers to log an entry there, while every voucher/disbursement in
+  // the app already auto-posts to the ledger via postJournalEntry.
+  async function loadLedgerStats() {
+    const today = new Date().toISOString().split('T')[0];
+    const { data: cashAccounts } = await supabase.from('chart_of_accounts').select('id, code').in('code', ['1000', '1010']);
+    const vaultId = cashAccounts?.find(a => a.code === '1000')?.id;
+    const bankId = cashAccounts?.find(a => a.code === '1010')?.id;
+    const cashAccountIds = (cashAccounts ?? []).map(a => a.id);
+
+    const [{ data: cashLines }, { data: paymentsToday }, { data: activeLoans }] = await Promise.all([
+      cashAccountIds.length > 0
+        ? supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries(entry_date, source)').in('account_id', cashAccountIds)
+        : Promise.resolve({ data: [] as any[] }),
+      supabase.from('payments').select('amount_paid').eq('payment_date', today),
+      supabase.from('loans').select('remaining_balance').eq('status', 'active'),
+    ]);
+
+    let cashVaultBalance = 0, cashBankBalance = 0, todayCashRelease = 0, todayCashExpenses = 0;
+    const releaseSources = ['disbursement', 'gas_voucher', 'payroll_voucher', 'thirteenth_month_voucher'];
+    const expenseSources = ['expense', 'general_cash_voucher'];
+    for (const l of (cashLines ?? []) as any[]) {
+      const net = (Number(l.debit) || 0) - (Number(l.credit) || 0);
+      if (l.account_id === vaultId) cashVaultBalance += net;
+      if (l.account_id === bankId) cashBankBalance += net;
+      const entryDate = l.journal_entries?.entry_date;
+      const source = l.journal_entries?.source;
+      if (entryDate === today && Number(l.credit) > 0) {
+        if (releaseSources.includes(source)) todayCashRelease += Number(l.credit);
+        else if (expenseSources.includes(source)) todayCashExpenses += Number(l.credit);
+      }
+    }
+
+    setLedgerStats({
+      cashVaultBalance,
+      cashBankBalance,
+      todayCollections: (paymentsToday ?? []).reduce((s, p: any) => s + Number(p.amount_paid), 0),
+      todayCashRelease,
+      todayCashExpenses,
+      totalReceivable: (activeLoans ?? []).reduce((s, l: any) => s + Number(l.remaining_balance), 0),
+    });
   }
 
   async function load() {
@@ -101,13 +150,6 @@ export default function AccountingPage() {
     setSaving(false);
   }
 
-  const totalInflow = cashFlow.filter(c => c.type === 'inflow').reduce((s, c) => s + Number(c.amount), 0);
-  const totalOutflow = cashFlow.filter(c => c.type === 'outflow').reduce((s, c) => s + Number(c.amount), 0);
-  const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount), 0);
-  const totalReceivables = receivables.reduce((s, r) => s + Number(r.total_balance), 0);
-  const netCash = totalInflow - totalOutflow;
-  const profit = totalInflow - totalOutflow - totalExpenses;
-
   function handleExport() {
     exportToCSV(cashFlow.map(c => ({ Date: c.transaction_date, Type: c.type, Category: c.category, Amount: c.amount, Reference: c.reference ?? '' })), 'cash-flow.csv');
   }
@@ -124,12 +166,21 @@ export default function AccountingPage() {
         </Button>
       </PageHeader>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Inflow" value={formatCurrency(totalInflow)} icon={<TrendingUp className="w-5 h-5" />} variant="success" />
-        <StatCard title="Total Outflow" value={formatCurrency(totalOutflow)} icon={<TrendingDown className="w-5 h-5" />} variant="danger" />
-        <StatCard title="Total Expenses" value={formatCurrency(totalExpenses)} icon={<Wallet className="w-5 h-5" />} variant="warning" />
-        <StatCard title="Net Profit" value={formatCurrency(profit)} icon={<Banknote className="w-5 h-5" />} variant={profit >= 0 ? 'success' : 'danger'} />
+      {/* Ledger-derived summary cards — real cash position and today's
+          movement, straight from journal_entry_lines, not the manual
+          Cash Flow/Expenses log below. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <StatCard
+          title="Cash Balances"
+          value={formatCurrency(ledgerStats.cashVaultBalance + ledgerStats.cashBankBalance)}
+          icon={<Banknote className="w-5 h-5" />}
+          variant="success"
+          subtitle={`Vault ${formatCurrency(ledgerStats.cashVaultBalance)} · Bank ${formatCurrency(ledgerStats.cashBankBalance)}`}
+        />
+        <StatCard title="Today's Collection" value={formatCurrency(ledgerStats.todayCollections)} icon={<TrendingUp className="w-5 h-5" />} variant="success" />
+        <StatCard title="Today's Cash Release" value={formatCurrency(ledgerStats.todayCashRelease)} icon={<TrendingDown className="w-5 h-5" />} variant="warning" subtitle="Loan/gas/payroll disbursements" />
+        <StatCard title="Today's Cash Expenses" value={formatCurrency(ledgerStats.todayCashExpenses)} icon={<Wallet className="w-5 h-5" />} variant="danger" subtitle="Repairs, misc. cash vouchers" />
+        <StatCard title="Total Receivable" value={formatCurrency(ledgerStats.totalReceivable)} icon={<Landmark className="w-5 h-5" />} variant="default" subtitle="Active loans outstanding" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

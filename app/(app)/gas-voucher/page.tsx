@@ -17,9 +17,10 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateGasVoucherNumber, numberToWordsPeso } from '@/lib/format';
+import { formatCurrency, formatDate, numberToWordsPeso } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { postJournalEntry } from '@/lib/ledger';
+import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { Fuel, Loader2, Download } from 'lucide-react';
 
 const gCell: React.CSSProperties = { border: '1px solid #000', padding: '5px 8px' };
@@ -35,7 +36,7 @@ export default function GasVoucherPage() {
   const [branchId, setBranchId] = useState('');
   const [collectors, setCollectors] = useState<any[]>([]);
   const [amounts, setAmounts] = useState<Record<string, string>>({});
-  const [voucherNumber, setVoucherNumber] = useState(generateGasVoucherNumber());
+  const [voucherNumber, setVoucherNumber] = useState('—');
   const [cashierName, setCashierName] = useState('');
   const [branchManagerName, setBranchManagerName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -51,6 +52,8 @@ export default function GasVoucherPage() {
     }
     if (profile?.full_name) setCashierName(profile.full_name);
   }, [profile]);
+
+  useEffect(() => { getNextVoucherNumber().then(setVoucherNumber); }, []);
 
   useEffect(() => {
     if (!branchId) return;
@@ -132,7 +135,7 @@ export default function GasVoucherPage() {
     });
 
     toast({ title: 'Success', description: 'Gas voucher generated and journal entry posted' });
-    setVoucherNumber(generateGasVoucherNumber());
+    getNextVoucherNumber().then(setVoucherNumber);
     loadData();
     setSaving(false);
   }
@@ -282,7 +285,7 @@ export default function GasVoucherPage() {
           layout affects the html2canvas capture. */}
       {typeof document !== 'undefined' && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
-          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 40, fontFamily: 'Georgia, "Times New Roman", serif' }}>
+          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 40, fontFamily: '"Times New Roman", Calibri, serif' }}>
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 16 }}>
               <img src="/image/1125_Corp_Logo.png" alt="1125Corp" style={{ width: 64, height: 64, objectFit: 'contain' }} />
               <div style={{ textAlign: 'center' }}>

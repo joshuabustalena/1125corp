@@ -21,7 +21,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, exportToCSV, generatePayrollVoucherNumber, generateThirteenthMonthVoucherNumber, numberToWordsPeso } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso } from '@/lib/format';
+import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { postJournalEntry } from '@/lib/ledger';
 import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye } from 'lucide-react';
@@ -113,7 +114,7 @@ export default function PayrollPage() {
   const [downloadingThirteenthVoucher, setDownloadingThirteenthVoucher] = useState(false);
   const [historyThirteenthVoucher, setHistoryThirteenthVoucher] = useState<any | null>(null);
   const [downloadingHistoryThirteenthId, setDownloadingHistoryThirteenthId] = useState<string | null>(null);
-  const [thirteenthVoucherNumber, setThirteenthVoucherNumber] = useState(generateThirteenthMonthVoucherNumber());
+  const [thirteenthVoucherNumber, setThirteenthVoucherNumber] = useState('—');
   const [thirteenthVoucherPreviewOpen, setThirteenthVoucherPreviewOpen] = useState(false);
   const thirteenthVoucherPrintRef = useRef<HTMLDivElement>(null);
   const payslipRef = useRef<HTMLDivElement>(null);
@@ -130,11 +131,15 @@ export default function PayrollPage() {
   const [payrollVouchers, setPayrollVouchers] = useState<any[]>([]);
   const [historyPayrollVoucher, setHistoryPayrollVoucher] = useState<any | null>(null);
   const [downloadingHistoryVoucherId, setDownloadingHistoryVoucherId] = useState<string | null>(null);
-  const [voucherNumber, setVoucherNumber] = useState(generatePayrollVoucherNumber());
+  const [voucherNumber, setVoucherNumber] = useState('—');
   const [voucherPreviewOpen, setVoucherPreviewOpen] = useState(false);
   const payrollVoucherPrintRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { load(); loadEmployees(); loadBranches(); loadPayrollVouchers(); loadThirteenthVouchers(); }, []);
+  useEffect(() => {
+    load(); loadEmployees(); loadBranches(); loadPayrollVouchers(); loadThirteenthVouchers();
+    getNextVoucherNumber().then(setVoucherNumber);
+    getNextVoucherNumber().then(setThirteenthVoucherNumber);
+  }, []);
 
   useEffect(() => {
     if (profile?.role_name === 'Cashier' && profile?.full_name) {
@@ -874,7 +879,7 @@ export default function PayrollPage() {
 
     toast({ title: 'Success', description: '13th Month voucher generated and journal entry posted' });
     await handleDownloadThirteenthVoucherPdf(thirteenthVoucherNumber);
-    setThirteenthVoucherNumber(generateThirteenthMonthVoucherNumber());
+    getNextVoucherNumber().then(setThirteenthVoucherNumber);
     loadThirteenthVouchers();
     setGeneratingThirteenthVoucher(false);
   }
@@ -1092,7 +1097,7 @@ export default function PayrollPage() {
     // clears eligiblePayrollRows (they're no longer un-vouchered), so
     // Download PDF would produce a blank document if called after this.
     await handleDownloadVoucherPdf(voucherNumber);
-    setVoucherNumber(generatePayrollVoucherNumber());
+    getNextVoucherNumber().then(setVoucherNumber);
     load();
     loadPayrollVouchers();
     setGeneratingVoucher(false);

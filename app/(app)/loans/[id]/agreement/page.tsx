@@ -247,7 +247,7 @@ export default function LoanAgreementPage() {
         <DocumentScaler width={780}>
         <div className="flex flex-col items-center gap-4">
           <div ref={page1Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
-            <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
+            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>{COMPANY_NAME}</div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>

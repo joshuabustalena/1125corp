@@ -21,7 +21,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateLoanNumber, generateVoucherNumber, computeLoanDetails } from '@/lib/format';
+import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails } from '@/lib/format';
+import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { postJournalEntry } from '@/lib/ledger';
 import { notifyRoles } from '@/lib/notify';
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
@@ -559,7 +560,7 @@ export default function LoanDetailPage() {
 
   async function handleDisburse() {
     setDisbursing(true);
-    const voucherNumber = generateVoucherNumber();
+    const voucherNumber = await getNextVoucherNumber();
     const now = new Date().toISOString();
 
     const { error: loanError } = await supabase.from('loans').update({
@@ -591,11 +592,13 @@ export default function LoanDetailPage() {
       toast({ title: 'Loan disbursed, but voucher failed', description: voucherError.message, variant: 'destructive' });
     }
 
-    // Auto-post to the general ledger. Loans Receivable is booked at the
-    // full total payable (principal + interest) up front, then immediately
-    // reduced by whatever was collected the same instant — the first
-    // day's payment and any carried-over offset balance from a renewal —
-    // since those never actually leave as cash. What's left after also
+    // Auto-post to the general ledger, per the client's exact formula:
+    // Debit Loans Receivable = Loan + Interest - First Payment (the day-one
+    // collection never actually stays outstanding, so it's netted straight
+    // out of what's booked as receivable, rather than booked gross then
+    // credited back). Any carried-over offset balance from a renewal is a
+    // separate credit to Loans Receivable — it's paying down the OLD loan,
+    // not reducing what's owed on this new one. What's left after also
     // netting out the service fee is the real cash handed to the borrower.
     const principal = Number(loan.amount) || 0;
     const interestAmount = Number(loan.interest_amount) || 0;
@@ -605,7 +608,7 @@ export default function LoanDetailPage() {
     const firstPayment = loan.daily_payment != null && Number(loan.daily_payment) > 0
       ? Number(loan.daily_payment)
       : (loan.term_days > 0 ? totalPayable / loan.term_days : 0);
-    const receivableOffset = firstPayment + offsetBalance;
+    const loansReceivableDebit = principal + interestAmount - firstPayment;
     const cashReleased = Math.max(0, principal - serviceFee - offsetBalance - firstPayment);
 
     postJournalEntry({
@@ -616,8 +619,8 @@ export default function LoanDetailPage() {
       sourceId: loan.id,
       createdBy: profile?.id ?? null,
       lines: [
-        { accountCode: '1100', debit: totalPayable, memo: 'Loans Receivable' },
-        { accountCode: '1100', credit: receivableOffset, memo: 'First payment and offset balance collected upfront' },
+        { accountCode: '1100', debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
+        { accountCode: '1100', credit: offsetBalance, memo: 'Offset balance from previous loan' },
         { accountCode: '1000', credit: cashReleased, memo: 'Cash released to borrower' },
         { accountCode: '4010', credit: serviceFee, memo: 'Service fee income' },
         { accountCode: '4000', credit: interestAmount, memo: 'Interest income' },
