@@ -89,7 +89,6 @@ export default function UndertakingPage() {
   const [printing, setPrinting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const page1Ref = useRef<HTMLDivElement>(null);
-  const page2Ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => { load(); }, [params.id]);
 
@@ -121,7 +120,7 @@ export default function UndertakingPage() {
   const branding = getDocumentBranding(loan.branches?.name);
 
   async function handlePrint() {
-    const refs = [page1Ref, page2Ref].filter(r => r.current);
+    const refs = [page1Ref].filter(r => r.current);
     if (refs.length === 0) return;
     setPrinting(true);
     try {
@@ -155,7 +154,7 @@ export default function UndertakingPage() {
   }
 
   async function handleDownload() {
-    const refs = [page1Ref, page2Ref].filter(r => r.current);
+    const refs = [page1Ref].filter(r => r.current);
     if (refs.length === 0) return;
     setDownloading(true);
     try {
@@ -198,42 +197,34 @@ export default function UndertakingPage() {
 
       <div className="max-w-[1000px] mx-auto">
         <div className="bg-secondary/30 p-4 rounded-lg">
-        <DocumentScaler width={780}>
+        <DocumentScaler width={900}>
         <div className="flex flex-col items-center gap-4">
-          <div ref={page1Ref} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
-            <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>{COMPANY_NAME}</div>
+          <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '30px 38px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13, lineHeight: 1.4 }}>
+            <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 13 }}>
+              <div style={{ fontWeight: 700, fontSize: 18, color: '#1F4E79' }}>{COMPANY_NAME}</div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>
             </div>
 
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15 }}>BORROWER'S UNDERTAKING</div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, marginBottom: 16 }}>(KASUNDUAN SA PAGKAKAUTANG BILANG BORROWER)</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 16 }}>BORROWER'S UNDERTAKING</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, marginBottom: 13 }}>(KASUNDUAN SA PAGKAKAUTANG BILANG BORROWER)</div>
 
-            <p style={{ textAlign: 'justify', marginBottom: 12, textIndent: 48 }}>
+            <p style={{ textAlign: 'justify', marginBottom: 12, textIndent: 40 }}>
               I <span style={{ textDecoration: 'underline' }}>{undertakingData.borrowerName}</span> of legal age, residing at{' '}
               <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span> voluntarily agree to the following terms and conditions as a borrower of {COMPANY_NAME_DISPLAY}.
             </p>
 
-            {UNDERTAKING_CLAUSES.slice(0, 6).map(c => (
-              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
-                <strong>{c.n}. {c.title}</strong> - {c.en} <em style={{ color: '#333' }}>{c.tl}</em>
-              </p>
-            ))}
-          </div>
-
-          <div ref={page2Ref} style={{ width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
-            {UNDERTAKING_CLAUSES.slice(6).map(c => (
-              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
+            {UNDERTAKING_CLAUSES.map(c => (
+              <p key={c.n} style={{ textAlign: 'justify', fontSize: 11.5, lineHeight: 1.36, marginBottom: 7 }}>
                 <strong>{c.n}. {c.title}</strong> - {c.en} <em style={{ color: '#333' }}>{c.tl}</em>
               </p>
             ))}
 
-            <p style={{ textAlign: 'justify', fontSize: 12, marginTop: 4, marginBottom: 20 }}>
+            <p style={{ textAlign: 'justify', fontSize: 11.5, lineHeight: 1.36, marginTop: 8, marginBottom: 16 }}>
               I hereby authorize {COMPANY_NAME_DISPLAY} to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act of 2012.
             </p>
 
-            <p style={{ fontSize: 13, marginBottom: 24 }}>
+            <p style={{ fontSize: 13, marginBottom: 20 }}>
               IN WITNESS WHEREOF, I hereunto affix my signature this <span style={{ textDecoration: 'underline' }}>{formatLongDate(undertakingData.date)}</span>
             </p>
 

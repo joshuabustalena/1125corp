@@ -756,13 +756,15 @@ export default function PayrollPage() {
   const printedThirteenthVoucherNumber = printedThirteenth ? printedThirteenth.voucher_number : thirteenthVoucherNumber;
 
   useEffect(() => {
-    if (!historyThirteenthVoucher) return;
+    // Only auto-download when the Download action (not View) set this —
+    // it stamps downloadingHistoryThirteenthId at the same time, View doesn't.
+    if (!historyThirteenthVoucher || downloadingHistoryThirteenthId !== historyThirteenthVoucher.id) return;
     (async () => {
       await handleDownloadThirteenthVoucherPdf(historyThirteenthVoucher.voucher_number);
       setHistoryThirteenthVoucher(null);
       setDownloadingHistoryThirteenthId(null);
     })();
-  }, [historyThirteenthVoucher]);
+  }, [historyThirteenthVoucher, downloadingHistoryThirteenthId]);
 
   function renderThirteenthVoucherCopy() {
     return (
@@ -944,13 +946,15 @@ export default function PayrollPage() {
   })();
 
   useEffect(() => {
-    if (!historyPayrollVoucher) return;
+    // Only auto-download when the Download action (not View) set this —
+    // it stamps downloadingHistoryVoucherId at the same time, View doesn't.
+    if (!historyPayrollVoucher || downloadingHistoryVoucherId !== historyPayrollVoucher.id) return;
     (async () => {
       await handleDownloadVoucherPdf(historyPayrollVoucher.voucher_number);
       setHistoryPayrollVoucher(null);
       setDownloadingHistoryVoucherId(null);
     })();
-  }, [historyPayrollVoucher]);
+  }, [historyPayrollVoucher, downloadingHistoryVoucherId]);
 
   // Matches the client's actual Payroll Voucher exactly: amount-in-words is
   // ALL CAPS here (unlike numberToWordsPeso's normal Title Case, used as-is
@@ -1449,6 +1453,14 @@ export default function PayrollPage() {
                       <Button
                         variant="ghost"
                         size="icon"
+                        title="View"
+                        onClick={() => { setHistoryPayrollVoucher(v); setVoucherPreviewOpen(true); }}
+                      >
+                        <Eye className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         title="Download PDF"
                         disabled={downloadingHistoryVoucherId === v.id}
                         onClick={() => { setDownloadingHistoryVoucherId(v.id); setHistoryPayrollVoucher(v); }}
@@ -1464,11 +1476,11 @@ export default function PayrollPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={voucherPreviewOpen} onOpenChange={setVoucherPreviewOpen}>
+      <Dialog open={voucherPreviewOpen} onOpenChange={(open) => { setVoucherPreviewOpen(open); if (!open) setHistoryPayrollVoucher(null); }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Payroll Voucher Preview</DialogTitle>
-            <DialogDescription>{voucherBranch?.name ?? ''} — {printedParticulars}</DialogDescription>
+            <DialogDescription>{printedBranchName ?? ''} — {printedParticulars}</DialogDescription>
           </DialogHeader>
           <div className="bg-secondary/30 p-4 rounded-lg">
             <DocumentScaler width={900}>
@@ -1644,6 +1656,14 @@ export default function PayrollPage() {
                       <Button
                         variant="ghost"
                         size="icon"
+                        title="View"
+                        onClick={() => { setHistoryThirteenthVoucher(v); setThirteenthVoucherPreviewOpen(true); }}
+                      >
+                        <Eye className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         title="Download PDF"
                         disabled={downloadingHistoryThirteenthId === v.id}
                         onClick={() => { setDownloadingHistoryThirteenthId(v.id); setHistoryThirteenthVoucher(v); }}
@@ -1659,11 +1679,11 @@ export default function PayrollPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={thirteenthVoucherPreviewOpen} onOpenChange={setThirteenthVoucherPreviewOpen}>
+      <Dialog open={thirteenthVoucherPreviewOpen} onOpenChange={(open) => { setThirteenthVoucherPreviewOpen(open); if (!open) setHistoryThirteenthVoucher(null); }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>13th Month Voucher Preview</DialogTitle>
-            <DialogDescription>{thirteenthCycleLabel}</DialogDescription>
+            <DialogDescription>{printedThirteenthCycleLabel}</DialogDescription>
           </DialogHeader>
           <div className="bg-secondary/30 p-4 rounded-lg">
             <DocumentScaler width={900}>
@@ -1674,7 +1694,7 @@ export default function PayrollPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setThirteenthVoucherPreviewOpen(false)}>Close</Button>
-            <Button onClick={() => handleDownloadThirteenthVoucherPdf()} disabled={downloadingThirteenthVoucher}>
+            <Button onClick={() => handleDownloadThirteenthVoucherPdf(printedThirteenthVoucherNumber)} disabled={downloadingThirteenthVoucher}>
               {downloadingThirteenthVoucher ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
               Download PDF
             </Button>

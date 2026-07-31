@@ -80,7 +80,6 @@ export default function LoanAgreementPage() {
   const [printing, setPrinting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const page1Ref = useRef<HTMLDivElement>(null);
-  const page2Ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => { load(); }, [params.id]);
 
@@ -164,10 +163,10 @@ export default function LoanAgreementPage() {
     </div>
   );
   const dTable: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 };
-  const dCell: React.CSSProperties = { padding: '3px 6px' };
+  const dCell: React.CSSProperties = { padding: '3px 7px' };
 
   async function handlePrint() {
-    const refs = [page1Ref, page2Ref].filter(r => r.current);
+    const refs = [page1Ref].filter(r => r.current);
     if (refs.length === 0) return;
     setPrinting(true);
     try {
@@ -201,7 +200,7 @@ export default function LoanAgreementPage() {
   }
 
   async function handleDownload() {
-    const refs = [page1Ref, page2Ref].filter(r => r.current);
+    const refs = [page1Ref].filter(r => r.current);
     if (refs.length === 0) return;
     setDownloading(true);
     try {
@@ -244,24 +243,23 @@ export default function LoanAgreementPage() {
 
       <div className="max-w-[1000px] mx-auto">
         <div className="bg-secondary/30 p-4 rounded-lg">
-        <DocumentScaler width={780}>
+        <DocumentScaler width={900}>
         <div className="flex flex-col items-center gap-4">
-          <div ref={page1Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
-            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 17, color: '#1F4E79' }}>{COMPANY_NAME}</div>
+          <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '26px 36px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13, lineHeight: 1.36 }}>
+            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 8, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 18, color: '#1F4E79' }}>{COMPANY_NAME}</div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>
             </div>
 
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, marginBottom: 16 }}>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
               LOAN AGREEMENT &amp; DISCLOSURE STATEMENT
             </div>
 
-            <p style={{ textAlign: 'justify', marginBottom: 10 }}>
+            <p style={{ textAlign: 'justify', marginBottom: 6 }}>
               This Loan Agreement executed on the {formatOrdinalDate(agreementData.date)} by {COMPANY_NAME} located at{' '}
-              <span style={{ textDecoration: 'underline' }}>{branding.address}</span> hereinafter referred to as the <strong>LENDER</strong>;
+              <span style={{ textDecoration: 'underline' }}>{branding.address}</span> hereinafter referred to as the <strong>LENDER</strong>; - AND -
             </p>
-            <p style={{ textAlign: 'center', fontWeight: 700, marginBottom: 10 }}>- AND -</p>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
               {aRow('Name of BORROWER', <span style={{ textDecoration: 'underline' }}>{agreementData.borrowerName}</span>)}
@@ -270,9 +268,10 @@ export default function LoanAgreementPage() {
             {aRow('Residence Address:', agreementData.residenceAddress || '—')}
             {aRow('Business Address:', agreementData.businessAddress || '—')}
 
-            <p style={{ fontWeight: 700, marginTop: 12, marginBottom: 2 }}>Loan Details:</p>
-            {aRow('Date of Loan:', formatLongDate(agreementData.date))}
-            {aRow(<>Loan Due Date: <em>({agreementData.termMonths}-month term)</em></>, formatLongDate(agreementData.dueDate))}
+            <div style={{ display: 'flex', gap: 24, marginTop: 4 }}>
+              {aRow('Date of Loan:', formatLongDate(agreementData.date))}
+              {aRow(<>Due Date: <em>({agreementData.termMonths}-mo term)</em></>, formatLongDate(agreementData.dueDate))}
+            </div>
 
             <table style={dTable}>
               <tbody>
@@ -328,23 +327,15 @@ export default function LoanAgreementPage() {
               </tbody>
             </table>
 
-            <p style={{ fontWeight: 700, marginTop: 16, marginBottom: 6 }}>The Borrower hereby represents, warrants, acknowledges, and agrees as follows:</p>
+            <p style={{ fontWeight: 700, marginTop: 10, marginBottom: 6 }}>The Borrower hereby represents, warrants, acknowledges, and agrees as follows:</p>
 
-            {AGREEMENT_CLAUSES.slice(0, 4).map(c => (
-              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
-                <strong>{c.n}. {c.title}</strong> - {c.en}
-              </p>
-            ))}
-          </div>
-
-          <div ref={page2Ref} style={{ width: 780, minHeight: 1010, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13 }}>
-            {AGREEMENT_CLAUSES.slice(4).map(c => (
-              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, marginBottom: 10 }}>
+            {AGREEMENT_CLAUSES.map(c => (
+              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, lineHeight: 1.34, marginBottom: 7 }}>
                 <strong>{c.n}. {c.title}</strong> - {c.en}
               </p>
             ))}
 
-            <p style={{ textAlign: 'justify', fontSize: 12, marginTop: 4, marginBottom: 40 }}>
+            <p style={{ textAlign: 'justify', fontSize: 12, lineHeight: 1.34, marginTop: 6, marginBottom: 14 }}>
               {AGREEMENT_CLOSING_PARAGRAPH}
             </p>
 

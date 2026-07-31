@@ -30,7 +30,6 @@ export default function VoucherPage() {
   const [downloading, setDownloading] = useState(false);
   const page1Ref = useRef<HTMLDivElement>(null);
   const page2Ref = useRef<HTMLDivElement>(null);
-  const page3Ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => { load(); }, [params.id]);
 
@@ -97,7 +96,7 @@ export default function VoucherPage() {
   const pageStyle: React.CSSProperties = { width: 780, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif' };
 
   async function handlePrint() {
-    const refs = [page1Ref, page2Ref, page3Ref].filter(r => r.current);
+    const refs = [page1Ref, page2Ref].filter(r => r.current);
     if (refs.length === 0) return;
     setPrinting(true);
     try {
@@ -131,7 +130,7 @@ export default function VoucherPage() {
   }
 
   async function handleDownload() {
-    const refs = [page1Ref, page2Ref, page3Ref].filter(r => r.current);
+    const refs = [page1Ref, page2Ref].filter(r => r.current);
     if (refs.length === 0) return;
     setDownloading(true);
     try {
@@ -160,7 +159,7 @@ export default function VoucherPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={`Loan Disbursement Documents — ${voucherData.voucherNumber}`} description="3 pages: Loan Release Cash Voucher, Cash Voucher, Acknowledgement Receipt of Loan">
+      <PageHeader title={`Loan Disbursement Documents — ${voucherData.voucherNumber}`} description="2 pages: Loan Release Cash Voucher, and Cash Voucher + Acknowledgement Receipt of Loan combined">
         <Button variant="outline" size="sm" onClick={() => router.push(`/loans/${loan.id}`)}>
           <ArrowLeft className="w-4 h-4 mr-2" />Back
         </Button>
@@ -248,12 +247,17 @@ export default function VoucherPage() {
             </p>
           </div>
 
-          {/* PAGE 2 — Cash Voucher (Branch Cashier -> Field Collector) */}
+          {/* PAGE 2 — Cash Voucher (Branch Cashier -> Field Collector) +
+              Acknowledgement Receipt of Loan, combined onto one page since
+              the Cash Voucher block alone is short enough to share a sheet. */}
           <div ref={page2Ref} style={pageStyle}>
             <div style={{ textAlign: 'center', marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 18, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.address.toUpperCase()}</div>
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CEL NO: {branding.contact}</div>
+            </div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, color: '#0B1F3A', marginBottom: 12, textDecoration: 'underline' }}>
+              LOAN RELEASE CASH VOUCHER
             </div>
             <div style={{ textAlign: 'right', fontSize: 12, marginBottom: 6 }}>Voucher No. <strong>{voucherData.voucherNumber}</strong></div>
             <table style={vTable}>
@@ -267,11 +271,8 @@ export default function VoucherPage() {
                 <tr><td style={vItalic}>Branch Cashier</td><td style={vItalic}>Field Collector</td></tr>
               </tbody>
             </table>
-          </div>
 
-          {/* PAGE 3 — Acknowledgement Receipt of Loan */}
-          <div ref={page3Ref} style={pageStyle}>
-            <div style={{ textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', marginTop: 32 }}>
               <div style={{ fontWeight: 700, fontSize: 18, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.address.toUpperCase()}</div>
               <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CEL NO: {branding.contact}</div>
