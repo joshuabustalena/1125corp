@@ -23,7 +23,25 @@ import { formatDate, formatTime, formatDuration, formatCurrency, exportToCSV } f
 import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle } from 'lucide-react';
+import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
+
+// Builds the YYYY-MM-DD string from local date parts — toISOString() would
+// convert to UTC first, which silently shifts the date by a day in any
+// timezone ahead of UTC (e.g. PH is UTC+8), breaking day-by-day navigation.
+function toDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function todayStr(): string {
+  return toDateStr(new Date());
+}
+
+function shiftDate(dateStr: string, days: number): string {
+  const [y, m, day] = dateStr.split('-').map(Number);
+  const d = new Date(y, m - 1, day);
+  d.setDate(d.getDate() + days);
+  return toDateStr(d);
+}
 
 type CameraMode = 'checkin' | 'checkout';
 
@@ -50,6 +68,7 @@ export default function AttendancePage() {
   const [branchFilter, setBranchFilter] = useState('all');
   const [positionFilter, setPositionFilter] = useState('all');
   const [employeeStatusFilter, setEmployeeStatusFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState(todayStr());
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraMode, setCameraMode] = useState<CameraMode>('checkin');
@@ -101,7 +120,7 @@ export default function AttendancePage() {
       setBranchEmployeeIds((data ?? []).map(e => e.id));
     });
   }, [isBranchManager, profile?.branch_id]);
-  useEffect(() => { if (profile) load(); }, [filterEmployee, branchFilter, positionFilter, employeeStatusFilter, search, profile, myEmployeeId, branchEmployeeIds]);
+  useEffect(() => { if (profile) load(); }, [filterEmployee, branchFilter, positionFilter, employeeStatusFilter, search, dateFilter, profile, myEmployeeId, branchEmployeeIds]);
   useEffect(() => () => stopStream(), []);
 
   async function loadEmployees() {
@@ -142,7 +161,7 @@ export default function AttendancePage() {
   async function load() {
     const seq = ++loadSeq.current;
     setLoading(true);
-    let query = supabase.from('attendance').select('*, employees(first_name, last_name, profile_id)').order('date', { ascending: false });
+    let query = supabase.from('attendance').select('*, employees(first_name, last_name, profile_id)').eq('date', dateFilter).order('date', { ascending: false });
     if (isBranchManager) {
       const ids = branchEmployeeIds ?? [];
       query = query.in('employee_id', ids.length > 0 ? ids : ['00000000-0000-0000-0000-000000000000']);
@@ -154,7 +173,7 @@ export default function AttendancePage() {
       const ids = filteredEmployeeIds();
       if (ids) query = query.in('employee_id', ids.length > 0 ? ids : ['00000000-0000-0000-0000-000000000000']);
     }
-    const { data } = await query.limit(50);
+    const { data } = await query.limit(200);
     if (seq !== loadSeq.current) return; // a newer load() already started — discard this stale response
     setRecords(data ?? []);
     setLoading(false);
@@ -491,6 +510,32 @@ export default function AttendancePage() {
             <Button onClick={() => openCamera('checkin')} disabled={!selectedEmployee} className="h-10">
               <Camera className="w-4 h-4 mr-2" />
               Camera Check-In
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Date navigator — defaults to today, can step back to previous days */}
+      <Card className="glass-card border-border">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-center sm:justify-between gap-3 flex-wrap">
+            <Button variant="outline" size="icon" onClick={() => setDateFilter(d => shiftDate(d, -1))} title="Previous day">
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <div className="flex items-center gap-2">
+              <CalendarDays className="w-4 h-4 text-muted-foreground" />
+              <Input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="w-auto"
+              />
+              {dateFilter !== todayStr() && (
+                <Button variant="outline" size="sm" onClick={() => setDateFilter(todayStr())}>Today</Button>
+              )}
+            </div>
+            <Button variant="outline" size="icon" onClick={() => setDateFilter(d => shiftDate(d, 1))} disabled={dateFilter >= todayStr()} title="Next day">
+              <ChevronRight className="w-4 h-4" />
             </Button>
           </div>
         </CardContent>
