@@ -150,7 +150,10 @@ export default function CustomersPage() {
       query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,phone.ilike.%${search}%`);
     }
     if (isCollector) {
-      query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
+      // Field Collector sees every customer in their assigned area, not just
+      // the ones explicitly linked to their own collector_id — an area can
+      // have more than one collector working it.
+      query = query.eq('area_id', myCollector?.area_id ?? '00000000-0000-0000-0000-000000000000');
     } else if (!isAdmin) {
       query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     } else if (branchFilter !== 'all') {

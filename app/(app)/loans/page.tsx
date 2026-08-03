@@ -164,7 +164,10 @@ export default function LoansPage() {
     let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('first_name');
     let areaQuery = supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
     if (isCollector && myCollector) {
-      customerQuery = customerQuery.eq('collector_id', myCollector.id);
+      // Same area-based scope as /customers — any customer in the collector's
+      // assigned area is selectable here, not just ones tied to their exact
+      // collector_id.
+      customerQuery = customerQuery.eq('area_id', myCollector.area_id ?? '00000000-0000-0000-0000-000000000000');
       areaQuery = areaQuery.eq('id', myCollector.area_id ?? '00000000-0000-0000-0000-000000000000');
     } else if (!isAdmin) {
       customerQuery = customerQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');

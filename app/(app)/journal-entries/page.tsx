@@ -27,11 +27,14 @@ type Line = { account_id: string; debit: string; credit: string; memo: string };
 export default function JournalEntriesPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
   const [accounts, setAccounts] = useState<any[]>([]);
   const [entries, setEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [entryForm, setEntryForm] = useState({ entry_date: new Date().toISOString().split('T')[0], reference: '', description: '' });
   const [lines, setLines] = useState<Line[]>([
     { account_id: '', debit: '', credit: '', memo: '' },
@@ -119,6 +122,20 @@ export default function JournalEntriesPage() {
     setSaving(false);
   }
 
+  async function handleDeleteEntry() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const { error } = await supabase.from('journal_entries').delete().eq('id', deleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Deleted', description: `Journal entry ${deleteTarget.entry_number} removed` });
+      setDeleteTarget(null);
+      load();
+    }
+    setDeleting(false);
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="Journal Entries" description="Record and review manual and system-generated journal entries">
@@ -148,7 +165,14 @@ export default function JournalEntriesPage() {
                       <span className="text-xs text-muted-foreground ml-2">{formatDate(entry.entry_date)}</span>
                       <Badge variant="outline" className="ml-2 capitalize">{entry.source}</Badge>
                     </div>
-                    {entry.reference && <span className="text-xs text-muted-foreground">Ref: {entry.reference}</span>}
+                    <div className="flex items-center gap-2">
+                      {entry.reference && <span className="text-xs text-muted-foreground">Ref: {entry.reference}</span>}
+                      {isAdmin && (
+                        <Button variant="ghost" size="icon" title="Delete" onClick={() => setDeleteTarget(entry)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <Table>
                     <TableBody>
@@ -238,6 +262,25 @@ export default function JournalEntriesPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Journal Entry</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete entry {deleteTarget?.entry_number}? This will remove all its lines too and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteEntry} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
