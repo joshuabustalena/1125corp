@@ -29,6 +29,7 @@ export const PAGE_PERMISSIONS: Record<string, string | null> = {
   '/chart-of-accounts': 'general_ledger',
   '/shareholders': 'general_ledger',
   '/cash-count': 'cash_count',
+  '/collection-list': 'collection_list',
   '/gas-voucher': 'gas_voucher',
   '/cash-vouchers': 'cash_vouchers',
   '/remittance': 'remittance',

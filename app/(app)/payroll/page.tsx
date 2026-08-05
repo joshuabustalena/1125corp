@@ -813,13 +813,12 @@ export default function PayrollPage() {
                 <td style={{ ...pvCell, height: 26 }}>&nbsp;</td>
               </tr>
             ))}
-            <tr>
-              <td colSpan={2} style={{ border: 'none', textAlign: 'right', fontWeight: 700, paddingTop: 10 }}>Grand Total:</td>
-              <td style={{ border: 'none', textAlign: 'center', fontWeight: 700, paddingTop: 10 }}>{printedThirteenthTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
-              <td style={{ border: 'none' }} />
-            </tr>
           </tbody>
         </table>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 24, fontWeight: 700, fontSize: 13, paddingTop: 10 }}>
+          <span>Grand Total:</span>
+          <span style={{ minWidth: 90, textAlign: 'right' }}>{printedThirteenthTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+        </div>
 
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginTop: 36 }}>
           <tbody>
@@ -1007,13 +1006,12 @@ export default function PayrollPage() {
                 <td style={{ ...pvCell, height: 26 }}>&nbsp;</td>
               </tr>
             ))}
-            <tr>
-              <td colSpan={2} style={{ border: 'none', textAlign: 'right', fontWeight: 700, paddingTop: 10 }}>Grand Total:</td>
-              <td style={{ border: 'none', textAlign: 'center', fontWeight: 700, paddingTop: 10 }}>{printedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
-              <td style={{ border: 'none' }} />
-            </tr>
           </tbody>
         </table>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 24, fontWeight: 700, fontSize: 13, paddingTop: 10 }}>
+          <span>Grand Total:</span>
+          <span style={{ minWidth: 90, textAlign: 'right' }}>{printedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+        </div>
 
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginTop: 36 }}>
           <tbody>

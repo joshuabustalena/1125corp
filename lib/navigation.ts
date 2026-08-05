@@ -25,6 +25,7 @@ import {
   Scale,
   Fuel,
   Wallet2,
+  ClipboardList,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -85,6 +86,7 @@ export const navSections: NavSection[] = [
       { label: 'Financial Statements', href: '/general-ledger', icon: Scale },
       { label: 'Shareholders', href: '/shareholders', icon: TrendingUp },
       { label: 'Cash Count', href: '/cash-count', icon: Banknote },
+      { label: 'Collection List', href: '/collection-list', icon: ClipboardList },
       { label: 'Gas Voucher', href: '/gas-voucher', icon: Fuel },
       { label: 'Cash Vouchers', href: '/cash-vouchers', icon: Wallet2 },
       { label: 'Remittance', href: '/remittance', icon: ArrowRightLeft },

@@ -48,6 +48,16 @@ function emptyDenomCounts(): DenomCounts {
   return counts;
 }
 
+// Builds from local date parts — toISOString() converts to UTC first,
+// which silently shifts the date by a day in any timezone ahead of UTC
+// (e.g. PH is UTC+8).
+function prevDateStr(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
 const dCell: React.CSSProperties = { border: '1px solid #000', padding: '4px 8px' };
 const dCellRight: React.CSSProperties = { ...dCell, textAlign: 'right' };
 const dCellCenter: React.CSSProperties = { ...dCell, textAlign: 'center' };
@@ -130,6 +140,8 @@ export default function CashCountPage() {
   const [totalExpenses, setTotalExpenses] = useState('');
   const [cashRelease, setCashRelease] = useState('');
   const [collectionRelease, setCollectionRelease] = useState('');
+  const [cashierOptions, setCashierOptions] = useState<{ id: string; full_name: string }[]>([]);
+  const [managerOptions, setManagerOptions] = useState<{ id: string; full_name: string }[]>([]);
   const [cashierName, setCashierName] = useState('');
   const [branchManagerName, setBranchManagerName] = useState('');
   const [notes, setNotes] = useState('');
@@ -140,7 +152,6 @@ export default function CashCountPage() {
     } else if (profile?.branch_id) {
       setBranchId(profile.branch_id);
     }
-    if (profile?.full_name) setCashierName(profile.full_name);
   }, [profile]);
 
   useEffect(() => {
@@ -175,6 +186,65 @@ export default function CashCountPage() {
     setExpected((rems ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0));
     setHistory(hist ?? []);
     setLoading(false);
+
+    loadLockedFields();
+    loadStaffNames();
+  }
+
+  // Beginning/Ending Cash Balance and Cash Release should not be manually
+  // typed — they're pulled straight from real records so the sheet can't
+  // drift from what actually happened. Note: the general ledger
+  // (journal_entries) has no branch_id column, so these Cash-on-Hand
+  // balances are company-wide, matching the same figure shown on the
+  // Accounting dashboard — not split per branch.
+  async function loadLockedFields() {
+    const { data: cashAccount } = await supabase.from('chart_of_accounts').select('id').eq('code', '1000').maybeSingle();
+    if (cashAccount) {
+      const { data: lines } = await supabase.from('journal_entry_lines').select('debit, credit, journal_entries(entry_date)').eq('account_id', cashAccount.id);
+      const prevDay = prevDateStr(date);
+      let beginning = 0, ending = 0;
+      for (const l of (lines ?? []) as any[]) {
+        const net = (Number(l.debit) || 0) - (Number(l.credit) || 0);
+        const entryDate = l.journal_entries?.entry_date;
+        if (entryDate <= prevDay) beginning += net;
+        if (entryDate <= date) ending += net;
+      }
+      setBeginningBalance(String(beginning));
+      setEndingBalance(String(ending));
+    }
+
+    // Cash Release = total of this branch's loan release cash vouchers for
+    // the day (client's own words: "total ng cash voucher ng loan for the
+    // day"), joined through loans for the branch scope since cash_vouchers
+    // itself has no branch_id.
+    const { data: vouchers } = await supabase
+      .from('cash_vouchers')
+      .select('amount, loans!inner(branch_id)')
+      .eq('voucher_date', date)
+      .eq('loans.branch_id', branchId);
+    setCashRelease(String((vouchers ?? []).reduce((s: number, v: any) => s + Number(v.amount), 0)));
+  }
+
+  // Cashier/Branch Manager names are chosen from whoever holds that role at
+  // this branch — not typed — same as the Gas Voucher. A branch can have
+  // more than one Cashier, so this builds a pickable list rather than
+  // forcing a single match.
+  async function loadStaffNames() {
+    const { data: staff } = await supabase.from('profiles').select('id, full_name, roles(name)').eq('branch_id', branchId).eq('status', 'active');
+    const rows = (staff ?? []) as any[];
+    const branchCashiers = rows.filter(p => p.roles?.name === 'Cashier');
+    const branchManagers = rows.filter(p => p.roles?.name === 'Branch Manager');
+    setCashierOptions(branchCashiers);
+    setManagerOptions(branchManagers);
+    setCashierName(prev => {
+      if (branchCashiers.some(p => p.full_name === prev)) return prev;
+      const asSelf = branchCashiers.find(p => p.full_name === profile?.full_name);
+      return (asSelf ?? branchCashiers[0])?.full_name ?? '';
+    });
+    setBranchManagerName(prev => {
+      if (branchManagers.some(p => p.full_name === prev)) return prev;
+      return branchManagers[0]?.full_name ?? '';
+    });
   }
 
   const vaultTotal = denomTotal(vaultCounts);
@@ -339,14 +409,50 @@ export default function CashCountPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-2"><Label className="text-xs">Total Cash Collections for the Day (₱)</Label><Input type="number" value={totalCollections} onChange={(e) => setTotalCollections(e.target.value)} placeholder="0.00" /></div>
-                <div className="space-y-2"><Label className="text-xs">Beginning Cash Balance (₱)</Label><Input type="number" value={beginningBalance} onChange={(e) => setBeginningBalance(e.target.value)} placeholder="0.00" /></div>
-                <div className="space-y-2"><Label className="text-xs">Ending Cash Balance (₱)</Label><Input type="number" value={endingBalance} onChange={(e) => setEndingBalance(e.target.value)} placeholder="0.00" /></div>
+                {/* Locked/auto-computed from real records, not typed — see
+                    loadLockedFields(). Beginning/Ending are the ledger's
+                    Cash-on-Hand balance as of end of the previous day / this
+                    day; Cash Release is the day's loan cash vouchers total. */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Beginning Cash Balance (₱)</Label>
+                  <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(beginningBalance) || 0)}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Ending Cash Balance (₱)</Label>
+                  <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(endingBalance) || 0)}</p>
+                </div>
                 <div className="space-y-2"><Label className="text-xs">Release (₱)</Label><Input type="number" value={releaseAmount} onChange={(e) => setReleaseAmount(e.target.value)} placeholder="0.00" /></div>
                 <div className="space-y-2"><Label className="text-xs">Total Expenses for the Day (₱)</Label><Input type="number" value={totalExpenses} onChange={(e) => setTotalExpenses(e.target.value)} placeholder="0.00" /></div>
-                <div className="space-y-2"><Label className="text-xs">Cash Release (₱)</Label><Input type="number" value={cashRelease} onChange={(e) => setCashRelease(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Cash Release (₱)</Label>
+                  <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(cashRelease) || 0)}</p>
+                </div>
                 <div className="space-y-2"><Label className="text-xs">Collection Release (₱)</Label><Input type="number" value={collectionRelease} onChange={(e) => setCollectionRelease(e.target.value)} placeholder="0.00" /></div>
-                <div className="space-y-2"><Label className="text-xs">Cashier Name</Label><Input value={cashierName} onChange={(e) => setCashierName(e.target.value)} /></div>
-                <div className="space-y-2"><Label className="text-xs">Branch Manager Name</Label><Input value={branchManagerName} onChange={(e) => setBranchManagerName(e.target.value)} /></div>
+                {/* Chosen from whoever holds that role at this branch, not
+                    typed. A dropdown appears only when the branch has more
+                    than one Cashier/Branch Manager. */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Cashier Name</Label>
+                  {cashierOptions.length > 1 ? (
+                    <Select value={cashierName} onValueChange={setCashierName}>
+                      <SelectTrigger><SelectValue placeholder="Select cashier" /></SelectTrigger>
+                      <SelectContent>{cashierOptions.map(c => <SelectItem key={c.id} value={c.full_name}>{c.full_name}</SelectItem>)}</SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{cashierName || '—'}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Branch Manager Name</Label>
+                  {managerOptions.length > 1 ? (
+                    <Select value={branchManagerName} onValueChange={setBranchManagerName}>
+                      <SelectTrigger><SelectValue placeholder="Select branch manager" /></SelectTrigger>
+                      <SelectContent>{managerOptions.map(m => <SelectItem key={m.id} value={m.full_name}>{m.full_name}</SelectItem>)}</SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{branchManagerName || '—'}</p>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -435,7 +541,7 @@ export default function CashCountPage() {
           Portaled onto <body> so no ancestor layout affects the capture. */}
       {typeof document !== 'undefined' && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
-          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 36, fontFamily: 'Arial, sans-serif' }}>
+          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 36, fontFamily: '"Times New Roman", Calibri, serif' }}>
             <div style={{ textAlign: 'center', marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
               <div style={{ fontWeight: 700, fontSize: 12, color: '#1F4E79' }}>{branding.address}</div>

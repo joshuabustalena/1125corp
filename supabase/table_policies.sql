@@ -195,7 +195,7 @@ DROP POLICY IF EXISTS "loans_select" ON loans;
 CREATE POLICY "loans_select" ON loans FOR SELECT TO authenticated USING (true);
 DROP POLICY IF EXISTS "loans_insert" ON loans;
 CREATE POLICY "loans_insert" ON loans FOR INSERT TO authenticated
-  WITH CHECK (is_admin() OR current_role_name() IN ('Branch Field Collector', 'Branch Manager'));
+  WITH CHECK (is_admin() OR current_role_name() IN ('Branch Field Collector', 'Branch Manager', 'Cashier'));
 DROP POLICY IF EXISTS "loans_update" ON loans;
 CREATE POLICY "loans_update" ON loans FOR UPDATE TO authenticated
   USING (true)

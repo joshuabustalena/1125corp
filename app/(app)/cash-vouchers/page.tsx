@@ -23,7 +23,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatTime, numberToWordsPeso } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { postJournalEntry } from '@/lib/ledger';
-import { Wallet2, Plus, Trash2, Download, Loader2, Eye } from 'lucide-react';
+import { Wallet2, Plus, Trash2, Download, Loader2, Eye, Printer } from 'lucide-react';
 
 // Every journal entry that credits a Cash account (Cash on Hand a.k.a.
 // "Cash in Vault", or Cash in Bank) needs a voucher as proof of
@@ -56,6 +56,7 @@ export default function CashVouchersPage() {
 
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<any | null>(null);
   const [downloadingHistoryId, setDownloadingHistoryId] = useState<string | null>(null);
@@ -179,8 +180,9 @@ export default function CashVouchersPage() {
       const pxToPt = 0.75;
       const contentWidthPt = (canvas.width / 2) * pxToPt;
       const contentHeightPt = (canvas.height / 2) * pxToPt;
-      // 8.5" x 13" (Philippine "folio"/long bond paper), in points (72pt/in).
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
+      // 8.5" x 11" (US Letter) — this voucher is the exception to the
+      // 8.5x13 "folio" size every other document in the app uses.
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 792] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
       const imgWidth = usableWidth;
@@ -191,6 +193,36 @@ export default function CashVouchersPage() {
       toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the cash voucher PDF', variant: 'destructive' });
     }
     setDownloading(false);
+  }
+
+  async function handlePrint() {
+    if (!printRef.current) return;
+    setPrinting(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 900, windowWidth: 900 });
+      const dataUrl = canvas.toDataURL('image/png');
+      const printWindow = window.open('', '_blank', 'width=900,height=1000');
+      if (!printWindow) {
+        toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the cash voucher', variant: 'destructive' });
+        setPrinting(false);
+        return;
+      }
+      printWindow.document.write(`
+        <html>
+          <head><title>Cash Voucher ${voucherNumber}</title></head>
+          <body style="margin:0;padding:0;background:#fff;">
+            <img src="${dataUrl}" style="width:100%;display:block;" />
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      printWindow.onload = () => printWindow.print();
+      printWindow.onafterprint = () => printWindow.close();
+    } catch (err: any) {
+      toast({ title: 'Print failed', description: err?.message ?? 'Could not generate the cash voucher for printing', variant: 'destructive' });
+    }
+    setPrinting(false);
   }
 
   useEffect(() => {
@@ -393,6 +425,10 @@ export default function CashVouchersPage() {
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)} disabled={resolvedLines.length === 0}>
                 <Eye className="w-4 h-4 mr-2" />Preview
+              </Button>
+              <Button type="button" variant="outline" onClick={handlePrint} disabled={printing || resolvedLines.length === 0}>
+                {printing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Printer className="w-4 h-4 mr-2" />}
+                Print
               </Button>
               <Button type="button" variant="outline" onClick={() => handleDownloadPdf()} disabled={downloading || resolvedLines.length === 0}>
                 {downloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}

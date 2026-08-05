@@ -70,6 +70,7 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('all');
+  const [areaFilter, setAreaFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -118,7 +119,7 @@ export default function CustomersPage() {
     if (isCollector && !myCollector) return;
     loadCustomers();
     loadOptions();
-  }, [profile, myCollector, search, branchFilter, statusFilter, page]);
+  }, [profile, myCollector, search, branchFilter, areaFilter, statusFilter, page]);
 
   async function loadOptions() {
     let branchQuery = supabase.from('branches').select('id, name').eq('status', 'active');
@@ -159,9 +160,10 @@ export default function CustomersPage() {
     } else if (branchFilter !== 'all') {
       query = query.eq('branch_id', branchFilter);
     }
+    if (!isCollector && areaFilter !== 'all') query = query.eq('area_id', areaFilter);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
 
-    query = query.range((page - 1) * pageSize, page * pageSize - 1).order('created_at', { ascending: false });
+    query = query.range((page - 1) * pageSize, page * pageSize - 1).order('first_name', { ascending: true }).order('last_name', { ascending: true });
 
     const { data, count } = await query;
     setCustomers((data as any) ?? []);
@@ -582,7 +584,7 @@ export default function CustomersPage() {
               />
             </div>
             {isAdmin && (
-            <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setPage(1); }}>
+            <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); setPage(1); }}>
               <SelectTrigger className="w-full sm:w-48">
                 <SelectValue placeholder="All Branches" />
               </SelectTrigger>
@@ -591,6 +593,21 @@ export default function CustomersPage() {
                 {branches.map(b => (
                   <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+            )}
+            {!isCollector && (
+            <Select value={areaFilter} onValueChange={(v) => { setAreaFilter(v); setPage(1); }}>
+              <SelectTrigger className="w-full sm:w-48">
+                <SelectValue placeholder="All Areas" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Areas</SelectItem>
+                {areas
+                  .filter(a => branchFilter === 'all' || a.branch_id === branchFilter)
+                  .map(a => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
               </SelectContent>
             </Select>
             )}
