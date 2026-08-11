@@ -132,9 +132,15 @@ export default function CashVouchersPage() {
     setLoading(false);
   }
 
-  // The two Cash accounts are the credit side (chosen separately below) —
-  // they can't also be picked as one of the debit lines.
-  const debitableAccounts = accounts.filter(a => a.code !== '1000' && a.code !== '1010');
+  // Every cash-on-hand/in-bank account is a valid voucher source, except
+  // Petty Cash Fund — same rule as Remittance's Cash Account picker.
+  const cashAccounts = accounts.filter(a =>
+    a.name.toLowerCase().includes('cash') && !a.name.toLowerCase().includes('petty cash')
+  );
+  // Petty Cash Fund specifically is also off-limits on the debit
+  // ("Account - Description") side — every other account (including other
+  // cash accounts) is still selectable there.
+  const debitableAccounts = accounts.filter(a => !a.name.toLowerCase().includes('petty cash'));
 
   function addLine() {
     setLines(prev => [...prev, { account_code: '', amount: '' }]);
@@ -313,15 +319,15 @@ export default function CashVouchersPage() {
           <tbody>
             <tr>
               <td style={{ width: '11%', fontWeight: 700, padding: '2px 0' }}>Payee:</td>
-              <td style={{ borderBottom: '1px solid #000', padding: '2px 0' }}>{printedPayee}</td>
+              <td style={{ borderBottom: '1px solid #000', padding: '2px 0 6px' }}>{printedPayee}</td>
               <td style={{ width: '15%', fontWeight: 700, textAlign: 'right', paddingRight: 6 }}>Voucher Number:</td>
-              <td style={{ width: '16%', borderBottom: '1px solid #000', fontWeight: 700 }}>{printedVoucherNumber}</td>
+              <td style={{ width: '16%', borderBottom: '1px solid #000', fontWeight: 700, paddingBottom: 6 }}>{printedVoucherNumber}</td>
             </tr>
             <tr>
               <td style={{ fontWeight: 700, padding: '2px 0' }}>Particulars:</td>
-              <td style={{ borderBottom: '1px solid #000', padding: '2px 0' }}>{printedParticulars}</td>
+              <td style={{ borderBottom: '1px solid #000', padding: '2px 0 6px' }}>{printedParticulars}</td>
               <td style={{ fontWeight: 700, textAlign: 'right', paddingRight: 6 }}>Date:</td>
-              <td style={{ borderBottom: '1px solid #000' }}>{formatDate(printedDate)}</td>
+              <td style={{ borderBottom: '1px solid #000', paddingBottom: 6 }}>{formatDate(printedDate)}</td>
             </tr>
           </tbody>
         </table>
@@ -353,8 +359,8 @@ export default function CashVouchersPage() {
         <table style={{ width: '100%', fontSize: 12, marginTop: 40 }}>
           <tbody>
             <tr>
-              <td style={{ textAlign: 'center', textDecoration: 'underline', width: '50%' }}>{printedPreparedBy || ' '}</td>
-              <td style={{ textAlign: 'center', textDecoration: 'underline' }}>{printedApprovedBy || ' '}</td>
+              <td style={{ textAlign: 'center', width: '50%' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedPreparedBy || ' '}</span></td>
+              <td style={{ textAlign: 'center' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedApprovedBy || ' '}</span></td>
             </tr>
             <tr>
               <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 2 }}>Prepared By</td>
@@ -368,7 +374,7 @@ export default function CashVouchersPage() {
             <tr>
               <td style={{ fontWeight: 700, width: '65%' }}>Received from 1125 CREDIT COLLECTION SERVICES the sum of</td>
               <td style={{ fontWeight: 700 }}>Payee:</td>
-              <td style={{ borderBottom: '1px solid #000' }}>{printedPayee}</td>
+              <td style={{ borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedPayee}</td>
             </tr>
             <tr>
               <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 6 }}>** {numberToWordsPeso(printedTotal).toUpperCase()} **</td>
@@ -378,7 +384,7 @@ export default function CashVouchersPage() {
             <tr>
               <td style={{ fontStyle: 'italic', paddingTop: 6 }}>in Full / Partial Payment of the above mentioned account</td>
               <td style={{ fontWeight: 700, paddingTop: 6 }}>Date Received:</td>
-              <td style={{ borderBottom: '1px solid #000', paddingTop: 6 }}>{formatDate(printedDate)}</td>
+              <td style={{ borderBottom: '1px solid #000', paddingTop: 6, paddingBottom: 6 }}>{formatDate(printedDate)}</td>
             </tr>
           </tbody>
         </table>
@@ -418,10 +424,9 @@ export default function CashVouchersPage() {
             <div className="space-y-2">
               <Label>Cash Account *</Label>
               <Select value={cashAccountCode} onValueChange={setCashAccountCode}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Select cash account" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1000">Cash in Vault (Cash on Hand)</SelectItem>
-                  <SelectItem value="1010">Cash in Bank</SelectItem>
+                  {cashAccounts.map(a => <SelectItem key={a.id} value={a.code}>{a.code} — {a.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

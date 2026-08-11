@@ -335,7 +335,11 @@ export default function LoansPage() {
       service_fee: details.serviceFee,
       release_amount: adjustedReleaseAmount,
       total_payable: details.totalPayable,
-      remaining_balance: details.totalPayable,
+      // The first day's payment is pre-settled — it's already deducted from
+      // what's actually handed to the borrower (see adjustedReleaseAmount
+      // above) — so what the collector is left to collect going forward is
+      // the total less that first payment, not the full gross amount.
+      remaining_balance: Math.max(0, details.totalPayable - firstDayAmount),
       term_days: Number(form.term_days),
       daily_payment: regularDaily,
       collector_id: form.collector_id || null,
@@ -370,6 +374,11 @@ export default function LoansPage() {
     setReapplyingId(l.id);
     const newLoanNumber = generateLoanNumber();
     const releaseDate = new Date().toISOString().split('T')[0];
+    // Same first-payment deduction as a fresh application (see handleSubmit)
+    // — daily_payment if it was set, otherwise the term average.
+    const reapplyFirstPayment = (l as any).daily_payment > 0
+      ? Number((l as any).daily_payment)
+      : (l.term_days > 0 ? l.total_payable / l.term_days : 0);
     const { error } = await supabase.from('loans').insert({
       loan_number: newLoanNumber,
       customer_id: l.customer_id,
@@ -380,7 +389,7 @@ export default function LoansPage() {
       service_fee: l.service_fee,
       release_amount: l.release_amount,
       total_payable: l.total_payable,
-      remaining_balance: l.total_payable,
+      remaining_balance: Math.max(0, l.total_payable - reapplyFirstPayment),
       term_days: l.term_days,
       collector_id: l.collector_id,
       branch_id: l.branch_id,

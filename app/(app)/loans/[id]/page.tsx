@@ -324,6 +324,11 @@ export default function LoanDetailPage() {
     // figure (the new loan's own payment schedule) and does not reduce it.
     const offsetBalance = Number(loan.remaining_balance);
     const adjustedReleaseAmount = Math.max(0, details.releaseAmount - offsetBalance);
+    // Same first-payment deduction as a fresh application — the old loan's
+    // remaining balance rolling in as offset_balance settles THAT loan's
+    // ledger presence, it doesn't change what's left to collect on this
+    // new one.
+    const renewFirstPayment = regularDaily > 0 ? regularDaily : autoDaily;
 
     const { error } = await supabase.from('loans').insert({
       loan_number: newLoanNumber,
@@ -335,7 +340,7 @@ export default function LoanDetailPage() {
       service_fee: details.serviceFee,
       release_amount: adjustedReleaseAmount,
       total_payable: details.totalPayable,
-      remaining_balance: details.totalPayable,
+      remaining_balance: Math.max(0, details.totalPayable - renewFirstPayment),
       term_days: Number(renewForm.term_days),
       daily_payment: regularDaily,
       collector_id: loan.collector_id,
@@ -362,6 +367,10 @@ export default function LoanDetailPage() {
     setReapplying(true);
     const newLoanNumber = `LN-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
     const releaseDate = new Date().toISOString().split('T')[0];
+    // Same first-payment deduction as a fresh application.
+    const reapplyFirstPayment = Number(loan.daily_payment) > 0
+      ? Number(loan.daily_payment)
+      : (loan.term_days > 0 ? loan.total_payable / loan.term_days : 0);
     const { data, error } = await supabase.from('loans').insert({
       loan_number: newLoanNumber,
       customer_id: loan.customer_id,
@@ -372,7 +381,7 @@ export default function LoanDetailPage() {
       service_fee: loan.service_fee,
       release_amount: loan.release_amount,
       total_payable: loan.total_payable,
-      remaining_balance: loan.total_payable,
+      remaining_balance: Math.max(0, loan.total_payable - reapplyFirstPayment),
       term_days: loan.term_days,
       daily_payment: loan.daily_payment ?? null,
       collector_id: loan.collector_id,
