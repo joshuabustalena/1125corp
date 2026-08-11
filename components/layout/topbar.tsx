@@ -6,7 +6,9 @@ import { useTheme } from '@/lib/theme-context';
 import { hasPermission } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
+import { getPushSubscriptionState, subscribeToPush, unsubscribeFromPush } from '@/lib/push';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { useInstallPrompt } from '@/hooks/use-install-prompt';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -23,6 +25,8 @@ import {
   Settings as SettingsIcon,
   ChevronDown,
   Download,
+  Loader2,
+  X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -79,10 +83,47 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   }
   const [notifications, setNotifications] = useState<any[]>([]);
   const notifCount = notifications.filter(n => !n.read_at).length;
+  const [pushState, setPushState] = useState<'unsupported' | 'denied' | 'subscribed' | 'unsubscribed'>('unsubscribed');
+  const [pushBusy, setPushBusy] = useState(false);
+
+  useEffect(() => { getPushSubscriptionState().then(setPushState); }, []);
+
+  async function handleTogglePush() {
+    if (!profile || pushBusy) return;
+    setPushBusy(true);
+    if (pushState === 'subscribed') {
+      await unsubscribeFromPush();
+      toast({ title: 'Push notifications turned off' });
+    } else {
+      const ok = await subscribeToPush(profile.id);
+      toast(ok
+        ? { title: 'Push notifications enabled', description: 'You’ll get notified on this device even when the app is closed.' }
+        : { title: 'Could not enable push notifications', description: 'Check your browser notification permission and try again.', variant: 'destructive' });
+    }
+    setPushState(await getPushSubscriptionState());
+    setPushBusy(false);
+  }
 
   useEffect(() => {
     if (!profile) return;
     loadNotifications();
+  }, [profile]);
+
+  // Realtime — re-runs the same scoped fetch above the instant any
+  // notification row is inserted, so the bell badge/list update live
+  // instead of only on a page refresh. Re-fetching (rather than trying to
+  // patch the new row into state directly) keeps this in sync with
+  // loadNotifications' own role/branch filtering logic instead of
+  // duplicating it here.
+  useEffect(() => {
+    if (!profile) return;
+    const channel = supabase
+      .channel('topbar-notifications')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, () => {
+        loadNotifications();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
   }, [profile]);
 
   async function loadNotifications() {
@@ -106,6 +147,15 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
       n.recipient_id === profile?.id || !n.branch_id || n.branch_id === profile?.branch_id
     );
     setNotifications(scoped.slice(0, 10));
+  }
+
+  async function handleDeleteNotification(e: React.MouseEvent, id: string) {
+    // Stop this from also triggering the DropdownMenuItem's own select
+    // (which would close the whole panel) or its click-through navigation.
+    e.preventDefault();
+    e.stopPropagation();
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    await supabase.from('notifications').delete().eq('id', id);
   }
 
   async function handleOpenChange(open: boolean) {
@@ -161,13 +211,30 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-80">
-            <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+            <div className="flex items-center justify-between px-2 py-1.5">
+              <DropdownMenuLabel className="p-0">Notifications</DropdownMenuLabel>
+              {pushState !== 'unsupported' && pushState !== 'denied' && (
+                <div className="flex items-center gap-2" title={pushState === 'subscribed' ? 'Turn off push notifications on this device' : 'Enable push notifications on this device'}>
+                  {pushBusy ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Push</span>
+                  )}
+                  <Switch
+                    checked={pushState === 'subscribed'}
+                    onCheckedChange={handleTogglePush}
+                    disabled={pushBusy}
+                    className="data-[state=checked]:bg-blue-600"
+                  />
+                </div>
+              )}
+            </div>
             <DropdownMenuSeparator />
             {notifications.length === 0 ? (
               <p className="px-2 py-6 text-center text-sm text-muted-foreground">No notifications</p>
             ) : (
               notifications.map(n => (
-                <DropdownMenuItem key={n.id} className="flex items-start gap-2">
+                <DropdownMenuItem key={n.id} className="flex items-start gap-2 group">
                   {typeIcon(n.type)}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
@@ -177,6 +244,14 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
                     <span className="text-xs text-muted-foreground line-clamp-2">{n.message ?? '—'}</span>
                     <span className="text-[10px] text-muted-foreground/70">{timeAgo(n.created_at)}</span>
                   </div>
+                  <button
+                    type="button"
+                    title="Delete"
+                    className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-secondary transition-opacity"
+                    onClick={(e) => handleDeleteNotification(e, n.id)}
+                  >
+                    <X className="w-3.5 h-3.5 text-muted-foreground" />
+                  </button>
                 </DropdownMenuItem>
               ))
             )}

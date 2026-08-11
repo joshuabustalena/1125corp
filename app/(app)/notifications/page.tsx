@@ -8,13 +8,16 @@ import { Badge } from '@/components/ui/badge';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from '@/components/ui/dialog';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDateTime } from '@/lib/format';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 import { getPushSubscriptionState, subscribeToPush, unsubscribeFromPush } from '@/lib/push';
 import { useToast } from '@/hooks/use-toast';
-import { Bell, BellOff, BellRing, Loader2, Mail, MessageSquare, Send } from 'lucide-react';
+import { Bell, BellOff, BellRing, Loader2, Mail, MessageSquare, Send, Trash2 } from 'lucide-react';
 
 function roleToRecipientType(roleName: string | null | undefined): string | null {
   if (!roleName) return null;
@@ -28,6 +31,9 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(true);
   const [pushState, setPushState] = useState<'unsupported' | 'denied' | 'subscribed' | 'unsubscribed'>('unsubscribed');
   const [pushBusy, setPushBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => { if (profile) load(); }, [profile]);
   useEffect(() => { getPushSubscriptionState().then(setPushState); }, []);
@@ -80,6 +86,35 @@ export default function NotificationsPage() {
     setLoading(false);
   }
 
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const { error } = await supabase.from('notifications').delete().eq('id', deleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      setNotifications(prev => prev.filter(n => n.id !== deleteTarget.id));
+      toast({ title: 'Notification deleted' });
+    }
+    setDeleteTarget(null);
+    setDeleting(false);
+  }
+
+  async function handleDeleteAll() {
+    if (notifications.length === 0) return;
+    setDeleting(true);
+    const ids = notifications.map(n => n.id);
+    const { error } = await supabase.from('notifications').delete().in('id', ids);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      setNotifications([]);
+      toast({ title: `${ids.length} notification${ids.length === 1 ? '' : 's'} deleted` });
+    }
+    setDeleteAllOpen(false);
+    setDeleting(false);
+  }
+
   const typeIcon = (type: string) => {
     switch (type) {
       case 'upcoming_due': return <Bell className="w-4 h-4 text-warning" />;
@@ -114,6 +149,11 @@ export default function NotificationsPage() {
           </Button>
         )}
         <Button size="sm" variant="outline"><Send className="w-4 h-4 mr-2" />Send Notification</Button>
+        {notifications.length > 0 && (
+          <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteAllOpen(true)}>
+            <Trash2 className="w-4 h-4 mr-2" />Delete All
+          </Button>
+        )}
       </PageHeader>
 
       <Card className="glass-card border-border">
@@ -143,6 +183,11 @@ export default function NotificationsPage() {
                     <span>{n.recipient_name ?? '—'}</span>
                     <span className="flex items-center gap-1">{channelIcon(n.channel)}{n.channel} · {formatDateTime(n.sent_at ?? n.created_at)}</span>
                   </div>
+                  <div className="mt-2 flex justify-end">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteTarget(n)}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -156,6 +201,7 @@ export default function NotificationsPage() {
                   <TableHead>Channel</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Sent</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -167,6 +213,11 @@ export default function NotificationsPage() {
                     <TableCell><div className="flex items-center gap-1 text-sm">{channelIcon(n.channel)}{n.channel}</div></TableCell>
                     <TableCell><Badge variant={n.status === 'sent' ? 'default' : n.status === 'failed' ? 'destructive' : 'secondary'}>{n.status}</Badge></TableCell>
                     <TableCell className="text-sm">{formatDateTime(n.sent_at ?? n.created_at)}</TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="icon" title="Delete" onClick={() => setDeleteTarget(n)}>
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -175,6 +226,40 @@ export default function NotificationsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Delete one */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Notification</DialogTitle>
+            <DialogDescription>Are you sure you want to delete this notification? This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete all */}
+      <Dialog open={deleteAllOpen} onOpenChange={setDeleteAllOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete All Notifications</DialogTitle>
+            <DialogDescription>Are you sure you want to delete all {notifications.length} notification{notifications.length === 1 ? '' : 's'} shown here? This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteAllOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteAll} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete All
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

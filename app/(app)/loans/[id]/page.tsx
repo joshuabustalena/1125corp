@@ -628,6 +628,15 @@ export default function LoanDetailPage() {
     });
 
     toast({ title: 'Loan disbursed', description: `${loan.loan_number} is now active.` });
+    // Disbursement had no notification at all before this — Approve/Decline
+    // both already announce themselves, this was the missing third leg.
+    const disbursedCustomerName = `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim();
+    notifyRoles(['branch_manager', 'administrator'], {
+      type: 'loan_disbursed',
+      title: 'Loan Disbursed',
+      message: `Loan ${loan.loan_number} for ${disbursedCustomerName} was disbursed and is now active.`,
+      url: `/loans/${loan.id}`,
+    }, loan.branch_id);
     // A missing account code means a real peso amount silently never made
     // it into the ledger — surface that immediately instead of leaving an
     // incomplete-looking journal entry for someone to notice later.

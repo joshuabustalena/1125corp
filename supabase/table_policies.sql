@@ -489,7 +489,7 @@ CREATE POLICY "notif_insert" ON notifications FOR INSERT TO authenticated WITH C
 DROP POLICY IF EXISTS "notif_update" ON notifications;
 CREATE POLICY "notif_update" ON notifications FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 DROP POLICY IF EXISTS "notif_delete" ON notifications;
-CREATE POLICY "notif_delete" ON notifications FOR DELETE TO authenticated USING (is_admin());
+CREATE POLICY "notif_delete" ON notifications FOR DELETE TO authenticated USING (true);
 
 -- SETTINGS
 DROP POLICY IF EXISTS "settings_select" ON settings;
