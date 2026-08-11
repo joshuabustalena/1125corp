@@ -20,7 +20,6 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatTime, generateORNumber, exportToCSV } from '@/lib/format';
-import { postJournalEntry } from '@/lib/ledger';
 import { connectThermalPrinter, buildPaymentReceiptLines, buildReceiptBytes, writeToPrinter } from '@/lib/thermal-printer';
 import {
   Wallet, Plus, Search, Download, Loader2, MapPin, Receipt, Calculator, Bluetooth, Pencil, Trash2,
@@ -446,22 +445,11 @@ export default function PaymentsPage() {
       status: newBalance === 0 ? 'paid' : selectedLoan?.status,
     }).eq('id', form.loan_id);
 
-    // Auto-post to the general ledger. Simplified: the whole payment reduces
-    // the receivable — the split into principal/interest/penalty isn't
-    // tracked at post time yet (those columns are always inserted as 0
-    // above), so this doesn't separately credit Interest/Penalty Income.
-    postJournalEntry({
-      entryDate: paymentDate,
-      description: `Payment received — ${selectedLoan?.loan_number ?? ''} (OR ${orNumber})`,
-      reference: orNumber,
-      source: 'payment',
-      sourceId: receipt.id,
-      createdBy: profile?.id ?? null,
-      lines: [
-        { accountCode: '1000', debit: Number(form.amount_paid), memo: 'Cash collected' },
-        { accountCode: '1100', credit: Number(form.amount_paid), memo: 'Loans Receivable reduced' },
-      ],
-    });
+    // No journal entry here on purpose — the cash a collector receives in
+    // the field isn't in the company's vault/bank yet, so it isn't posted
+    // to the ledger until the Cashier actually records the Remittance
+    // (Debit the real cash account, Credit Loans Receivable happens there).
+    // Posting it again here would double-count it.
 
     toast({ title: 'Success', description: `Payment posted. OR: ${orNumber}` });
 

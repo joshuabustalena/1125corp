@@ -611,7 +611,7 @@ export default function LoanDetailPage() {
     const loansReceivableDebit = principal + interestAmount - firstPayment;
     const cashReleased = Math.max(0, principal - serviceFee - offsetBalance - firstPayment);
 
-    postJournalEntry({
+    const ledgerResult = await postJournalEntry({
       entryDate: now.split('T')[0],
       description: `Loan disbursement — ${loan.loan_number}`,
       reference: voucherNumber,
@@ -628,6 +628,16 @@ export default function LoanDetailPage() {
     });
 
     toast({ title: 'Loan disbursed', description: `${loan.loan_number} is now active.` });
+    // A missing account code means a real peso amount silently never made
+    // it into the ledger — surface that immediately instead of leaving an
+    // incomplete-looking journal entry for someone to notice later.
+    if (ledgerResult.missingCodes.length > 0) {
+      toast({
+        title: 'Ledger entry incomplete',
+        description: `Could not find account(s) ${ledgerResult.missingCodes.join(', ')} in the Chart of Accounts — those amounts were not posted. Check Chart of Accounts and re-post manually if needed.`,
+        variant: 'destructive',
+      });
+    }
     setDisbursing(false);
     router.push(`/loans/${loan.id}/voucher`);
   }

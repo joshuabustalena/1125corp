@@ -162,8 +162,8 @@ export default function LoanAgreementPage() {
       <span>{value}</span>
     </div>
   );
-  const dTable: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 };
-  const dCell: React.CSSProperties = { padding: '3px 7px' };
+  const dTable: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 10 };
+  const dCell: React.CSSProperties = { padding: '4px 8px' };
 
   async function handlePrint() {
     const refs = [page1Ref].filter(r => r.current);
@@ -245,7 +245,7 @@ export default function LoanAgreementPage() {
         <div className="bg-secondary/30 p-4 rounded-lg">
         <DocumentScaler width={900}>
         <div className="flex flex-col items-center gap-4">
-          <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '26px 36px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13, lineHeight: 1.36 }}>
+          <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '30px 40px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13.5, lineHeight: 1.45 }}>
             <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 8, marginBottom: 10 }}>
               <div style={{ fontWeight: 700, fontSize: 18, color: '#1F4E79' }}>{COMPANY_NAME}</div>
               <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
@@ -330,16 +330,16 @@ export default function LoanAgreementPage() {
             <p style={{ fontWeight: 700, marginTop: 10, marginBottom: 6 }}>The Borrower hereby represents, warrants, acknowledges, and agrees as follows:</p>
 
             {AGREEMENT_CLAUSES.map(c => (
-              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12, lineHeight: 1.34, marginBottom: 7 }}>
+              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.42, marginBottom: 9 }}>
                 <strong>{c.n}. {c.title}</strong> - {c.en}
               </p>
             ))}
 
-            <p style={{ textAlign: 'justify', fontSize: 12, lineHeight: 1.34, marginTop: 6, marginBottom: 14 }}>
+            <p style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.42, marginTop: 8, marginBottom: 18 }}>
               {AGREEMENT_CLOSING_PARAGRAPH}
             </p>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', textAlign: 'center', fontSize: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', textAlign: 'center', fontSize: 12.5 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{agreementData.branchManagerName || ' '}</div>
                 <div style={{ fontStyle: 'italic' }}>Branch Manager{agreementData.branchName ? ` - ${agreementData.branchName} Branch` : ''}</div>

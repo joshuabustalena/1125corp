@@ -199,15 +199,15 @@ export default function UndertakingPage() {
         <div className="bg-secondary/30 p-4 rounded-lg">
         <DocumentScaler width={900}>
         <div className="flex flex-col items-center gap-4">
-          <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '30px 38px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13, lineHeight: 1.4 }}>
-            <div style={{ textAlign: 'center', borderBottom: '3px solid #0B7A3D', paddingBottom: 10, marginBottom: 13 }}>
-              <div style={{ fontWeight: 700, fontSize: 18, color: '#1F4E79' }}>{COMPANY_NAME}</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>
+          <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '30px 38px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 14, lineHeight: 1.4 }}>
+            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 13 }}>
+              <div style={{ fontWeight: 700, fontSize: 19, color: '#1F4E79' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>
             </div>
 
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 16 }}>BORROWER'S UNDERTAKING</div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, marginBottom: 13 }}>(KASUNDUAN SA PAGKAKAUTANG BILANG BORROWER)</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17 }}>BORROWER'S UNDERTAKING</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, marginBottom: 13 }}>(KASUNDUAN SA PAGKAKAUTANG BILANG BORROWER)</div>
 
             <p style={{ textAlign: 'justify', marginBottom: 12, textIndent: 40 }}>
               I <span style={{ textDecoration: 'underline' }}>{undertakingData.borrowerName}</span> of legal age, residing at{' '}
@@ -215,16 +215,16 @@ export default function UndertakingPage() {
             </p>
 
             {UNDERTAKING_CLAUSES.map(c => (
-              <p key={c.n} style={{ textAlign: 'justify', fontSize: 11.5, lineHeight: 1.36, marginBottom: 7 }}>
+              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.36, marginBottom: 7 }}>
                 <strong>{c.n}. {c.title}</strong> - {c.en} <em style={{ color: '#333' }}>{c.tl}</em>
               </p>
             ))}
 
-            <p style={{ textAlign: 'justify', fontSize: 11.5, lineHeight: 1.36, marginTop: 8, marginBottom: 16 }}>
+            <p style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.36, marginTop: 8, marginBottom: 16 }}>
               I hereby authorize {COMPANY_NAME_DISPLAY} to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act of 2012.
             </p>
 
-            <p style={{ fontSize: 13, marginBottom: 20 }}>
+            <p style={{ fontSize: 14, marginBottom: 20 }}>
               IN WITNESS WHEREOF, I hereunto affix my signature this <span style={{ textDecoration: 'underline' }}>{formatLongDate(undertakingData.date)}</span>
             </p>
 

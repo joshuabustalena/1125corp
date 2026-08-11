@@ -26,45 +26,117 @@ function formatCompact(value: number): string {
 
 interface DashboardStats {
   totalCustomers: number;
+  newCustomersThisMonth: number;
   activeLoans: number;
   overdueLoans: number;
   overdueAmount: number;
   overdueRate: number;
   todayCollections: number;
+  yesterdayCollections: number;
   monthlyCollections: number;
+  lastMonthCollections: number;
   outstandingBalance: number;
   totalCash: number;
+  netCashFlowMonth: number;
+  paidLoans: number;
+  pendingLoans: number;
+  collectorsPresentToday: number;
+  collectorsTotal: number;
+  employeesPresentToday: number;
+  employeesTotal: number;
+  payrollThisMonth: number;
+}
+
+const emptyStats: DashboardStats = {
+  totalCustomers: 0,
+  newCustomersThisMonth: 0,
+  activeLoans: 0,
+  overdueLoans: 0,
+  overdueAmount: 0,
+  overdueRate: 0,
+  todayCollections: 0,
+  yesterdayCollections: 0,
+  monthlyCollections: 0,
+  lastMonthCollections: 0,
+  outstandingBalance: 0,
+  totalCash: 0,
+  netCashFlowMonth: 0,
+  paidLoans: 0,
+  pendingLoans: 0,
+  collectorsPresentToday: 0,
+  collectorsTotal: 0,
+  employeesPresentToday: 0,
+  employeesTotal: 0,
+  payrollThisMonth: 0,
+};
+
+function pctChange(current: number, previous: number): string | null {
+  if (previous <= 0) return null;
+  const pct = ((current - previous) / previous) * 100;
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(0)}%`;
+}
+
+function toDateStr(d: Date): string {
+  return d.toISOString().split('T')[0];
+}
+function daysAgo(n: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d;
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<DashboardStats>({
-    totalCustomers: 0,
-    activeLoans: 0,
-    overdueLoans: 0,
-    overdueAmount: 0,
-    overdueRate: 0,
-    todayCollections: 0,
-    monthlyCollections: 0,
-    outstandingBalance: 0,
-    totalCash: 0,
-  });
+  const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [recentPayments, setRecentPayments] = useState<any[]>([]);
   const [upcomingDues, setUpcomingDues] = useState<any[]>([]);
+  const [dailyData, setDailyData] = useState<{ name: string; collections: number; revenue: number }[]>([]);
+  const [loanStatusData, setLoanStatusData] = useState<{ name: string; value: number; color: string }[]>([]);
+  const [areaData, setAreaData] = useState<{ name: string; customers: number }[]>([]);
+  const [cashFlowData, setCashFlowData] = useState<{ name: string; inflow: number; outflow: number }[]>([]);
+  const [attendanceData, setAttendanceData] = useState<{ name: string; value: number; color: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     checkDueDateAlerts();
     async function load() {
-      const today = new Date().toISOString().split('T')[0];
-      const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+      const now = new Date();
+      const today = toDateStr(now);
+      const yesterday = toDateStr(daysAgo(1));
+      const monthStart = toDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
+      const lastMonthStart = toDateStr(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+      const lastMonthEnd = toDateStr(new Date(now.getFullYear(), now.getMonth(), 0));
+      const sevenDaysAgo = toDateStr(daysAgo(6));
+      const fourWeeksAgo = toDateStr(daysAgo(27));
 
-      const [customers, loans, paymentsToday, paymentsMonth, recentPays, upcoming] = await Promise.all([
+      const [
+        customers, newCustomers, loans, allLoanStatuses,
+        paymentsToday, paymentsYesterday, paymentsMonth, paymentsLastMonth,
+        recentPays, upcoming, paymentsWeek, journalWeek,
+        customersByArea, paymentsFourWeeks, disbursedFourWeeks, gasVouchersFourWeeks, cashVouchersFourWeeks,
+        attendanceMonth, employees, attendanceToday, payrollMonth,
+      ] = await Promise.all([
         supabase.from('customers').select('id', { count: 'exact', head: true }),
+        supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart),
         supabase.from('loans').select('id, remaining_balance, due_date').eq('status', 'active'),
+        supabase.from('loans').select('status'),
         supabase.from('payments').select('amount_paid').gte('payment_date', today),
+        supabase.from('payments').select('amount_paid').eq('payment_date', yesterday),
         supabase.from('payments').select('amount_paid').gte('payment_date', monthStart),
+        supabase.from('payments').select('amount_paid').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd),
         supabase.from('payments').select('*, customers(first_name, last_name), loans(loan_number)').order('created_at', { ascending: false }).limit(5),
         supabase.from('loans').select('*, customers(first_name, last_name)').eq('status', 'active').order('due_date', { ascending: true }).limit(5),
+        supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', sevenDaysAgo),
+        supabase.from('journal_entries').select('entry_date, journal_entry_lines(credit, chart_of_accounts(account_type))').gte('entry_date', sevenDaysAgo),
+        supabase.from('customers').select('area_id, areas(name)').eq('status', 'active'),
+        supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', fourWeeksAgo),
+        supabase.from('loans').select('release_amount, disbursed_at').not('disbursed_at', 'is', null).gte('disbursed_at', fourWeeksAgo),
+        supabase.from('gas_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo),
+        supabase.from('general_cash_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo),
+        supabase.from('attendance').select('status').gte('date', monthStart),
+        supabase.from('employees').select('id, position').eq('status', 'active'),
+        supabase.from('attendance').select('employee_id, employees(position)').eq('date', today),
+        supabase.from('payroll').select('net_pay').gte('pay_date', monthStart),
       ]);
 
       const activeLoans = loans.data ?? [];
@@ -76,64 +148,144 @@ export default function DashboardPage() {
       const overdueAmount = overdue.reduce((s, l) => s + Number(l.remaining_balance), 0);
       const overdueRate = outstandingBalance > 0 ? (overdueAmount / outstandingBalance) * 100 : 0;
 
+      const statusCounts = (allLoanStatuses.data ?? []).reduce((acc: Record<string, number>, l: any) => {
+        acc[l.status] = (acc[l.status] ?? 0) + 1;
+        return acc;
+      }, {});
+      const paidLoans = statusCounts['paid'] ?? 0;
+      const pendingLoans = statusCounts['pending'] ?? 0;
+
+      const monthlyCollections = (paymentsMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0);
+      const lastMonthCollections = (paymentsLastMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0);
+
+      const disbursedTotal = (disbursedFourWeeks.data ?? []).reduce((s, l: any) => s + Number(l.release_amount), 0);
+      const expensesTotal = [...(gasVouchersFourWeeks.data ?? []), ...(cashVouchersFourWeeks.data ?? [])]
+        .reduce((s: number, v: any) => s + Number(v.total_amount), 0);
+      const collectionsFourWeeksTotal = (paymentsFourWeeks.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0);
+      // "This month" net cash flow, for the Cash Flow stat card — reuses
+      // the same four-week collections figure since that window
+      // approximates a month; disbursements/expenses are the outflow side.
+      const netCashFlowMonth = collectionsFourWeeksTotal - disbursedTotal - expensesTotal;
+
+      const employeeRows = employees.data ?? [];
+      const collectorsTotal = employeeRows.filter((e: any) => e.position === 'Branch Field Collector').length;
+      const employeesTotal = employeeRows.length;
+      const presentTodayRows = attendanceToday.data ?? [];
+      const collectorsPresentToday = presentTodayRows.filter((a: any) => a.employees?.position === 'Branch Field Collector').length;
+      const employeesPresentToday = presentTodayRows.length;
+
+      const payrollThisMonth = (payrollMonth.data ?? []).reduce((s, p: any) => s + Number(p.net_pay), 0);
+
       setStats({
         totalCustomers: customers.count ?? 0,
+        newCustomersThisMonth: newCustomers.count ?? 0,
         activeLoans: activeLoans.length,
         overdueLoans: overdue.length,
         overdueAmount,
         overdueRate,
         todayCollections: (paymentsToday.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
-        monthlyCollections: (paymentsMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
+        yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
+        monthlyCollections,
+        lastMonthCollections,
         outstandingBalance,
-        totalCash: (paymentsMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
+        totalCash: monthlyCollections,
+        netCashFlowMonth,
+        paidLoans,
+        pendingLoans,
+        collectorsPresentToday,
+        collectorsTotal,
+        employeesPresentToday,
+        employeesTotal,
+        payrollThisMonth,
       });
 
       setRecentPayments(recentPays.data ?? []);
       setUpcomingDues((upcoming.data ?? []).filter(l => l.due_date));
+
+      // Daily Collections & Revenue — last 7 calendar days. Collections =
+      // actual cash received (payments); Revenue = ledger credits to
+      // revenue-type accounts (interest/service fee/etc income) that same
+      // day, so the two lines can genuinely diverge.
+      const dayLabels = Array.from({ length: 7 }, (_, i) => daysAgo(6 - i));
+      const paymentsByDay = new Map<string, number>();
+      for (const p of (paymentsWeek.data ?? [])) {
+        const key = p.payment_date;
+        paymentsByDay.set(key, (paymentsByDay.get(key) ?? 0) + Number(p.amount_paid));
+      }
+      const revenueByDay = new Map<string, number>();
+      for (const je of (journalWeek.data ?? []) as any[]) {
+        const revenueCredit = (je.journal_entry_lines ?? [])
+          .filter((l: any) => l.chart_of_accounts?.account_type === 'revenue')
+          .reduce((s: number, l: any) => s + Number(l.credit ?? 0), 0);
+        if (revenueCredit > 0) revenueByDay.set(je.entry_date, (revenueByDay.get(je.entry_date) ?? 0) + revenueCredit);
+      }
+      setDailyData(dayLabels.map(d => {
+        const key = toDateStr(d);
+        return {
+          name: d.toLocaleDateString('en-US', { weekday: 'short' }),
+          collections: paymentsByDay.get(key) ?? 0,
+          revenue: revenueByDay.get(key) ?? 0,
+        };
+      }));
+
+      setLoanStatusData([
+        { name: 'Active', value: Math.max(0, activeLoans.length - overdue.length), color: '#0B1F3A' },
+        { name: 'Overdue', value: overdue.length, color: '#EF4444' },
+        { name: 'Paid', value: paidLoans, color: '#16A34A' },
+        { name: 'Pending', value: pendingLoans, color: '#F97316' },
+      ]);
+
+      const areaCounts = new Map<string, number>();
+      for (const c of (customersByArea.data ?? []) as any[]) {
+        const name = c.areas?.name;
+        if (!name) continue;
+        areaCounts.set(name, (areaCounts.get(name) ?? 0) + 1);
+      }
+      setAreaData(
+        Array.from(areaCounts.entries())
+          .map(([name, customers]) => ({ name, customers }))
+          .sort((a, b) => b.customers - a.customers)
+          .slice(0, 6)
+      );
+
+      // Cash Flow — last 4 calendar weeks, oldest first. Inflow = collections;
+      // outflow = loan disbursements + gas/cash voucher expenses.
+      const weekBuckets = [0, 1, 2, 3].map(w => ({
+        start: daysAgo(27 - w * 7),
+        end: daysAgo(27 - w * 7 - 6),
+      }));
+      function inRange(dateStr: string, start: Date, end: Date): boolean {
+        const t = new Date(dateStr).getTime();
+        return t >= new Date(toDateStr(start)).getTime() && t <= new Date(toDateStr(end)).getTime();
+      }
+      setCashFlowData(weekBuckets.map((wk, i) => {
+        const inflow = (paymentsFourWeeks.data ?? [])
+          .filter((p: any) => inRange(p.payment_date, wk.start, wk.end))
+          .reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
+        const disbursed = (disbursedFourWeeks.data ?? [])
+          .filter((l: any) => inRange(l.disbursed_at, wk.start, wk.end))
+          .reduce((s: number, l: any) => s + Number(l.release_amount), 0);
+        const expenses = [...(gasVouchersFourWeeks.data ?? []), ...(cashVouchersFourWeeks.data ?? [])]
+          .filter((v: any) => inRange(v.voucher_date, wk.start, wk.end))
+          .reduce((s: number, v: any) => s + Number(v.total_amount), 0);
+        return { name: `Week ${i + 1}`, inflow, outflow: disbursed + expenses };
+      }));
+
+      const attendanceCounts = (attendanceMonth.data ?? []).reduce((acc: Record<string, number>, a: any) => {
+        acc[a.status] = (acc[a.status] ?? 0) + 1;
+        return acc;
+      }, {});
+      setAttendanceData([
+        { name: 'Present', value: attendanceCounts['present'] ?? 0, color: '#16A34A' },
+        { name: 'Late', value: attendanceCounts['late'] ?? 0, color: '#F97316' },
+        { name: 'Absent', value: attendanceCounts['absent'] ?? 0, color: '#EF4444' },
+        { name: 'Leave', value: attendanceCounts['leave'] ?? 0, color: '#3B82F6' },
+      ]);
+
       setLoading(false);
     }
     load();
   }, []);
-
-  const dailyData = [
-    { name: 'Mon', collections: 12500, revenue: 8200 },
-    { name: 'Tue', collections: 18000, revenue: 11500 },
-    { name: 'Wed', collections: 9500, revenue: 6800 },
-    { name: 'Thu', collections: 22000, revenue: 14200 },
-    { name: 'Fri', collections: 28500, revenue: 19000 },
-    { name: 'Sat', collections: 31000, revenue: 21500 },
-    { name: 'Sun', collections: 4500, revenue: 3200 },
-  ];
-
-  const loanStatusData = [
-    { name: 'Active', value: stats.activeLoans, color: '#0B1F3A' },
-    { name: 'Overdue', value: stats.overdueLoans, color: '#EF4444' },
-    { name: 'Paid', value: 45, color: '#16A34A' },
-    { name: 'Pending', value: 12, color: '#F97316' },
-  ];
-
-  const areaData = [
-    { name: 'Brgy. San Roque', customers: 42 },
-    { name: 'Brgy. Sta. Cruz', customers: 38 },
-    { name: 'Brgy. San Isidro', customers: 31 },
-    { name: 'Brgy. Concepcion', customers: 25 },
-    { name: 'Brgy. Mabini', customers: 19 },
-    { name: 'Brgy. Rizal', customers: 15 },
-  ];
-
-  const cashFlowData = [
-    { name: 'Week 1', inflow: 45000, outflow: 12000 },
-    { name: 'Week 2', inflow: 62000, outflow: 18000 },
-    { name: 'Week 3', inflow: 38000, outflow: 15000 },
-    { name: 'Week 4', inflow: 71000, outflow: 22000 },
-  ];
-
-  const attendanceData = [
-    { name: 'Present', value: 85, color: '#16A34A' },
-    { name: 'Late', value: 8, color: '#F97316' },
-    { name: 'Absent', value: 4, color: '#EF4444' },
-    { name: 'Leave', value: 3, color: '#3B82F6' },
-  ];
 
   if (loading) {
     return (
@@ -165,8 +317,7 @@ export default function DashboardPage() {
           title="Total Customers"
           value={stats.totalCustomers.toString()}
           icon={<Users className="w-5 h-5" />}
-          trend={{ value: '+12% this month', positive: true }}
-          subtitle="Registered borrowers"
+          subtitle={`${stats.newCustomersThisMonth} new this month`}
         />
         <StatCard
           title="Active Loans"
@@ -201,14 +352,18 @@ export default function DashboardPage() {
           value={formatCurrency(stats.todayCollections)}
           icon={<Wallet className="w-5 h-5" />}
           variant="success"
-          trend={{ value: '+8% vs yesterday', positive: true }}
+          {...(pctChange(stats.todayCollections, stats.yesterdayCollections)
+            ? { trend: { value: `${pctChange(stats.todayCollections, stats.yesterdayCollections)} vs yesterday`, positive: stats.todayCollections >= stats.yesterdayCollections } }
+            : {})}
         />
         <StatCard
           title="Monthly Collections"
           value={formatCurrency(stats.monthlyCollections)}
           icon={<TrendingUp className="w-5 h-5" />}
           variant="success"
-          trend={{ value: '+15% vs last month', positive: true }}
+          {...(pctChange(stats.monthlyCollections, stats.lastMonthCollections)
+            ? { trend: { value: `${pctChange(stats.monthlyCollections, stats.lastMonthCollections)} vs last month`, positive: stats.monthlyCollections >= stats.lastMonthCollections } }
+            : {})}
         />
         <StatCard
           title="Receivable"
@@ -226,19 +381,19 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Cash Flow"
-          value="+₱128,500"
+          value={`${stats.netCashFlowMonth >= 0 ? '+' : '-'}${formatCurrency(Math.abs(stats.netCashFlowMonth))}`}
           icon={<Activity className="w-5 h-5" />}
-          variant="success"
-          trend={{ value: 'Net positive', positive: true }}
-          subtitle="This month"
+          variant={stats.netCashFlowMonth >= 0 ? 'success' : 'danger'}
+          trend={{ value: stats.netCashFlowMonth >= 0 ? 'Net positive' : 'Net negative', positive: stats.netCashFlowMonth >= 0 }}
+          subtitle="Collections less disbursements/expenses, this month"
         />
       </div>
 
       {/* Secondary stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Collector Attendance" value="8/10" icon={<UserCheck className="w-5 h-5" />} variant="success" subtitle="Active today" />
-        <StatCard title="Employee Attendance" value="24/28" icon={<UserCheck className="w-5 h-5" />} variant="default" subtitle="Present today" />
-        <StatCard title="Payroll Summary" value="₱285,400" icon={<ScrollText className="w-5 h-5" />} variant="warning" subtitle="Current period" />
+        <StatCard title="Collector Attendance" value={`${stats.collectorsPresentToday}/${stats.collectorsTotal}`} icon={<UserCheck className="w-5 h-5" />} variant="success" subtitle="Active today" />
+        <StatCard title="Employee Attendance" value={`${stats.employeesPresentToday}/${stats.employeesTotal}`} icon={<UserCheck className="w-5 h-5" />} variant="default" subtitle="Present today" />
+        <StatCard title="Payroll Summary" value={formatCurrency(stats.payrollThisMonth)} icon={<ScrollText className="w-5 h-5" />} variant="warning" subtitle="This month" />
         <StatCard title="Upcoming Dues" value={upcomingDues.length.toString()} icon={<Calendar className="w-5 h-5" />} variant="warning" subtitle="Next 7 days" />
       </div>
 

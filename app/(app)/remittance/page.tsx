@@ -105,7 +105,13 @@ export default function RemittancePage() {
   // thing anyone (Cashier or Admin) picks here is which cash account(s)
   // it's going into (e.g. split between Cash on Hand and Cash in Bank if
   // part of it gets deposited).
-  const visibleAccounts = accounts.filter(a => a.code === '1000' || a.code === '1010');
+  // Every cash-on-hand/in-bank account is a valid remittance destination
+  // (per branch there can be a vault, a short/over, and several bank
+  // accounts) — the only one excluded is Petty Cash Fund, which isn't
+  // meant to receive collector remittances.
+  const visibleAccounts = accounts.filter(a =>
+    a.name.toLowerCase().includes('cash') && !a.name.toLowerCase().includes('petty cash')
+  );
 
   const totalDebit = lines.reduce((s, l) => s + Number(l.amount || 0), 0);
   // Every peso collected has to land in a cash account — the split can't

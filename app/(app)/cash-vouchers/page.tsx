@@ -53,6 +53,8 @@ export default function CashVouchersPage() {
   const [lines, setLines] = useState<CashVoucherLine[]>([{ account_code: '', amount: '' }]);
   const [preparedByName, setPreparedByName] = useState('');
   const [approvedByName, setApprovedByName] = useState('');
+  const [cashierOptions, setCashierOptions] = useState<{ id: string; full_name: string }[]>([]);
+  const [managerOptions, setManagerOptions] = useState<{ id: string; full_name: string }[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -73,6 +75,41 @@ export default function CashVouchersPage() {
     if (!isAdmin && profile?.branch_id) setBranchId(profile.branch_id);
     if (profile?.full_name) setPreparedByName(profile.full_name);
   }, [profile]);
+
+  useEffect(() => {
+    if (!branchId) return;
+    loadStaffOptions();
+  }, [branchId]);
+
+  // Approved By is chosen from whoever holds the Branch Manager role at the
+  // selected branch — not freely typed — same pattern as Gas Voucher and
+  // Cash Count. Prepared By works differently here: an Admin generating a
+  // voucher IS the one preparing it (they aren't a branch Cashier), so it's
+  // always just their own name, no picking; only when the logged-in user is
+  // the Cashier themselves does Prepared By pick from that branch's actual
+  // Cashiers (in case there's more than one).
+  async function loadStaffOptions() {
+    const { data: staff } = await supabase.from('profiles').select('id, full_name, roles(name)').eq('branch_id', branchId).eq('status', 'active');
+    const rows = (staff ?? []) as any[];
+    const branchCashiers = rows.filter(p => p.roles?.name === 'Cashier');
+    const branchManagers = rows.filter(p => p.roles?.name === 'Branch Manager');
+    setManagerOptions(branchManagers);
+    if (isAdmin) {
+      setCashierOptions([]);
+      setPreparedByName(profile?.full_name ?? '');
+    } else {
+      setCashierOptions(branchCashiers);
+      setPreparedByName(prev => {
+        if (branchCashiers.some(p => p.full_name === prev)) return prev;
+        const asSelf = branchCashiers.find(p => p.full_name === profile?.full_name);
+        return (asSelf ?? branchCashiers[0])?.full_name ?? profile?.full_name ?? '';
+      });
+    }
+    setApprovedByName(prev => {
+      if (branchManagers.some(p => p.full_name === prev)) return prev;
+      return branchManagers[0]?.full_name ?? '';
+    });
+  }
 
   async function loadAccounts() {
     const { data } = await supabase.from('chart_of_accounts').select('*').order('code');
@@ -316,12 +353,12 @@ export default function CashVouchersPage() {
         <table style={{ width: '100%', fontSize: 12, marginTop: 40 }}>
           <tbody>
             <tr>
-              <td style={{ textAlign: 'center', borderTop: '1px solid #000', paddingTop: 4, width: '50%' }}>{printedPreparedBy || ' '}</td>
-              <td style={{ textAlign: 'center', borderTop: '1px solid #000', paddingTop: 4 }}>{printedApprovedBy || ' '}</td>
+              <td style={{ textAlign: 'center', textDecoration: 'underline', width: '50%' }}>{printedPreparedBy || ' '}</td>
+              <td style={{ textAlign: 'center', textDecoration: 'underline' }}>{printedApprovedBy || ' '}</td>
             </tr>
             <tr>
-              <td style={{ textAlign: 'center', fontWeight: 700 }}>Prepared By</td>
-              <td style={{ textAlign: 'center', fontWeight: 700 }}>Approved By</td>
+              <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 2 }}>Prepared By</td>
+              <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 2 }}>Approved By</td>
             </tr>
           </tbody>
         </table>
@@ -416,8 +453,35 @@ export default function CashVouchersPage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2"><Label className="text-xs">Prepared By</Label><Input value={preparedByName} onChange={(e) => setPreparedByName(e.target.value)} /></div>
-            <div className="space-y-2"><Label className="text-xs">Approved By</Label><Input value={approvedByName} onChange={(e) => setApprovedByName(e.target.value)} /></div>
+            {/* Chosen from whoever holds the role at this branch, not typed
+                — a dropdown appears only once the branch has more than one
+                Cashier/Branch Manager. */}
+            <div className="space-y-2">
+              <Label className="text-xs">Prepared By</Label>
+              {isAdmin ? (
+                // An Admin generating this IS the one preparing it — always
+                // their own name, no Cashier list to pick from.
+                <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{preparedByName || '—'}</p>
+              ) : cashierOptions.length > 1 ? (
+                <Select value={preparedByName} onValueChange={setPreparedByName}>
+                  <SelectTrigger><SelectValue placeholder="Select cashier" /></SelectTrigger>
+                  <SelectContent>{cashierOptions.map(c => <SelectItem key={c.id} value={c.full_name}>{c.full_name}</SelectItem>)}</SelectContent>
+                </Select>
+              ) : (
+                <Input value={preparedByName} onChange={(e) => setPreparedByName(e.target.value)} />
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Approved By</Label>
+              {managerOptions.length > 1 ? (
+                <Select value={approvedByName} onValueChange={setApprovedByName}>
+                  <SelectTrigger><SelectValue placeholder="Select branch manager" /></SelectTrigger>
+                  <SelectContent>{managerOptions.map(m => <SelectItem key={m.id} value={m.full_name}>{m.full_name}</SelectItem>)}</SelectContent>
+                </Select>
+              ) : (
+                <Input value={approvedByName} onChange={(e) => setApprovedByName(e.target.value)} />
+              )}
+            </div>
           </div>
 
           <div className="flex items-center justify-between">
