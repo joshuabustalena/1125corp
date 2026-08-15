@@ -26,6 +26,7 @@ import {
   Fuel,
   Wallet2,
   ClipboardList,
+  MessageSquare,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -64,6 +65,7 @@ export const navSections: NavSection[] = [
       { label: 'Penalties', href: '/penalties', icon: AlertCircle },
       { label: 'Payment Reports', href: '/payment-reports', icon: Receipt },
       { label: 'Credit Limit Requests', href: '/credit-limit-requests', icon: TrendingUp },
+      { label: 'Broadcast SMS', href: '/broadcast-sms', icon: MessageSquare },
     ],
   },
   {

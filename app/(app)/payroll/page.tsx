@@ -512,8 +512,10 @@ export default function PayrollPage() {
       const sss = resolveDeduction('sss_deduction', 4.5, fullPeriodBasic);
       const philhealth = resolveDeduction('philhealth_deduction', 3.5, fullPeriodBasic);
       const pagIbig = resolveDeduction('pagibig_deduction', 2, fullPeriodBasic);
-      // Incentive stays tied to what was actually earned this period.
-      const incentive = basicSalary * 0.05;
+      // Incentive temporarily disabled per client request — kept at 0 until
+      // turned back on. Retention is 25% of the incentive, so it zeroes out
+      // along with it automatically.
+      const incentive = 0;
       const retention = incentive * 0.25;
       const loanDeduction = (activeLoans ?? [])
         .filter(l => l.employee_id === e.id)

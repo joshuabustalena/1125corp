@@ -15,6 +15,7 @@ export const PAGE_PERMISSIONS: Record<string, string | null> = {
   '/penalties': 'penalties',
   '/payment-reports': 'receipts',
   '/credit-limit-requests': 'credit_limit_requests',
+  '/broadcast-sms': 'broadcast_sms',
   '/employees': 'employees',
   '/collectors': 'collectors',
   '/payroll': 'payroll',

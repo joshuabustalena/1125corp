@@ -198,12 +198,13 @@ export default function EmployeeLoansPage() {
       return;
     }
 
-    // Maximum deduction per cutoff is amount / 12 — spreads repayment over
-    // at least 12 semi-monthly cutoffs (6 months) instead of paying it off
-    // in one or two large deductions.
-    const maxDeduction = Number(form.amount) / 12;
-    if (Number(form.deduction_amount) > maxDeduction) {
-      toast({ title: 'Error', description: `Maximum deduction per cutoff for this amount is ${formatCurrency(maxDeduction)} (loan amount ÷ 12)`, variant: 'destructive' });
+    // Minimum deduction per cutoff is amount / 12 — the standard 12
+    // semi-monthly cutoffs (6 months) pace. Same rule as a customer loan's
+    // daily payment: not allowed to go lower than the computed rate, but
+    // paying faster (a higher deduction) is fine.
+    const minDeduction = Number(form.amount) / 12;
+    if (Number(form.deduction_amount) < minDeduction) {
+      toast({ title: 'Error', description: `Minimum deduction per cutoff for this amount is ${formatCurrency(minDeduction)} (loan amount ÷ 12)`, variant: 'destructive' });
       setSaving(false);
       return;
     }
@@ -248,9 +249,9 @@ export default function EmployeeLoansPage() {
     e.preventDefault();
     if (!editTarget) return;
 
-    const maxDeduction = Number(editForm.amount) / 12;
-    if (Number(editForm.deduction_amount) > maxDeduction) {
-      toast({ title: 'Error', description: `Maximum deduction per cutoff for this amount is ${formatCurrency(maxDeduction)} (loan amount ÷ 12)`, variant: 'destructive' });
+    const minDeduction = Number(editForm.amount) / 12;
+    if (Number(editForm.deduction_amount) < minDeduction) {
+      toast({ title: 'Error', description: `Minimum deduction per cutoff for this amount is ${formatCurrency(minDeduction)} (loan amount ÷ 12)`, variant: 'destructive' });
       return;
     }
 
@@ -715,7 +716,7 @@ export default function EmployeeLoansPage() {
               <div className="space-y-2 col-span-2">
                 <Label>Deduction per Payroll (₱)</Label>
                 <Input type="number" value={form.deduction_amount} onChange={(e) => setForm({ ...form, deduction_amount: e.target.value })} placeholder="0.00" />
-                {form.amount && <p className="text-xs text-muted-foreground">Max {formatCurrency(Number(form.amount) / 12)} per cutoff (loan amount ÷ 12)</p>}
+                {form.amount && <p className="text-xs text-muted-foreground">Min {formatCurrency(Number(form.amount) / 12)} per cutoff (loan amount ÷ 12) — can be higher</p>}
               </div>
             </div>
 
@@ -856,7 +857,7 @@ export default function EmployeeLoansPage() {
               <div className="space-y-2">
                 <Label>Deduction per Payroll (₱)</Label>
                 <Input type="number" value={editForm.deduction_amount} onChange={(e) => setEditForm({ ...editForm, deduction_amount: e.target.value })} />
-                {editForm.amount && <p className="text-xs text-muted-foreground">Max {formatCurrency(Number(editForm.amount) / 12)} per cutoff</p>}
+                {editForm.amount && <p className="text-xs text-muted-foreground">Min {formatCurrency(Number(editForm.amount) / 12)} per cutoff — can be higher</p>}
               </div>
               <div className="space-y-2"><Label>Term (Months)</Label><Input type="number" value={editForm.term_months} onChange={(e) => setEditForm({ ...editForm, term_months: e.target.value })} /></div>
               <div className="space-y-2 col-span-2">
