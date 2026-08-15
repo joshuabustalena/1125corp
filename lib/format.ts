@@ -7,6 +7,19 @@ export function formatCurrency(amount: number | null | undefined): string {
   }).format(amount);
 }
 
+// "Last Name, First Name" — used on customer lists/dropdowns (Customers
+// page, Payments' Customer filter and loan picker) so they sort/scan the
+// way the client actually looks people up, alphabetically by surname.
+// Printed/formal documents (receipts, agreements, vouchers) keep the
+// natural "First Last" order — this is only for browsing UIs.
+export function formatCustomerName(firstName: string | null | undefined, lastName: string | null | undefined): string {
+  const first = (firstName ?? '').trim();
+  const last = (lastName ?? '').trim();
+  if (!last) return first;
+  if (!first) return last;
+  return `${last}, ${first}`;
+}
+
 export function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return '0';
   return new Intl.NumberFormat('en-PH').format(value);

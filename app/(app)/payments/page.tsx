@@ -19,7 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, formatTime, generateORNumber, exportToCSV } from '@/lib/format';
+import { formatCurrency, formatDate, formatTime, generateORNumber, exportToCSV, formatCustomerName } from '@/lib/format';
 import { connectThermalPrinter, buildPaymentReceiptLines, buildReceiptBytes, writeToPrinter } from '@/lib/thermal-printer';
 import {
   Wallet, Plus, Search, Download, Loader2, MapPin, Receipt, Calculator, Bluetooth, Pencil, Trash2,
@@ -380,7 +380,7 @@ export default function PaymentsPage() {
     new Map(
       loans
         .filter(l => l.customer_id)
-        .map(l => [l.customer_id, `${l.customers?.first_name} ${l.customers?.last_name}`])
+        .map(l => [l.customer_id, formatCustomerName(l.customers?.first_name, l.customers?.last_name)])
     ).entries()
   );
 
@@ -396,6 +396,24 @@ export default function PaymentsPage() {
     const paymentDate = form.payment_date || new Date().toISOString().split('T')[0];
     const now = new Date();
 
+    // Decrement the loan's balance atomically in the database, not from
+    // whatever remaining_balance happens to be sitting in this browser's
+    // local `loans` state (which only refreshed once when the page opened
+    // — if this collector, or anyone else, already posted a payment
+    // against this loan since then, that local number is stale). The RPC
+    // reads-and-writes as one row-locked operation, so the balance it
+    // returns is always correct regardless of how old the local state is.
+    const { data: rpcResult, error: rpcError } = await supabase
+      .rpc('apply_loan_payment', { p_loan_id: form.loan_id, p_amount: Number(form.amount_paid) })
+      .single();
+    if (rpcError || !rpcResult) {
+      toast({ title: 'Error', description: rpcError?.message ?? 'Could not update the loan balance', variant: 'destructive' });
+      setSaving(false);
+      return;
+    }
+    const balanceBeforePayment = Number((rpcResult as any).previous_balance);
+    const authoritativeNewBalance = Number((rpcResult as any).new_balance);
+
     // Create receipt first
     const { data: receipt, error: receiptError } = await supabase.from('receipts').insert({
       or_number: orNumber,
@@ -403,7 +421,7 @@ export default function PaymentsPage() {
       customer_id: selectedLoan?.customer_id ?? null,
       collector_id: selectedLoan?.collector_id ?? null,
       amount: Number(form.amount_paid),
-      remaining_balance: newBalance,
+      remaining_balance: authoritativeNewBalance,
       payment_date: paymentDate,
       qr_data: JSON.stringify({ or: orNumber, loan: selectedLoan?.loan_number, amount: form.amount_paid }),
     }).select().single();
@@ -424,7 +442,7 @@ export default function PaymentsPage() {
       principal: 0,
       interest: 0,
       penalty: 0,
-      remaining_balance: newBalance,
+      remaining_balance: authoritativeNewBalance,
       payment_date: paymentDate,
       payment_time: now.toTimeString().split(' ')[0],
       gps_lat: location?.lat ?? null,
@@ -438,12 +456,6 @@ export default function PaymentsPage() {
       setSaving(false);
       return;
     }
-
-    // Update loan balance
-    await supabase.from('loans').update({
-      remaining_balance: newBalance,
-      status: newBalance === 0 ? 'paid' : selectedLoan?.status,
-    }).eq('id', form.loan_id);
 
     // No journal entry here on purpose — the cash a collector receives in
     // the field isn't in the company's vault/bank yet, so it isn't posted
@@ -464,8 +476,8 @@ export default function PaymentsPage() {
     // days than the loan's own term once the loan is at or near payoff
     // (e.g. a final lump-sum payment reads as "98 days" on a 30-day loan).
     // Cap the days/credit math at the balance that existed before this
-    // payment, and treat anything beyond that as the loan being settled.
-    const balanceBeforePayment = selectedLoan ? Number(selectedLoan.remaining_balance) : 0;
+    // payment (from the RPC above, so it's the real figure, not a stale
+    // local one), and treat anything beyond that as the loan being settled.
     const appliedTowardSchedule = Math.min(amountPaidNum, balanceBeforePayment);
     const rawDaysCovered = dailyDue > 0 ? Math.floor((appliedTowardSchedule + 0.001) / dailyDue) : 0;
     // A lump-sum payment can be large enough that amount/dailyRate works out
@@ -476,7 +488,7 @@ export default function PaymentsPage() {
     const totalCollectionDays = selectedLoan ? countCollectionDays(selectedLoan.release_date, selectedLoan.due_date) : 0;
     const daysCovered = totalCollectionDays > 0 ? Math.min(rawDaysCovered, totalCollectionDays) : rawDaysCovered;
     const advanceCredit = dailyDue > 0 ? Math.max(0, Math.round((appliedTowardSchedule - daysCovered * dailyDue) * 100) / 100) : 0;
-    const isFullyPaid = newBalance <= 0.009;
+    const isFullyPaid = authoritativeNewBalance <= 0.009;
 
     setReceiptData({
       orNumber,
@@ -492,7 +504,7 @@ export default function PaymentsPage() {
       areaName: selectedLoan?.areas?.name ?? null,
       collectorName: selectedLoan?.collectors?.profiles?.full_name ?? null,
       amount: amountPaidNum,
-      remainingBalance: newBalance,
+      remainingBalance: authoritativeNewBalance,
       date: paymentDate,
       time: now.toTimeString().split(' ')[0],
       dailyDue,
@@ -505,6 +517,10 @@ export default function PaymentsPage() {
     setDialogOpen(false);
     setSaving(false);
     loadPayments();
+    // The database's balance is now correct either way (the RPC above is
+    // authoritative), but this also refreshes the local `loans` list so
+    // the next payment's live preview isn't showing a stale figure either.
+    loadLoans();
   }
 
   function handleExport() {
@@ -585,7 +601,7 @@ export default function PaymentsPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="font-medium text-sm truncate">{p.loans?.loan_number ?? '—'}</p>
-                    <p className="text-xs text-muted-foreground truncate">{p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—'}</p>
+                    <p className="text-xs text-muted-foreground truncate">{p.loans ? formatCustomerName(p.loans.customers?.first_name, p.loans.customers?.last_name) : '—'}</p>
                   </div>
                   <p className="text-sm font-medium text-success shrink-0">{formatCurrency(p.amount_paid)}</p>
                 </div>
@@ -655,7 +671,7 @@ export default function PaymentsPage() {
                 <TableRow key={p.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/payments/${p.loan_id}`)}>
                   <TableCell className="text-sm">{formatDate(p.payment_date)}</TableCell>
                   <TableCell className="font-medium text-sm">{p.loans?.loan_number ?? '—'}</TableCell>
-                  <TableCell className="text-sm">{p.loans ? `${p.loans.customers?.first_name} ${p.loans.customers?.last_name}` : '—'}</TableCell>
+                  <TableCell className="text-sm">{p.loans ? formatCustomerName(p.loans.customers?.first_name, p.loans.customers?.last_name) : '—'}</TableCell>
                   <TableCell className="text-sm">{p.collectors?.profiles?.full_name ?? '—'}</TableCell>
                   <TableCell className="text-sm font-medium text-success">{formatCurrency(p.amount_paid)}</TableCell>
                   <TableCell className="text-sm">{formatCurrency(p.remaining_balance)}</TableCell>
@@ -734,7 +750,7 @@ export default function PaymentsPage() {
                 <SelectContent>
                   {loans.map(l => (
                     <SelectItem key={l.id} value={l.id}>
-                      {l.loan_number} — {l.customers?.first_name} {l.customers?.last_name} (Bal: {formatCurrency(l.remaining_balance)})
+                      {l.loan_number} — {formatCustomerName(l.customers?.first_name, l.customers?.last_name)} (Bal: {formatCurrency(l.remaining_balance)})
                     </SelectItem>
                   ))}
                 </SelectContent>

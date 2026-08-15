@@ -20,7 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, getInitials, exportToCSV } from '@/lib/format';
+import { formatCurrency, getInitials, exportToCSV, formatCustomerName } from '@/lib/format';
 import {
   Users, Plus, Search, Download, Pencil, Trash2, Eye, Loader2, Phone, Mail, MapPin,
   CheckCircle2, Circle,
@@ -662,7 +662,7 @@ export default function CustomersPage() {
                           </AvatarFallback>
                         </Avatar>
                         <div className="min-w-0">
-                          <p className="font-medium text-sm truncate">{c.first_name} {c.last_name}</p>
+                          <p className="font-medium text-sm truncate">{formatCustomerName(c.first_name, c.last_name)}</p>
                           <p className="text-xs text-muted-foreground truncate">{c.barangay ?? '—'}</p>
                         </div>
                       </div>
@@ -720,7 +720,7 @@ export default function CustomersPage() {
                             </AvatarFallback>
                           </Avatar>
                           <div>
-                            <p className="font-medium text-sm">{c.first_name} {c.last_name}</p>
+                            <p className="font-medium text-sm">{formatCustomerName(c.first_name, c.last_name)}</p>
                             <p className="text-xs text-muted-foreground">{c.barangay ?? '—'}</p>
                           </div>
                         </div>

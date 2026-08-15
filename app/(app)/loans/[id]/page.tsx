@@ -323,12 +323,12 @@ export default function LoanDetailPage() {
     // released to the customer. Daily Payment is a separate, independent
     // figure (the new loan's own payment schedule) and does not reduce it.
     const offsetBalance = Number(loan.remaining_balance);
-    const adjustedReleaseAmount = Math.max(0, details.releaseAmount - offsetBalance);
-    // Same first-payment deduction as a fresh application — the old loan's
-    // remaining balance rolling in as offset_balance settles THAT loan's
-    // ledger presence, it doesn't change what's left to collect on this
-    // new one.
+    // Same first-payment deduction as a fresh application — the day-one
+    // collection is pre-settled out of what's actually handed over, same
+    // as any other loan; it's a separate deduction from the offset balance
+    // above, not folded into it.
     const renewFirstPayment = regularDaily > 0 ? regularDaily : autoDaily;
+    const adjustedReleaseAmount = Math.max(0, details.releaseAmount - offsetBalance - renewFirstPayment);
 
     const { error } = await supabase.from('loans').insert({
       loan_number: newLoanNumber,
@@ -585,7 +585,11 @@ export default function LoanDetailPage() {
     }
 
     if (loan.renewed_from_loan_id) {
-      await supabase.from('loans').update({ status: 'renewed' }).eq('id', loan.renewed_from_loan_id);
+      // The old loan's remaining balance was rolled into this new loan as
+      // its offset_balance — it isn't a separate outstanding debt anymore,
+      // so it must not keep showing (or counting toward Total Receivable)
+      // as if it were still owed on its own.
+      await supabase.from('loans').update({ status: 'renewed', remaining_balance: 0 }).eq('id', loan.renewed_from_loan_id);
     }
 
     const { error: voucherError } = await supabase.from('cash_vouchers').insert({

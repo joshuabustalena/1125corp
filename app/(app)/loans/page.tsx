@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exportToCSV } from '@/lib/format';
+import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exportToCSV, formatCustomerName } from '@/lib/format';
 import { notifyRoles } from '@/lib/notify';
 import {
   Landmark, Plus, Search, Download, Eye, Loader2, Calculator, RefreshCw,
@@ -194,7 +194,18 @@ export default function LoansPage() {
       .select('*, customers(first_name, last_name), collectors(profiles(full_name)), branches(name), areas(name), loan_types(name)', { count: 'exact' });
 
     if (search) {
-      query = query.or(`loan_number.ilike.%${search}%`);
+      // PostgREST's .or() can't filter on an embedded/joined table's
+      // columns directly, so a name search needs its own lookup first —
+      // resolve which customers match, then OR that in alongside the
+      // loan_number match.
+      const { data: matchedCustomers } = await supabase
+        .from('customers')
+        .select('id')
+        .or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%`);
+      const customerIds = (matchedCustomers ?? []).map((c: any) => c.id);
+      query = customerIds.length > 0
+        ? query.or(`loan_number.ilike.%${search}%,customer_id.in.(${customerIds.join(',')})`)
+        : query.or(`loan_number.ilike.%${search}%`);
     }
     if (isCollector) {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
@@ -507,6 +518,13 @@ export default function LoansPage() {
     }
   };
 
+  // Same "past due_date" rule the Dashboard/Reports/Collection List already
+  // use for Overdue Amount — the full remaining balance counts once the
+  // loan's due date has passed, not a partial daily-arrears figure.
+  function overdueAmount(l: Loan): number {
+    return l.due_date && new Date(l.due_date) < new Date() ? Number(l.remaining_balance) : 0;
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="Loan Management" description="Create and manage customer loans">
@@ -528,7 +546,7 @@ export default function LoansPage() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search by loan number..."
+              placeholder="Search by loan number or customer name..."
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               className="pl-10"
@@ -593,7 +611,7 @@ export default function LoansPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="font-medium text-sm truncate">{l.loan_number}</p>
-                        <p className="text-xs text-muted-foreground truncate">{l.customers?.first_name} {l.customers?.last_name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{formatCustomerName(l.customers?.first_name, l.customers?.last_name)}</p>
                       </div>
                       <Badge variant={statusVariant(l.status)} className="shrink-0">{l.status}</Badge>
                     </div>
@@ -602,6 +620,9 @@ export default function LoansPage() {
                       <div><p className="text-xs text-muted-foreground">Balance</p><p className="font-medium">{formatCurrency(l.remaining_balance)}</p></div>
                       <div><p className="text-xs text-muted-foreground">Due Date</p><p>{formatDate(l.due_date)}</p></div>
                       <div><p className="text-xs text-muted-foreground">Area</p><p className="truncate">{l.areas?.name ?? '—'}</p></div>
+                      {overdueAmount(l) > 0 && (
+                        <div className="col-span-2"><p className="text-xs text-muted-foreground">Overdue Amount</p><p className="font-medium text-destructive">{formatCurrency(overdueAmount(l))}</p></div>
+                      )}
                     </div>
                     <div className="mt-3 flex items-center justify-end gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
                       {l.status === 'declined' && !l.reapplied && profile?.role_name !== 'Cashier' && (
@@ -636,6 +657,7 @@ export default function LoansPage() {
                     <TableHead>Interest</TableHead>
                     <TableHead>Release</TableHead>
                     <TableHead>Balance</TableHead>
+                    <TableHead>Overdue Amount</TableHead>
                     <TableHead>Due Date</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Area</TableHead>
@@ -646,11 +668,12 @@ export default function LoansPage() {
                   {loans.map((l) => (
                     <TableRow key={l.id} className="cursor-pointer hover:bg-secondary/50" onClick={() => router.push(`/loans/${l.id}`)}>
                       <TableCell className="font-medium text-sm">{l.loan_number}</TableCell>
-                      <TableCell className="text-sm">{l.customers?.first_name} {l.customers?.last_name}</TableCell>
+                      <TableCell className="text-sm">{formatCustomerName(l.customers?.first_name, l.customers?.last_name)}</TableCell>
                       <TableCell className="text-sm">{formatCurrency(l.amount)}</TableCell>
                       <TableCell className="text-sm">{l.interest_rate}%</TableCell>
                       <TableCell className="text-sm">{formatCurrency(l.release_amount)}</TableCell>
                       <TableCell className="text-sm font-medium">{formatCurrency(l.remaining_balance)}</TableCell>
+                      <TableCell className="text-sm">{overdueAmount(l) > 0 ? <span className="font-medium text-destructive">{formatCurrency(overdueAmount(l))}</span> : '—'}</TableCell>
                       <TableCell className="text-sm">{formatDate(l.due_date)}</TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(l.status)}>{l.status}</Badge>

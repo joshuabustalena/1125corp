@@ -68,14 +68,19 @@ function countWorkingDays(startStr: string, endStr: string) {
 
 // If the employee's birthday (month/day, any birth year) falls somewhere
 // inside this pay period, returns that exact date ('YYYY-MM-DD') so callers
-// can check attendance on that specific day. Otherwise null.
+// can check attendance on that specific day. Otherwise null. A birthday
+// landing on a Sunday isn't a scheduled work/collection day to begin with —
+// there's no "extra" day to pay for and no attendance to (not) credit — so
+// that counts the same as no birthday falling in this period at all.
 function getBirthdayInPeriod(birthDate: string | null | undefined, startStr: string, endStr: string): string | null {
   if (!birthDate) return null;
   const birth = new Date(birthDate);
   const start = new Date(startStr);
   const end = new Date(endStr);
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    if (d.getMonth() === birth.getMonth() && d.getDate() === birth.getDate()) return toDateStr(d);
+    if (d.getMonth() === birth.getMonth() && d.getDate() === birth.getDate()) {
+      return d.getDay() === 0 ? null : toDateStr(d);
+    }
   }
   return null;
 }

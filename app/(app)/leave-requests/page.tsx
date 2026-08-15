@@ -23,7 +23,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDate } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
-import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search } from 'lucide-react';
+import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search, Trash2, RotateCcw } from 'lucide-react';
 
 // 5 regular leave terms, plus a separate Special Leave category (solo
 // parent, VAWC, etc.) with its own +7-day allowance — additive on top of
@@ -56,6 +56,10 @@ export default function LeaveRequestsPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [appliedFrom, setAppliedFrom] = useState('');
   const [appliedTo, setAppliedTo] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [resetLeavesOpen, setResetLeavesOpen] = useState(false);
+  const [resettingLeaves, setResettingLeaves] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
@@ -193,6 +197,52 @@ export default function LeaveRequestsPage() {
     load();
   }
 
+  // Deleting an approved request must give the days it consumed back to
+  // the employee's balance — otherwise the balance stays permanently
+  // reduced for a leave that, as far as the record's concerned, never
+  // happened. A pending/rejected request never touched the balance in the
+  // first place, so deleting one of those just removes the row.
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    if (deleteTarget.status === 'approved') {
+      const field = deleteTarget.leave_type === SPECIAL_LEAVE_TYPE ? 'special_leaves_used' : 'paid_leaves_used';
+      const { data: emp } = await supabase.from('employees').select(field).eq('id', deleteTarget.employee_id).maybeSingle();
+      const current = (emp as any)?.[field] ?? 0;
+      await supabase.from('employees').update({ [field]: Math.max(0, current - deleteTarget.days) }).eq('id', deleteTarget.employee_id);
+    }
+    const { error } = await supabase.from('leave_requests').delete().eq('id', deleteTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Leave request deleted', description: deleteTarget.status === 'approved' ? 'The leave balance it used has been restored.' : undefined });
+      load();
+    }
+    setDeleteTarget(null);
+    setDeleting(false);
+  }
+
+  // Year-end (or whenever the client decides) bulk reset — zeroes both
+  // leave buckets for every active employee, same as if their allotment
+  // just renewed. Approved leave_requests rows are left alone (they're a
+  // historical record of what was taken), only the running "used" counters
+  // reset.
+  async function handleResetLeaveBalances() {
+    setResettingLeaves(true);
+    const { error } = await supabase
+      .from('employees')
+      .update({ paid_leaves_used: 0, special_leaves_used: 0 })
+      .eq('status', 'active');
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Leave balances reset', description: 'Every active employee’s leave balance is now back to the full annual allowance.' });
+      load();
+    }
+    setResetLeavesOpen(false);
+    setResettingLeaves(false);
+  }
+
   const balance = annualLeaves - (myEmployee?.paid_leaves_used ?? 0);
   const specialBalance = specialLeavesAnnual - (myEmployee?.special_leaves_used ?? 0);
   const statusVariant = (s: string) => s === 'approved' ? 'default' : s === 'rejected' ? 'destructive' : 'outline';
@@ -210,6 +260,12 @@ export default function LeaveRequestsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Leave Requests" description="Request time off and check your leave balance">
+        {isAdmin && (
+          <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setResetLeavesOpen(true)}>
+            <RotateCcw className="w-4 h-4 mr-2" />
+            Reset Leave Balances
+          </Button>
+        )}
         <Button size="sm" onClick={openRequest} disabled={!canApprove && !myEmployee}>
           <Plus className="w-4 h-4 mr-2" />
           Request Leave
@@ -290,18 +346,23 @@ export default function LeaveRequestsPage() {
                       <div><p className="text-xs text-muted-foreground">Days</p><p>{r.days}</p></div>
                       <div className="col-span-2"><p className="text-xs text-muted-foreground">Reason</p><p>{r.reason ?? '—'}</p></div>
                     </div>
-                    {canApprove && r.status === 'pending' && (
-                      <div className="mt-3 flex items-center justify-end">
-                        {canApproveRequest(r) ? (
+                    <div className="mt-3 flex items-center justify-end gap-1">
+                      {canApprove && r.status === 'pending' && (
+                        canApproveRequest(r) ? (
                           <div className="flex gap-1">
                             <Button variant="outline" size="sm" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Approve</Button>
                             <Button variant="outline" size="sm" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-3.5 h-3.5 mr-1.5 text-destructive" />Reject</Button>
                           </div>
                         ) : (
                           <span className="text-xs text-muted-foreground">Pending Admin approval</span>
-                        )}
-                      </div>
-                    )}
+                        )
+                      )}
+                      {isAdmin && (
+                        <Button variant="ghost" size="icon" title="Delete" onClick={() => setDeleteTarget(r)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -331,16 +392,23 @@ export default function LeaveRequestsPage() {
                       <TableCell><Badge variant={statusVariant(r.status)}>{r.status}</Badge></TableCell>
                       {canApprove && (
                         <TableCell className="text-right">
-                          {r.status === 'pending' && (
-                            canApproveRequest(r) ? (
-                              <div className="flex gap-1 justify-end">
-                                <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-4 h-4 text-success" /></Button>
-                                <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">Pending Admin approval</span>
-                            )
-                          )}
+                          <div className="flex gap-1 justify-end items-center">
+                            {r.status === 'pending' && (
+                              canApproveRequest(r) ? (
+                                <>
+                                  <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'approved')}><CheckCircle className="w-4 h-4 text-success" /></Button>
+                                  <Button variant="ghost" size="icon" onClick={() => updateStatus(r, 'rejected')}><XCircle className="w-4 h-4 text-destructive" /></Button>
+                                </>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">Pending Admin approval</span>
+                              )
+                            )}
+                            {isAdmin && (
+                              <Button variant="ghost" size="icon" title="Delete" onClick={() => setDeleteTarget(r)}>
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       )}
                     </TableRow>
@@ -417,6 +485,46 @@ export default function LeaveRequestsPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Leave Request</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this leave request?
+              {deleteTarget?.status === 'approved' && ` This will restore the ${deleteTarget?.days} day(s) it used back to the employee's leave balance.`}
+              {' '}This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset leave balances confirmation */}
+      <Dialog open={resetLeavesOpen} onOpenChange={setResetLeavesOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset Leave Balances</DialogTitle>
+            <DialogDescription>
+              This sets both the Paid Leave and Special Leave "used" counters back to 0 for every active employee, company-wide — as if their annual allowance just renewed. Past leave request records are not affected, only the running balance. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetLeavesOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleResetLeaveBalances} disabled={resettingLeaves}>
+              {resettingLeaves && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Reset All Balances
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
