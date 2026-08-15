@@ -64,6 +64,11 @@ export default function CustomersPage() {
   const isCollector = profile?.role_name === 'Branch Field Collector';
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  // Which of the currently-listed customers have a loan that's still
+  // outstanding (disbursed and not yet fully paid) — 'active' or 'overdue'.
+  // Not 'pending'/'approved' (not disbursed yet) and not 'paid'/'declined'/
+  // 'renewed' (no longer an open debt).
+  const [activeLoanCustomerIds, setActiveLoanCustomerIds] = useState<Set<string>>(new Set());
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [collectors, setCollectors] = useState<any[]>([]);
@@ -166,8 +171,21 @@ export default function CustomersPage() {
     query = query.range((page - 1) * pageSize, page * pageSize - 1).order('first_name', { ascending: true }).order('last_name', { ascending: true });
 
     const { data, count } = await query;
-    setCustomers((data as any) ?? []);
+    const list = (data as any) ?? [];
+    setCustomers(list);
     setTotal(count ?? 0);
+
+    const ids = list.map((c: Customer) => c.id);
+    if (ids.length > 0) {
+      const { data: loanRows } = await supabase
+        .from('loans')
+        .select('customer_id')
+        .in('customer_id', ids)
+        .in('status', ['active', 'overdue']);
+      setActiveLoanCustomerIds(new Set((loanRows ?? []).map((l: any) => l.customer_id)));
+    } else {
+      setActiveLoanCustomerIds(new Set());
+    }
     setLoading(false);
   }
 
@@ -679,9 +697,15 @@ export default function CustomersPage() {
                         <p className="text-xs text-muted-foreground">Branch / Area</p>
                         <p className="truncate">{c.branches?.name ?? '—'}</p>
                       </div>
-                      <div className="col-span-2">
+                      <div>
                         <p className="text-xs text-muted-foreground">Max Loan</p>
                         <p className="font-medium">{formatCurrency(c.max_loan_limit)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Loan Status</p>
+                        <Badge variant={activeLoanCustomerIds.has(c.id) ? 'default' : 'outline'}>
+                          {activeLoanCustomerIds.has(c.id) ? 'Active Loan' : 'No Active Loan'}
+                        </Badge>
                       </div>
                     </div>
                     {isAdmin && (
@@ -706,6 +730,7 @@ export default function CustomersPage() {
                     <TableHead>Branch / Area</TableHead>
                     <TableHead>Max Loan</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Loan Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -741,6 +766,11 @@ export default function CustomersPage() {
                       <TableCell>
                         <Badge variant={c.status === 'active' ? 'default' : 'secondary'}>
                           {c.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={activeLoanCustomerIds.has(c.id) ? 'default' : 'outline'}>
+                          {activeLoanCustomerIds.has(c.id) ? 'Active Loan' : 'No Active Loan'}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
