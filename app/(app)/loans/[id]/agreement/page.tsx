@@ -92,11 +92,6 @@ export default function LoanAgreementPage() {
       .eq('id', id)
       .maybeSingle();
 
-    if (data?.renewed_from_loan_id) {
-      const { data: prev } = await supabase.from('loans').select('remaining_balance').eq('id', data.renewed_from_loan_id).maybeSingle();
-      (data as any).previousLoanRemainingBalance = prev?.remaining_balance ?? 0;
-    }
-
     setLoan(data);
     setLoading(false);
   }
@@ -115,11 +110,18 @@ export default function LoanAgreementPage() {
   const isRenewal = !!loan.renewed_from_loan_id;
   const offsetBalance = Number(loan.offset_balance) || 0;
   // First Payment = the day-one collection, auto-settled out of the loan
-  // proceeds at release. For a new loan that's the daily payment amount;
-  // for a renewal it's the carried-over balance from the previous loan.
-  const firstPayment = isRenewal
-    ? Number(loan.previousLoanRemainingBalance ?? 0) - offsetBalance
-    : (Number(loan.daily_payment) || 0);
+  // proceeds at release — the loan's own daily payment amount, same for a
+  // new loan or a renewal. It's a separate deduction from Offset Balance
+  // (which is the old loan's carried-over balance, not related to this
+  // figure at all) — same two-separate-deductions model already used by
+  // handleSubmitRenew() when computing the actual release amount. This used
+  // to compute renewal's First Payment as `previousLoanRemainingBalance -
+  // offsetBalance`, which is always 0 - offsetBalance now that the old
+  // loan's balance is correctly zeroed on renewal, silently showing a
+  // negative "first payment" equal to the offset amount instead.
+  const firstPayment = loan.daily_payment != null && Number(loan.daily_payment) > 0
+    ? Number(loan.daily_payment)
+    : (loan.term_days > 0 ? Number(loan.total_payable) / loan.term_days : 0);
   const serviceFee = Number(loan.service_fee) || 0;
 
   const termMonths = Math.round((loan.term_days / 30) * 10) / 10;

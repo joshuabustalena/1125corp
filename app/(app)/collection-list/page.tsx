@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import { ClipboardList, Loader2, Download, Printer } from 'lucide-react';
 
 // Printable field worksheet a Cashier hands each collector every morning —
@@ -114,7 +114,16 @@ export default function CollectionListPage() {
   const rows = loans.map(l => {
     const totalPayable = Number(l.total_payable) || 0;
     const remainingBalance = Number(l.remaining_balance) || 0;
-    const dailyPayment = Number(l.daily_payment) || 0;
+    // Most loans leave "Daily Payment" blank at application time (the form
+    // itself invites this — "Leave blank to split evenly") and rely on the
+    // auto-computed split shown there instead, so this can't just read
+    // l.daily_payment on its own — it's 0/blank far more often than not,
+    // which silently zeroed out the delay for most loans. Same fallback
+    // formula the application form itself uses, and the same one already
+    // applied to the Loan Agreement/Voucher documents' First Payment.
+    const dailyPayment = l.daily_payment != null && Number(l.daily_payment) > 0
+      ? Number(l.daily_payment)
+      : (l.term_days > 0 ? totalPayable / l.term_days : 0);
     const isPastDue = !!(l.due_date && new Date(l.due_date) < today);
 
     // Delay Amount, matching the client's own field process exactly: how
@@ -140,10 +149,10 @@ export default function CollectionListPage() {
 
     return {
       id: l.id,
-      borrowerName: `${l.customers?.first_name ?? ''} ${l.customers?.last_name ?? ''}`.trim(),
+      borrowerName: formatCustomerName(l.customers?.first_name, l.customers?.last_name),
       dateReleased: l.release_date,
       dueDate: l.due_date,
-      amountRelease: Number(l.release_amount) || 0,
+      totalPayable,
       amountOverdue,
       dailyPayment,
       balance: remainingBalance,
@@ -262,7 +271,7 @@ export default function CollectionListPage() {
                     <th style={{ ...lCellCenter, fontWeight: 700 }}>Borrower Name</th>
                     <th style={{ ...lCellCenter, fontWeight: 700 }}>Date Released</th>
                     <th style={{ ...lCellCenter, fontWeight: 700 }}>Due Date</th>
-                    <th style={{ ...lCellCenter, fontWeight: 700 }}>Amount Release</th>
+                    <th style={{ ...lCellCenter, fontWeight: 700 }}>Total Payable</th>
                     <th style={{ ...lCellCenter, fontWeight: 700 }}>Amount Delayed/Overdue</th>
                     <th style={{ ...lCellCenter, fontWeight: 700 }}>Daily Payment</th>
                     <th style={{ ...lCellCenter, fontWeight: 700 }}>Balance</th>
@@ -275,7 +284,7 @@ export default function CollectionListPage() {
                       <td style={lCell}>{r.borrowerName}</td>
                       <td style={lCellCenter}>{formatDate(r.dateReleased)}</td>
                       <td style={lCellCenter}>{formatDate(r.dueDate)}</td>
-                      <td style={lCellRight}>{formatCurrency(r.amountRelease)}</td>
+                      <td style={lCellRight}>{formatCurrency(r.totalPayable)}</td>
                       <td style={lCellRight}>{r.amountOverdue > 0 ? formatCurrency(r.amountOverdue) : ''}</td>
                       <td style={lCellRight}>{formatCurrency(r.dailyPayment)}</td>
                       <td style={lCellRight}>{formatCurrency(r.balance)}</td>
@@ -312,7 +321,7 @@ export default function CollectionListPage() {
                   <th style={{ ...lCellCenter, fontWeight: 700 }}>Borrower Name</th>
                   <th style={{ ...lCellCenter, fontWeight: 700 }}>Date Released</th>
                   <th style={{ ...lCellCenter, fontWeight: 700 }}>Due Date</th>
-                  <th style={{ ...lCellCenter, fontWeight: 700 }}>Amount Release</th>
+                  <th style={{ ...lCellCenter, fontWeight: 700 }}>Total Payable</th>
                   <th style={{ ...lCellCenter, fontWeight: 700 }}>Amount Delayed/Over due</th>
                   <th style={{ ...lCellCenter, fontWeight: 700 }}>Daily Payment</th>
                   <th style={{ ...lCellCenter, fontWeight: 700 }}>Balance</th>
@@ -325,7 +334,7 @@ export default function CollectionListPage() {
                     <td style={lCell}>{r.borrowerName}</td>
                     <td style={lCellCenter}>{formatDate(r.dateReleased)}</td>
                     <td style={lCellCenter}>{formatDate(r.dueDate)}</td>
-                    <td style={lCellRight}>{formatCurrency(r.amountRelease)}</td>
+                    <td style={lCellRight}>{formatCurrency(r.totalPayable)}</td>
                     <td style={lCellRight}>{r.amountOverdue > 0 ? formatCurrency(r.amountOverdue) : ''}</td>
                     <td style={lCellRight}>{formatCurrency(r.dailyPayment)}</td>
                     <td style={lCellRight}>{formatCurrency(r.balance)}</td>

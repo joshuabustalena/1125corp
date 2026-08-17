@@ -21,8 +21,13 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateORNumber, exportToCSV, formatCustomerName } from '@/lib/format';
 import { PaymentReceiptDialog, buildReceiptDataFromPayment } from '@/components/payment-receipt-dialog';
+import { getStoredReceipts, cacheReceiptForOffline, type CachedReceipt } from '@/lib/offline-receipts';
 import {
-  Wallet, Plus, Search, Download, Loader2, MapPin, Receipt, Calculator, Pencil, Trash2,
+  getPendingPayments, queuePendingPayment, updatePendingPayment, removePendingPayment,
+  type PendingPayment,
+} from '@/lib/offline-payment-queue';
+import {
+  Wallet, Plus, Search, Download, Loader2, MapPin, Receipt, Calculator, Pencil, Trash2, WifiOff, CloudUpload, X,
 } from 'lucide-react';
 
 // Collection days = every day in [releaseDate, dueDate] except Sunday —
@@ -61,6 +66,20 @@ export default function PaymentsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [receiptData, setReceiptData] = useState<any>(null);
+  // Reads straight from this device's local cache — no network call, so it
+  // still works with zero signal. Only ever populated from receipts this
+  // device has actually shown before (see lib/offline-receipts.ts).
+  const [offlineReceiptsOpen, setOfflineReceiptsOpen] = useState(false);
+  const [offlineReceipts, setOfflineReceipts] = useState<CachedReceipt[]>([]);
+  // Payments collected with zero signal — queued here instead of posted,
+  // synced to the real database (via the same atomic RPC a normal online
+  // payment uses) once a "Sync" is actually tapped. See
+  // lib/offline-payment-queue.ts for why this is safe.
+  const [pendingPayments, setPendingPayments] = useState<PendingPayment[]>([]);
+  const [pendingPaymentsOpen, setPendingPaymentsOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const syncingRef = useRef(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
@@ -122,6 +141,19 @@ export default function PaymentsPage() {
     requestLocation();
     setDialogOpen(true);
   }
+
+  useEffect(() => {
+    setPendingPayments(getPendingPayments());
+    if (typeof navigator !== 'undefined') setIsOnline(navigator.onLine);
+    function goOnline() { setIsOnline(true); }
+    function goOffline() { setIsOnline(false); }
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
 
   const [form, setForm] = useState({
     loan_id: searchParams.get('loan') ?? '',
@@ -345,9 +377,78 @@ export default function PaymentsPage() {
   const selectedLoan = loans.find(l => l.id === form.loan_id);
   const newBalance = selectedLoan ? Math.max(0, Number(selectedLoan.remaining_balance) - Number(form.amount_paid || 0)) : 0;
 
+  // Builds and queues an offline payment — no RPC, no balance, nothing
+  // written to the database yet. Just enough to (a) print a receipt that
+  // honestly says "pending" instead of a real balance, and (b) let Sync
+  // apply it for real once signal is back.
+  function queueOfflinePayment() {
+    const orNumber = generateORNumber();
+    const paymentDate = form.payment_date || new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const amountPaidNum = Number(form.amount_paid);
+
+    const pending = queuePendingPayment({
+      loanId: form.loan_id,
+      loanNumber: selectedLoan?.loan_number ?? '—',
+      customerId: selectedLoan?.customer_id ?? null,
+      customerName: selectedLoan ? `${selectedLoan.customers?.first_name ?? ''} ${selectedLoan.customers?.last_name ?? ''}`.trim() : '',
+      customerPhone: selectedLoan?.customers?.phone ?? null,
+      collectorId: selectedLoan?.collector_id ?? null,
+      collectorName: selectedLoan?.collectors?.profiles?.full_name ?? null,
+      branchName: selectedLoan?.branches?.name ?? null,
+      areaName: selectedLoan?.areas?.name ?? null,
+      releaseDate: selectedLoan?.release_date ?? null,
+      dueDate: selectedLoan?.due_date ?? null,
+      amount: amountPaidNum,
+      paymentDate,
+      paymentTime: now.toTimeString().split(' ')[0],
+      gpsLat: location?.lat ?? null,
+      gpsLng: location?.lng ?? null,
+      locationAddress: locationAddress ?? (location ? `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}` : null),
+      orNumber,
+    });
+    setPendingPayments(getPendingPayments());
+
+    toast({ title: 'Saved offline', description: `Naka-queue na ang payment na ito. I-Sync kapag may signal na. OR: ${orNumber}` });
+
+    setReceiptData({
+      orNumber,
+      loanNumber: pending.loanNumber,
+      releaseDate: pending.releaseDate,
+      dueDate: pending.dueDate,
+      customerName: pending.customerName,
+      customerPhone: pending.customerPhone,
+      currentAddress: pending.locationAddress,
+      branchName: pending.branchName,
+      areaName: pending.areaName,
+      collectorName: pending.collectorName,
+      amount: amountPaidNum,
+      remainingBalance: null,
+      date: paymentDate,
+      time: pending.paymentTime,
+    });
+
+    setForm({ ...form, loan_id: '', amount_paid: '', payment_date: new Date().toISOString().split('T')[0], notes: '' });
+    setDialogOpen(false);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.loan_id || !form.amount_paid || !locationAddress) return;
+    if (!form.loan_id || !form.amount_paid || !location) return;
+
+    // A REAL post (one that actually updates the balance) can't happen
+    // without signal — it has to go through the atomic apply_loan_payment
+    // RPC to get a correct, race-condition-safe balance (this is the whole
+    // reason that RPC exists — see its migration comment). Offline, queue
+    // it instead of blocking the collector entirely. navigator.onLine isn't
+    // 100% reliable (a device can report "online" with no real signal), so
+    // the RPC failure below still falls back to queuing too, as a second
+    // line of defense.
+    if (!isOnline) {
+      queueOfflinePayment();
+      return;
+    }
+
     setSaving(true);
 
     const orNumber = generateORNumber();
@@ -365,6 +466,18 @@ export default function PaymentsPage() {
       .rpc('apply_loan_payment', { p_loan_id: form.loan_id, p_amount: Number(form.amount_paid) })
       .single();
     if (rpcError || !rpcResult) {
+      // A network-level failure (no signal, timed out mid-request, etc.)
+      // doesn't come back as a normal Postgres error — it has no `code`.
+      // Treat that case as "actually offline" and queue it instead of just
+      // failing — navigator.onLine can say "online" while there's no real
+      // signal, so this is the second line of defense the check at the top
+      // of this function can't always catch.
+      const looksLikeNetworkFailure = !!rpcError && !(rpcError as any).code;
+      if (looksLikeNetworkFailure) {
+        setSaving(false);
+        queueOfflinePayment();
+        return;
+      }
       toast({ title: 'Error', description: rpcError?.message ?? 'Could not update the loan balance', variant: 'destructive' });
       setSaving(false);
       return;
@@ -481,6 +594,126 @@ export default function PaymentsPage() {
     loadLoans();
   }
 
+  // Applies every still-queued offline payment for real, oldest first —
+  // FIFO matters here since two queued payments against the same loan must
+  // apply in the order they actually happened. Each item goes through the
+  // exact same atomic RPC an online payment uses, so the resulting balance
+  // is correct no matter how long it sat in the queue. balanceApplied is
+  // persisted right after the RPC succeeds, before the follow-up
+  // receipt/payment inserts — so if THIS sync run gets interrupted (app
+  // closed, tab closed) partway through one item, retrying never re-runs
+  // the RPC for that item a second time; it only resumes the bookkeeping.
+  async function handleSyncPendingPayments() {
+    // The button's disabled={syncing} state depends on a React re-render,
+    // which isn't necessarily instant — a fast enough double-tap could fire
+    // this twice before that commits, running two sync loops over the same
+    // queue at once and double-applying a payment's balance deduction. A
+    // ref is checked/set synchronously, immune to render timing, so it
+    // can't be raced the same way.
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    setSyncing(true);
+    const queue = getPendingPayments();
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const item of queue) {
+      let newBalance = item.appliedBalance;
+
+      if (!item.balanceApplied) {
+        const { data: rpcResult, error: rpcError } = await supabase
+          .rpc('apply_loan_payment', { p_loan_id: item.loanId, p_amount: item.amount })
+          .single();
+        if (rpcError || !rpcResult) {
+          failed++;
+          updatePendingPayment(item.id, { syncError: rpcError?.message ?? 'Could not update the loan balance' });
+          continue;
+        }
+        newBalance = Number((rpcResult as any).new_balance);
+        updatePendingPayment(item.id, { balanceApplied: true, appliedBalance: newBalance, syncError: null });
+      }
+
+      const { data: receipt, error: receiptError } = await supabase.from('receipts').insert({
+        or_number: item.orNumber,
+        loan_id: item.loanId,
+        customer_id: item.customerId,
+        collector_id: item.collectorId,
+        amount: item.amount,
+        remaining_balance: newBalance,
+        payment_date: item.paymentDate,
+        qr_data: JSON.stringify({ or: item.orNumber, loan: item.loanNumber, amount: item.amount }),
+      }).select().single();
+
+      if (receiptError) {
+        failed++;
+        updatePendingPayment(item.id, { syncError: receiptError.message });
+        continue;
+      }
+
+      const { error: payError } = await supabase.from('payments').insert({
+        loan_id: item.loanId,
+        customer_id: item.customerId,
+        collector_id: item.collectorId,
+        receipt_id: receipt.id,
+        amount_paid: item.amount,
+        principal: 0,
+        interest: 0,
+        penalty: 0,
+        remaining_balance: newBalance,
+        payment_date: item.paymentDate,
+        payment_time: item.paymentTime,
+        gps_lat: item.gpsLat,
+        gps_lng: item.gpsLng,
+        location_address: item.locationAddress,
+        notes: null,
+      });
+
+      if (payError) {
+        failed++;
+        updatePendingPayment(item.id, { syncError: payError.message });
+        continue;
+      }
+
+      removePendingPayment(item.id);
+      // Overwrites the "pending" version this OR number was cached under
+      // (see PaymentReceiptDialog's auto-cache) with the now-confirmed
+      // balance, so Recent Receipts stops showing it as unconfirmed.
+      cacheReceiptForOffline({
+        orNumber: item.orNumber,
+        loanNumber: item.loanNumber,
+        releaseDate: item.releaseDate,
+        dueDate: item.dueDate,
+        customerName: item.customerName,
+        customerPhone: item.customerPhone,
+        currentAddress: item.locationAddress,
+        branchName: item.branchName,
+        areaName: item.areaName,
+        collectorName: item.collectorName,
+        amount: item.amount,
+        remainingBalance: newBalance,
+        date: item.paymentDate,
+        time: item.paymentTime,
+      });
+      succeeded++;
+    }
+
+    setPendingPayments(getPendingPayments());
+    syncingRef.current = false;
+    setSyncing(false);
+    loadPayments();
+    loadLoans();
+
+    if (failed === 0) {
+      toast({ title: 'Na-sync lahat', description: `${succeeded} payment(s) na-post na sa database.` });
+    } else {
+      toast({
+        title: 'May hindi na-sync',
+        description: `${succeeded} successful, ${failed} may error pa. Manatili sila sa Pending list — subukan ulit mamaya.`,
+        variant: 'destructive',
+      });
+    }
+  }
+
   function handleExport() {
     exportToCSV(
       payments.map(p => ({
@@ -503,6 +736,21 @@ export default function PaymentsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Payment Collection" description="Post collections and generate official receipts">
+        {pendingPayments.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-warning border-warning/40 hover:text-warning"
+            onClick={() => setPendingPaymentsOpen(true)}
+          >
+            <CloudUpload className="w-4 h-4 mr-2" />
+            Pending ({pendingPayments.length})
+          </Button>
+        )}
+        <Button variant="outline" size="sm" onClick={() => { setOfflineReceipts(getStoredReceipts()); setOfflineReceiptsOpen(true); }}>
+          <WifiOff className="w-4 h-4 mr-2" />
+          Recent Receipts
+        </Button>
         <Button variant="outline" size="sm" onClick={handleExport}>
           <Download className="w-4 h-4 mr-2" />
           Export
@@ -706,7 +954,13 @@ export default function PaymentsPage() {
             <div className={`flex items-center gap-2 text-xs ${locationError ? 'text-destructive' : 'text-muted-foreground'}`}>
               <MapPin className="w-3.5 h-3.5 shrink-0" />
               <span className="flex-1">
-                {locating ? 'Capturing current location…' : locationAddress ? locationAddress : (locationError ?? 'Location is required before posting a payment.')}
+                {locating
+                  ? 'Capturing current location…'
+                  : locationAddress
+                    ? locationAddress
+                    : location
+                      ? `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)} (address unavailable — no signal to look it up)`
+                      : (locationError ?? 'Location is required before posting a payment.')}
               </span>
               {!locating && (
                 <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs shrink-0" onClick={requestLocation}>
@@ -715,20 +969,30 @@ export default function PaymentsPage() {
               )}
             </div>
 
+            {!isOnline && (
+              <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ backgroundColor: '#FEF3C7', color: '#92400E' }}>
+                <WifiOff className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  Walang signal — mase-save muna ito bilang <strong>pending</strong> sa device na ito. Pwede mo nang i-print ang resibo (walang balance pa), pero kailangan mo pang i-Sync sa Payments page kapag may signal na.
+                </span>
+              </div>
+            )}
+
             {form.amount_paid && selectedLoan && (
               <div className="p-3 rounded-lg bg-primary/5 border border-border">
                 <div className="flex items-center gap-2 text-sm font-medium text-primary mb-1">
                   <Calculator className="w-4 h-4" />
                   New Remaining Balance: {formatCurrency(newBalance)}
+                  {!isOnline && <span className="text-xs text-muted-foreground font-normal">(estimate — hindi pa ito confirmed)</span>}
                 </div>
               </div>
             )}
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving || !form.loan_id || !form.amount_paid || !locationAddress}>
+              <Button type="submit" disabled={saving || !form.loan_id || !form.amount_paid || !location}>
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Post & Generate Receipt
+                {isOnline ? 'Post & Generate Receipt' : 'Save Offline & Print'}
               </Button>
             </DialogFooter>
           </form>
@@ -737,6 +1001,101 @@ export default function PaymentsPage() {
 
       {/* Receipt preview */}
       <PaymentReceiptDialog receiptData={receiptData} onClose={() => setReceiptData(null)} />
+
+      {/* Recent Receipts — reads from this device's local cache only, so it
+          still opens with zero signal. Tap one to reprint/redownload it. */}
+      <Dialog open={offlineReceiptsOpen} onOpenChange={setOfflineReceiptsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <WifiOff className="w-5 h-5" />
+              Recent Receipts
+            </DialogTitle>
+            <DialogDescription>
+              Saved on this device — reprint or download these even without signal.
+            </DialogDescription>
+          </DialogHeader>
+          {offlineReceipts.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">
+              No receipts saved on this device yet. A receipt gets saved here automatically the moment it's shown on screen.
+            </p>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {offlineReceipts.map(r => (
+                <button
+                  key={r.orNumber}
+                  type="button"
+                  className="w-full text-left p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
+                  onClick={() => { setReceiptData(r); setOfflineReceiptsOpen(false); }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium truncate">{r.customerName}</p>
+                    <p className="text-sm font-medium text-success shrink-0">{formatCurrency(r.amount)}</p>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span className="truncate">{r.loanNumber} • OR# {r.orNumber}</span>
+                    <span className="shrink-0">{formatDate(r.date)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Pending (offline) Payments — collected with zero signal, not yet
+          posted to the database. Sync applies them for real, oldest first. */}
+      <Dialog open={pendingPaymentsOpen} onOpenChange={setPendingPaymentsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CloudUpload className="w-5 h-5" />
+              Pending Payments
+            </DialogTitle>
+            <DialogDescription>
+              Collected offline, not yet in the database. {isOnline ? 'May signal ka na — pwede nang i-Sync.' : 'Kailangan ng signal bago ma-Sync.'}
+            </DialogDescription>
+          </DialogHeader>
+          {pendingPayments.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">Wala pang pending na payment.</p>
+          ) : (
+            <>
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {pendingPayments.map(p => (
+                  <div key={p.id} className="p-3 rounded-lg bg-secondary/50">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-medium truncate">{p.customerName || p.loanNumber}</p>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <p className="text-sm font-medium text-warning">{formatCurrency(p.amount)}</p>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          title="Remove from queue"
+                          onClick={() => { removePendingPayment(p.id); setPendingPayments(getPendingPayments()); }}
+                        >
+                          <X className="w-3.5 h-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">{p.loanNumber} • OR# {p.orNumber} • {formatDate(p.paymentDate)}</p>
+                    {p.syncError && (
+                      <p className="text-xs mt-1 text-destructive">Sync error: {p.syncError}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setPendingPaymentsOpen(false)}>Close</Button>
+                <Button onClick={handleSyncPendingPayments} disabled={syncing || !isOnline}>
+                  {syncing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {isOnline ? `Sync ${pendingPayments.length} Payment${pendingPayments.length > 1 ? 's' : ''}` : 'Kailangan ng signal'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!editTarget} onOpenChange={(open) => !open && setEditTarget(null)}>
         <DialogContent>

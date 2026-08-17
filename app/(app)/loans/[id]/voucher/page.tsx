@@ -45,11 +45,6 @@ export default function VoucherPage() {
       supabase.from('cash_vouchers').select('voucher_number').eq('loan_id', id).maybeSingle(),
     ]);
 
-    if (data?.renewed_from_loan_id) {
-      const { data: prev } = await supabase.from('loans').select('remaining_balance').eq('id', data.renewed_from_loan_id).maybeSingle();
-      (data as any).previousLoanRemainingBalance = prev?.remaining_balance ?? 0;
-    }
-
     setLoan(data);
     setVoucherNumber(voucher?.voucher_number ?? '—');
     setLoading(false);
@@ -63,9 +58,22 @@ export default function VoucherPage() {
   }
 
   const isRenewal = !!loan.renewed_from_loan_id;
-  const actualBalance = Number(loan.previousLoanRemainingBalance ?? 0);
+  // offset_balance was captured directly from the old loan's remaining
+  // balance at the moment renewal was applied for — it's the only reliable
+  // record of what that balance actually was, since the old loan's own
+  // remaining_balance is intentionally zeroed once this renewal is
+  // disbursed (so it stops double-counting as still-outstanding). "Actual
+  // balance" and "Beginning Balance" both refer to that same captured
+  // figure; First Payment is a separate, independent deduction (the loan's
+  // own daily payment amount) — same two-separate-deductions model the
+  // Loan Agreement document uses.
+  const actualBalance = Number(loan.offset_balance) || 0;
   const beginningBalance = Number(loan.offset_balance) || 0;
-  const firstPayment = isRenewal ? actualBalance - beginningBalance : 0;
+  const firstPayment = isRenewal
+    ? (loan.daily_payment != null && Number(loan.daily_payment) > 0
+      ? Number(loan.daily_payment)
+      : (loan.term_days > 0 ? Number(loan.total_payable) / loan.term_days : 0))
+    : 0;
 
   const voucherData = {
     voucherNumber,

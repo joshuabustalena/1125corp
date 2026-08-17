@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { formatCurrency, formatDate, formatTime } from '@/lib/format';
 import { connectThermalPrinter, buildPaymentReceiptLines, buildReceiptBytes, writeToPrinter } from '@/lib/thermal-printer';
+import { cacheReceiptForOffline } from '@/lib/offline-receipts';
 import { Receipt, Download, Bluetooth, Loader2 } from 'lucide-react';
 
 export interface PaymentReceiptData {
@@ -22,7 +23,10 @@ export interface PaymentReceiptData {
   areaName?: string | null;
   collectorName?: string | null;
   amount: number;
-  remainingBalance: number;
+  // null = collected offline, not yet synced — the true balance can't be
+  // known until the atomic apply_loan_payment RPC actually runs, which
+  // only happens once signal is back and this gets synced.
+  remainingBalance: number | null;
   date: string;
   time?: string | null;
   isFullyPaid?: boolean;
@@ -66,6 +70,14 @@ export function PaymentReceiptDialog({ receiptData, onClose }: { receiptData: Pa
   const [downloadingReceipt, setDownloadingReceipt] = useState(false);
   const [generatingInvoice, setGeneratingInvoice] = useState(false);
 
+  // Every receipt that gets shown here, from anywhere in the app, is
+  // opportunistically cached to this device while signal is up — so a
+  // collector who loses signal in the field can still reprint whatever
+  // they already looked at (see lib/offline-receipts.ts).
+  useEffect(() => {
+    if (receiptData) cacheReceiptForOffline(receiptData);
+  }, [receiptData]);
+
   async function handlePrintThermal() {
     if (!receiptData) return;
     setPrintingThermal(true);
@@ -83,12 +95,14 @@ export function PaymentReceiptDialog({ receiptData, onClose }: { receiptData: Pa
         locationText: receiptData.currentAddress ?? undefined,
         collectorName: receiptData.collectorName ?? undefined,
         amountPaid: formatCurrency(receiptData.amount),
-        daysCoveredText: receiptData.isFullyPaid
-          ? 'Loan fully paid'
-          : (receiptData.daysCovered && receiptData.daysCovered > 0
-            ? `Covers ${receiptData.daysCovered} day${receiptData.daysCovered > 1 ? 's' : ''} of payment`
-            : undefined),
-        remainingBalance: formatCurrency(receiptData.remainingBalance),
+        daysCoveredText: isPending
+          ? 'PENDING SYNC — not yet confirmed'
+          : (receiptData.isFullyPaid
+            ? 'Loan fully paid'
+            : (receiptData.daysCovered && receiptData.daysCovered > 0
+              ? `Covers ${receiptData.daysCovered} day${receiptData.daysCovered > 1 ? 's' : ''} of payment`
+              : undefined)),
+        remainingBalance: isPending ? 'Pending confirmation' : formatCurrency(receiptData.remainingBalance),
       });
       await writeToPrinter(characteristic, buildReceiptBytes(lines));
       toast({ title: 'Sent to printer', description: 'Receipt sent to the Bluetooth thermal printer.' });
@@ -133,6 +147,11 @@ export function PaymentReceiptDialog({ receiptData, onClose }: { receiptData: Pa
 
   if (!receiptData) return null;
 
+  // No remainingBalance means this payment was collected offline and
+  // hasn't synced yet — the true balance genuinely isn't known until it
+  // does, so this must never claim "PAID" the way a confirmed receipt does.
+  const isPending = receiptData.remainingBalance === null;
+
   return (
     <Dialog open={!!receiptData} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
@@ -144,9 +163,11 @@ export function PaymentReceiptDialog({ receiptData, onClose }: { receiptData: Pa
           <div className="flex justify-center">
             <span
               className="text-xs font-bold px-3 py-1 rounded-full"
-              style={{ color: '#16A34A', backgroundColor: '#DCFCE7', border: '1px solid #16A34A' }}
+              style={isPending
+                ? { color: '#B45309', backgroundColor: '#FEF3C7', border: '1px solid #B45309' }
+                : { color: '#16A34A', backgroundColor: '#DCFCE7', border: '1px solid #16A34A' }}
             >
-              PAID
+              {isPending ? 'PENDING SYNC — NOT YET CONFIRMED' : 'PAID'}
             </span>
           </div>
         </DialogHeader>
@@ -194,20 +215,27 @@ export function PaymentReceiptDialog({ receiptData, onClose }: { receiptData: Pa
           <div className="py-4 text-center">
             <p className="text-xs mb-1" style={{ color: '#6B7280' }}>Amount Paid</p>
             <p className="text-3xl font-bold" style={{ color: '#16A34A' }}>{formatCurrency(receiptData.amount)}</p>
-            {receiptData.isFullyPaid ? (
+            {!isPending && (receiptData.isFullyPaid ? (
               <p className="text-xs mt-1 font-medium" style={{ color: '#16A34A' }}>Loan fully paid</p>
             ) : receiptData.daysCovered && receiptData.daysCovered > 0 && (
               <p className="text-xs mt-1" style={{ color: '#6B7280' }}>
                 Covers {receiptData.daysCovered} day{receiptData.daysCovered > 1 ? 's' : ''} of payment
                 {receiptData.advanceCredit && receiptData.advanceCredit > 0.009 && ` + ${formatCurrency(receiptData.advanceCredit)} advance toward the next day`}
               </p>
-            )}
+            ))}
           </div>
 
-          <div className="rounded-lg p-3 flex justify-between text-sm" style={{ backgroundColor: '#F3F4F6' }}>
+          <div className="rounded-lg p-3 flex justify-between text-sm" style={{ backgroundColor: isPending ? '#FEF3C7' : '#F3F4F6' }}>
             <span style={{ color: '#6B7280' }}>Remaining Balance:</span>
-            <span className="font-bold">{formatCurrency(receiptData.remainingBalance)}</span>
+            <span className="font-bold" style={isPending ? { color: '#B45309' } : undefined}>
+              {isPending ? 'Pending confirmation' : formatCurrency(receiptData.remainingBalance)}
+            </span>
           </div>
+          {isPending && (
+            <p className="text-xs text-center pt-2" style={{ color: '#B45309' }}>
+              Collected without signal — this will be confirmed once synced. Ask the office to confirm the exact balance if needed.
+            </p>
+          )}
 
           <p className="text-center text-xs pt-4" style={{ color: '#6B7280' }}>Thank you for your payment!</p>
           <p className="text-center text-[10px]" style={{ color: '#9CA3AF' }}>System-generated receipt</p>
