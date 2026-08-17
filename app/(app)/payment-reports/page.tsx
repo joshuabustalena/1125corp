@@ -18,7 +18,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
-import { FileDown, Download, Loader2, TrendingUp, Wallet, Receipt } from 'lucide-react';
+import { FileDown, Download, Loader2, TrendingUp, Receipt } from 'lucide-react';
 
 export default function PaymentReportsPage() {
   const { toast } = useToast();
@@ -109,22 +109,14 @@ export default function PaymentReportsPage() {
 
   const total = payments.reduce((s, p) => s + Number(p.amount_paid), 0);
   const count = payments.length;
-  const average = count > 0 ? total / count : 0;
 
   const breakdown = (() => {
     const grouped: Record<string, { total: number; count: number }> = {};
     let categoryLabel = 'Branch';
 
-    if (customerFilter !== 'all') {
+    // Per-customer breakdown removed — only Branch/Area groupings remain.
+    if (customerFilter !== 'all' || areaFilter !== 'all') {
       return null;
-    } else if (areaFilter !== 'all') {
-      categoryLabel = 'Customer';
-      payments.forEach(p => {
-        const name = p.customers ? `${p.customers.first_name} ${p.customers.last_name}` : 'Unknown';
-        if (!grouped[name]) grouped[name] = { total: 0, count: 0 };
-        grouped[name].total += Number(p.amount_paid);
-        grouped[name].count++;
-      });
     } else if (branchFilter !== 'all') {
       categoryLabel = 'Area';
       payments.forEach(p => {
@@ -298,10 +290,9 @@ export default function PaymentReportsPage() {
       </Card>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <StatCard title="Total Collected" value={formatCurrency(total)} icon={<TrendingUp className="w-5 h-5" />} variant="success" />
         <StatCard title="Payments" value={count.toString()} icon={<Receipt className="w-5 h-5" />} />
-        <StatCard title="Average Payment" value={formatCurrency(average)} icon={<Wallet className="w-5 h-5" />} />
       </div>
 
       {/* Breakdown */}
@@ -427,10 +418,6 @@ export default function PaymentReportsPage() {
             <div style={{ flex: 1, padding: 16, background: '#f4f6f9', borderRadius: 8 }}>
               <div style={{ fontSize: 11, color: '#666' }}>Payments</div>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#0B1F3A' }}>{count}</div>
-            </div>
-            <div style={{ flex: 1, padding: 16, background: '#f4f6f9', borderRadius: 8 }}>
-              <div style={{ fontSize: 11, color: '#666' }}>Average Payment</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: '#0B1F3A' }}>{formatCurrency(average)}</div>
             </div>
           </div>
 

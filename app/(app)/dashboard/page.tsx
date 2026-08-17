@@ -6,6 +6,10 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { useAuth } from '@/lib/auth-context';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   Users, Landmark, AlertCircle, Wallet, TrendingUp, Banknote,
@@ -87,6 +91,8 @@ function daysAgo(n: number): Date {
 }
 
 export default function DashboardPage() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
   const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [recentPayments, setRecentPayments] = useState<any[]>([]);
   const [upcomingDues, setUpcomingDues] = useState<any[]>([]);
@@ -96,8 +102,25 @@ export default function DashboardPage() {
   const [cashFlowData, setCashFlowData] = useState<{ name: string; inflow: number; outflow: number }[]>([]);
   const [attendanceData, setAttendanceData] = useState<{ name: string; value: number; color: string }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [branchResolved, setBranchResolved] = useState(false);
 
   useEffect(() => {
+    supabase.from('branches').select('id, name').eq('status', 'active').order('name').then(({ data }) => setBranches(data ?? []));
+  }, []);
+
+  // Administrator keeps the free Branch filter dropdown (defaults to "All
+  // Branches"); everyone else is locked to their own branch, same pattern
+  // already used on /reports and /payment-reports.
+  useEffect(() => {
+    if (!profile) return;
+    if (!isAdmin && profile.branch_id) setBranchFilter(profile.branch_id);
+    setBranchResolved(true);
+  }, [profile, isAdmin]);
+
+  useEffect(() => {
+    if (!branchResolved) return;
     checkDueDateAlerts();
     async function load() {
       const now = new Date();
@@ -109,6 +132,27 @@ export default function DashboardPage() {
       const sevenDaysAgo = toDateStr(daysAgo(6));
       const fourWeeksAgo = toDateStr(daysAgo(27));
 
+      // Payments/attendance/payroll don't carry branch_id directly — resolve
+      // which customers/employees belong to the selected branch first, then
+      // scope those tables by the resulting id list. journal_entries has no
+      // branch_id at all yet (a separate, larger gap — see docs/notes-to-website-prd.md
+      // item 5), so the Revenue line on the daily chart stays company-wide
+      // even when a specific branch is selected.
+      let branchCustomerIds: string[] | null = null;
+      let branchEmployeeIds: string[] | null = null;
+      if (branchFilter !== 'all') {
+        const [{ data: bc }, { data: be }] = await Promise.all([
+          supabase.from('customers').select('id').eq('branch_id', branchFilter),
+          supabase.from('employees').select('id').eq('branch_id', branchFilter),
+        ]);
+        branchCustomerIds = (bc ?? []).map((c: any) => c.id);
+        branchEmployeeIds = (be ?? []).map((e: any) => e.id);
+      }
+      const NO_MATCH = ['00000000-0000-0000-0000-000000000000'];
+      const scopeByBranch = (q: any) => branchFilter === 'all' ? q : q.eq('branch_id', branchFilter);
+      const scopeByCustomerIds = (q: any) => branchCustomerIds === null ? q : q.in('customer_id', branchCustomerIds.length > 0 ? branchCustomerIds : NO_MATCH);
+      const scopeByEmployeeIds = (q: any) => branchEmployeeIds === null ? q : q.in('employee_id', branchEmployeeIds.length > 0 ? branchEmployeeIds : NO_MATCH);
+
       const [
         customers, newCustomers, loans, allLoanStatuses,
         paymentsToday, paymentsYesterday, paymentsMonth, paymentsLastMonth,
@@ -116,36 +160,36 @@ export default function DashboardPage() {
         customersByArea, paymentsFourWeeks, disbursedFourWeeks, gasVouchersFourWeeks, cashVouchersFourWeeks,
         attendanceMonth, employees, attendanceToday, payrollMonth,
       ] = await Promise.all([
-        supabase.from('customers').select('id', { count: 'exact', head: true }),
-        supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart),
-        supabase.from('loans').select('id, remaining_balance, due_date').eq('status', 'active'),
-        supabase.from('loans').select('status'),
-        supabase.from('payments').select('amount_paid').gte('payment_date', today),
-        supabase.from('payments').select('amount_paid').eq('payment_date', yesterday),
-        supabase.from('payments').select('amount_paid').gte('payment_date', monthStart),
-        supabase.from('payments').select('amount_paid').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd),
-        supabase.from('payments').select('*, customers(first_name, last_name), loans(loan_number)').order('created_at', { ascending: false }).limit(5),
-        supabase.from('loans').select('*, customers(first_name, last_name)').eq('status', 'active').order('due_date', { ascending: true }).limit(5),
-        supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', sevenDaysAgo),
+        scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true })),
+        scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
+        scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date').eq('status', 'active')),
+        scopeByBranch(supabase.from('loans').select('status')),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid').gte('payment_date', today)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid').eq('payment_date', yesterday)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid').gte('payment_date', monthStart)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd)),
+        scopeByCustomerIds(supabase.from('payments').select('*, customers(first_name, last_name), loans(loan_number)').order('created_at', { ascending: false }).limit(5)),
+        scopeByBranch(supabase.from('loans').select('*, customers(first_name, last_name)').eq('status', 'active').order('due_date', { ascending: true }).limit(5)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', sevenDaysAgo)),
         supabase.from('journal_entries').select('entry_date, journal_entry_lines(credit, chart_of_accounts(account_type))').gte('entry_date', sevenDaysAgo),
-        supabase.from('customers').select('area_id, areas(name)').eq('status', 'active'),
-        supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', fourWeeksAgo),
-        supabase.from('loans').select('release_amount, disbursed_at').not('disbursed_at', 'is', null).gte('disbursed_at', fourWeeksAgo),
-        supabase.from('gas_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo),
-        supabase.from('general_cash_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo),
-        supabase.from('attendance').select('status').gte('date', monthStart),
-        supabase.from('employees').select('id, position').eq('status', 'active'),
-        supabase.from('attendance').select('employee_id, employees(position)').eq('date', today),
-        supabase.from('payroll').select('net_pay').gte('pay_date', monthStart),
+        scopeByBranch(supabase.from('customers').select('area_id, areas(name)').eq('status', 'active')),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', fourWeeksAgo)),
+        scopeByBranch(supabase.from('loans').select('release_amount, disbursed_at').not('disbursed_at', 'is', null).gte('disbursed_at', fourWeeksAgo)),
+        scopeByBranch(supabase.from('gas_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo)),
+        scopeByBranch(supabase.from('general_cash_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo)),
+        scopeByEmployeeIds(supabase.from('attendance').select('status').gte('date', monthStart)),
+        scopeByBranch(supabase.from('employees').select('id, position').eq('status', 'active')),
+        scopeByEmployeeIds(supabase.from('attendance').select('employee_id, employees(position)').eq('date', today)),
+        scopeByEmployeeIds(supabase.from('payroll').select('net_pay').gte('pay_date', monthStart)),
       ]);
 
-      const activeLoans = loans.data ?? [];
-      const overdue = activeLoans.filter(l => l.due_date && new Date(l.due_date) < new Date());
-      const outstandingBalance = activeLoans.reduce((s, l) => s + Number(l.remaining_balance), 0);
+      const activeLoans: any[] = loans.data ?? [];
+      const overdue = activeLoans.filter((l: any) => l.due_date && new Date(l.due_date) < new Date());
+      const outstandingBalance = activeLoans.reduce((s: number, l: any) => s + Number(l.remaining_balance), 0);
       // Overdue Rate = portfolio at risk — the share of the whole
       // receivable that's currently overdue, not just a share of loan
       // count (which "Overdue Loans" already shows).
-      const overdueAmount = overdue.reduce((s, l) => s + Number(l.remaining_balance), 0);
+      const overdueAmount = overdue.reduce((s: number, l: any) => s + Number(l.remaining_balance), 0);
       const overdueRate = outstandingBalance > 0 ? (overdueAmount / outstandingBalance) * 100 : 0;
 
       const statusCounts = (allLoanStatuses.data ?? []).reduce((acc: Record<string, number>, l: any) => {
@@ -155,13 +199,13 @@ export default function DashboardPage() {
       const paidLoans = statusCounts['paid'] ?? 0;
       const pendingLoans = statusCounts['pending'] ?? 0;
 
-      const monthlyCollections = (paymentsMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0);
-      const lastMonthCollections = (paymentsLastMonth.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0);
+      const monthlyCollections = (paymentsMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
+      const lastMonthCollections = (paymentsLastMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
 
-      const disbursedTotal = (disbursedFourWeeks.data ?? []).reduce((s, l: any) => s + Number(l.release_amount), 0);
+      const disbursedTotal = (disbursedFourWeeks.data ?? []).reduce((s: number, l: any) => s + Number(l.release_amount), 0);
       const expensesTotal = [...(gasVouchersFourWeeks.data ?? []), ...(cashVouchersFourWeeks.data ?? [])]
         .reduce((s: number, v: any) => s + Number(v.total_amount), 0);
-      const collectionsFourWeeksTotal = (paymentsFourWeeks.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0);
+      const collectionsFourWeeksTotal = (paymentsFourWeeks.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
       // "This month" net cash flow, for the Cash Flow stat card — reuses
       // the same four-week collections figure since that window
       // approximates a month; disbursements/expenses are the outflow side.
@@ -174,7 +218,7 @@ export default function DashboardPage() {
       const collectorsPresentToday = presentTodayRows.filter((a: any) => a.employees?.position === 'Branch Field Collector').length;
       const employeesPresentToday = presentTodayRows.length;
 
-      const payrollThisMonth = (payrollMonth.data ?? []).reduce((s, p: any) => s + Number(p.net_pay), 0);
+      const payrollThisMonth = (payrollMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.net_pay), 0);
 
       setStats({
         totalCustomers: customers.count ?? 0,
@@ -183,8 +227,8 @@ export default function DashboardPage() {
         overdueLoans: overdue.length,
         overdueAmount,
         overdueRate,
-        todayCollections: (paymentsToday.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
-        yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s, p) => s + Number(p.amount_paid), 0),
+        todayCollections: (paymentsToday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
+        yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         monthlyCollections,
         lastMonthCollections,
         outstandingBalance,
@@ -200,7 +244,7 @@ export default function DashboardPage() {
       });
 
       setRecentPayments(recentPays.data ?? []);
-      setUpcomingDues((upcoming.data ?? []).filter(l => l.due_date));
+      setUpcomingDues((upcoming.data ?? []).filter((l: any) => l.due_date));
 
       // Daily Collections & Revenue — last 7 calendar days. Collections =
       // actual cash received (payments); Revenue = ledger credits to
@@ -285,7 +329,7 @@ export default function DashboardPage() {
       setLoading(false);
     }
     load();
-  }, []);
+  }, [branchResolved, branchFilter]);
 
   if (loading) {
     return (
@@ -299,6 +343,19 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Dashboard" description="Welcome back to 1125Corp — here's your lending overview">
+        {isAdmin ? (
+          <Select value={branchFilter} onValueChange={setBranchFilter}>
+            <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All Branches" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Branches</SelectItem>
+              {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        ) : (
+          <Badge variant="outline" className="h-9 px-3 flex items-center">
+            {branches.find(b => b.id === branchFilter)?.name ?? '—'}
+          </Badge>
+        )}
         <Button variant="outline" size="sm">
           <Download className="w-4 h-4 mr-2" />
           Export

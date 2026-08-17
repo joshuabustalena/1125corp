@@ -25,6 +25,7 @@ import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso } from '@/li
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { postJournalEntry } from '@/lib/ledger';
+import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye } from 'lucide-react';
 import { SPECIAL_LOAN_TYPES, SPECIAL_LOAN_LABELS } from '@/lib/special-loans';
 import { DocumentScaler } from '@/components/document-scaler';
@@ -90,6 +91,10 @@ export default function PayrollPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const [payroll, setPayroll] = useState<any[]>([]);
+  // Payroll Records is otherwise one flat list of every employee's every
+  // cutoff — this narrows it down to one employee's own salary-slip
+  // history without having to scroll/search the combined table.
+  const [recordsEmployeeFilter, setRecordsEmployeeFilter] = useState('all');
   const [employees, setEmployees] = useState<any[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -176,7 +181,7 @@ export default function PayrollPage() {
 
   async function load() {
     setLoading(true);
-    const { data } = await supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, branches(name))').order('pay_date', { ascending: false });
+    const { data } = await supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, branches(name))').order('pay_date', { ascending: false });
     setPayroll(data ?? []);
 
     const employeeIds = Array.from(new Set((data ?? []).map(p => p.employee_id)));
@@ -237,6 +242,10 @@ export default function PayrollPage() {
   // Only the raw `basic_salary` figure from each cutoff counts; incentives,
   // birthday bonus, leave pay, and other allowances are excluded.
   const payrollYears = Array.from(new Set(payroll.map(p => String(new Date(p.pay_date).getFullYear())))).sort((a, b) => Number(b) - Number(a));
+  const filteredPayroll = recordsEmployeeFilter === 'all' ? payroll : payroll.filter(p => p.employee_id === recordsEmployeeFilter);
+  const payrollEmployeeOptions = Array.from(
+    new Map(payroll.map(p => [p.employee_id, `${p.employees?.first_name ?? ''} ${p.employees?.last_name ?? ''}`.trim() || 'Unknown'])).entries()
+  ).sort((a, b) => a[1].localeCompare(b[1]));
 
   function getThirteenthMonthRange(year: string, cycle: 'partial' | 'full') {
     const y = Number(year);
@@ -323,6 +332,10 @@ export default function PayrollPage() {
           <div><span style={{ color: '#666' }}>Branch: </span><strong>{target.employees?.branches?.name ?? '—'}</strong></div>
           <div><span style={{ color: '#666' }}>Department: </span><strong>{target.employees?.department ?? '—'}</strong></div>
           <div><span style={{ color: '#666' }}>Days Present: </span><strong>{present} / {total}</strong></div>
+          <div>
+            <span style={{ color: '#666' }}>{target.employees?.pay_type === 'monthly' ? 'Monthly Salary: ' : 'Daily Rate: '}</span>
+            <strong>{formatCurrency(target.employees?.salary)}</strong>
+          </div>
         </div>
 
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 16 }}>
@@ -718,7 +731,7 @@ export default function PayrollPage() {
   }
 
   function handleExport() {
-    exportToCSV(payroll.map(p => {
+    exportToCSV(filteredPayroll.map(p => {
       const { present, total } = daysPresent(p);
       return {
         Employee: `${p.employees?.first_name} ${p.employees?.last_name}`,
@@ -873,6 +886,14 @@ export default function PayrollPage() {
       return;
     }
 
+    // Unlike the regular Payroll Voucher, this one isn't scoped to a single
+    // branch (thirteenthMonthRows can span every branch at once), so there's
+    // no single correct branch-specific "Cash in Vault" account to resolve
+    // to the way loan disbursement / the regular voucher now do — this
+    // still uses the old flat '1000' code, which is a known-ambiguous
+    // duplicate in the live Chart of Accounts. Splitting this into one
+    // journal entry per branch would fix it properly but is a bigger change
+    // than this batch — flagged as a follow-up, not silently left broken.
     await postJournalEntry({
       entryDate: new Date().toISOString().split('T')[0],
       description: `13th Month Voucher — ${thirteenthCycleLabel}`,
@@ -1046,9 +1067,14 @@ export default function PayrollPage() {
 
     let sssPayable = 0, philPayable = 0, pagibigPayable = 0, svTotal = 0, uniformTotal = 0, cashShortageTotal = 0, employeeLoanTotal = 0, netPayTotal = 0;
     const lines = eligiblePayrollRows.map(p => {
-      sssPayable += Number(p.sss) + Number(p.sss_loan || 0);
+      // sss_loan/pag_ibig_loan are deliberately left out — the client
+      // confirmed (reference journal entry) these should never appear on
+      // this ledger entry at all, not folded into SSS/PagIBIG Payable.
+      // They're still deducted from the employee's net pay on the payslip
+      // itself, just not booked as part of this company-ledger expense.
+      sssPayable += Number(p.sss);
       philPayable += Number(p.philhealth);
-      pagibigPayable += Number(p.pag_ibig) + Number(p.pag_ibig_loan || 0);
+      pagibigPayable += Number(p.pag_ibig);
       svTotal += Number(p.service_vehicle || 0);
       uniformTotal += Number(p.uniform || 0);
       cashShortageTotal += Number(p.cash_shortage || 0);
@@ -1057,7 +1083,10 @@ export default function PayrollPage() {
       return { payroll_id: p.id, employee_id: p.employee_id, name: `${p.employees?.first_name ?? ''} ${p.employees?.last_name ?? ''}`, net_pay: Number(p.net_pay) || 0 };
     });
     // Backed out from the credit side so the entry always balances by
-    // construction, regardless of which deduction types happen to be zero.
+    // construction, regardless of which deduction types happen to be zero —
+    // dropping sss_loan/pag_ibig_loan from the credits above also shrinks
+    // this figure by the same amount, exactly matching the client's
+    // reference entry (Salaries Expense = sum of every credit line below).
     const salariesExpense = netPayTotal + sssPayable + philPayable + pagibigPayable + svTotal + uniformTotal + cashShortageTotal + employeeLoanTotal;
 
     const { data: voucher, error } = await supabase.from('payroll_vouchers').insert({
@@ -1080,6 +1109,24 @@ export default function PayrollPage() {
 
     await supabase.from('payroll').update({ voucher_id: voucher.id }).in('id', eligiblePayrollRows.map(p => p.id));
 
+    // The live Chart of Accounts splits these per branch and uses different
+    // codes than what used to be hardcoded here (e.g. Employee Loan is
+    // 1300/1301 per branch, not 1110) — resolve by branch-specific name
+    // instead. A voucher only ever covers one branch (eligiblePayrollRows is
+    // already filtered to voucherBranchId), so this is one lookup set per
+    // voucher. Falls back to the old fixed codes if no branch-specific
+    // account exists yet (e.g. Dinalupihan has no "Service Vehicle Loan"
+    // account at all today) — postJournalEntry's missingCodes warning still
+    // catches it if that fallback also doesn't resolve to a real account.
+    const branchName = voucherBranch?.name;
+    const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode] = await Promise.all([
+      resolveBranchAccountCode('Service Vehicle Loan', branchName).then(c => c ?? '1120'),
+      resolveBranchAccountCode('Receivable from Uniform', branchName).then(c => c ?? '1130'),
+      resolveBranchAccountCode('Cash Short/Over', branchName).then(c => c ?? '1140'),
+      resolveBranchAccountCode('Employee Loan', branchName).then(c => c ?? '1110'),
+      resolveBranchAccountCode('Cash in Vault', branchName).then(c => c ?? '1000'),
+    ]);
+
     await postJournalEntry({
       entryDate: voucherPayDate,
       description: `Payroll Voucher — ${voucherBranch?.name ?? ''} — ${formatDate(voucherPayDate)}`,
@@ -1087,16 +1134,17 @@ export default function PayrollPage() {
       source: 'payroll_voucher',
       sourceId: voucher?.id ?? null,
       createdBy: profile?.id ?? null,
+      branchId: voucherBranchId || null,
       lines: [
         { accountCode: '5010', debit: salariesExpense, memo: 'Salaries Expense' },
         { accountCode: '2010', credit: sssPayable, memo: 'SSS Payable' },
         { accountCode: '2020', credit: philPayable, memo: 'Philhealth Payable' },
         { accountCode: '2030', credit: pagibigPayable, memo: 'PagIBIG Payable' },
-        { accountCode: '1120', credit: svTotal, memo: 'Service Vehicle Loan' },
-        { accountCode: '1130', credit: uniformTotal, memo: 'Uniform' },
-        { accountCode: '1140', credit: cashShortageTotal, memo: 'Cash Shortage' },
-        { accountCode: '1110', credit: employeeLoanTotal, memo: 'Employee Loan' },
-        { accountCode: '1000', credit: netPayTotal, memo: 'Cash in Vault' },
+        { accountCode: svCode, credit: svTotal, memo: 'Service Vehicle Loan' },
+        { accountCode: uniformCode, credit: uniformTotal, memo: 'Uniform' },
+        { accountCode: cashShortageCode, credit: cashShortageTotal, memo: 'Cash Shortage' },
+        { accountCode: employeeLoanCode, credit: employeeLoanTotal, memo: 'Employee Loan' },
+        { accountCode: cashVaultCode, credit: netPayTotal, memo: 'Cash in Vault' },
       ],
     });
 
@@ -1244,19 +1292,33 @@ export default function PayrollPage() {
 
       {/* Payroll table */}
       <Card className="glass-card border-border">
+        <CardHeader>
+          <div className="space-y-2 max-w-xs">
+            <Label>Employee</Label>
+            <Select value={recordsEmployeeFilter} onValueChange={setRecordsEmployeeFilter}>
+              <SelectTrigger><SelectValue placeholder="All Employees" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Employees</SelectItem>
+                {payrollEmployeeOptions.map(([id, name]) => (
+                  <SelectItem key={id} value={id}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
-          ) : payroll.length === 0 ? (
+          ) : filteredPayroll.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <ScrollText className="w-12 h-12 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">No payroll records</p>
+              <p className="text-sm text-muted-foreground">{recordsEmployeeFilter === 'all' ? 'No payroll records' : 'No payroll records for this employee'}</p>
             </div>
           ) : (
             <>
               {/* Mobile card list */}
               <div className="md:hidden divide-y divide-border">
-                {payroll.map(p => {
+                {filteredPayroll.map(p => {
                   const deductions = payrollDeductionsTotal(p);
                   const { present, total } = daysPresent(p);
                   return (
@@ -1316,7 +1378,7 @@ export default function PayrollPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {payroll.map(p => {
+                {filteredPayroll.map(p => {
                   const deductions = payrollDeductionsTotal(p);
                   const { present, total } = daysPresent(p);
                   return (

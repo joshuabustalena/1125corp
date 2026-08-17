@@ -24,12 +24,14 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { postJournalEntry } from '@/lib/ledger';
+import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { notifyRoles } from '@/lib/notify';
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
+import { PaymentReceiptDialog, type PaymentReceiptData } from '@/components/payment-receipt-dialog';
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
-  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown,
+  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown, Trash2,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -78,6 +80,9 @@ export default function LoanDetailPage() {
   const [releasingCollateral, setReleasingCollateral] = useState(false);
   const [customerDocuments, setCustomerDocuments] = useState<any[]>([]);
   const [previewDoc, setPreviewDoc] = useState<PreviewableDocument | null>(null);
+  const [receiptData, setReceiptData] = useState<PaymentReceiptData | null>(null);
+  const [deletePaymentTarget, setDeletePaymentTarget] = useState<any>(null);
+  const [deletingPayment, setDeletingPayment] = useState(false);
 
   async function loadLoan() {
     const id = params.id as string;
@@ -133,6 +138,46 @@ export default function LoanDetailPage() {
   useEffect(() => {
     loadLoan();
   }, [params.id]);
+
+  // Row-locked, atomic — same RPC used by the Payments page's own
+  // edit/delete, so a payment removed from here can't corrupt the loan's
+  // balance under concurrency any more than doing it from Payments can.
+  async function handleDeletePayment() {
+    if (!deletePaymentTarget) return;
+    setDeletingPayment(true);
+    const { data, error } = await supabase.rpc('delete_loan_payment', { p_payment_id: deletePaymentTarget.id }).single();
+    if (error || !data) {
+      toast({ title: 'Error', description: error?.message ?? 'Could not delete the payment', variant: 'destructive' });
+      setDeletingPayment(false);
+      return;
+    }
+    toast({ title: 'Payment deleted' });
+    setDeletePaymentTarget(null);
+    setDeletingPayment(false);
+    loadLoan();
+  }
+
+  // Payment History is scoped to this one loan, so its own customer/branch/
+  // area/collector fields already carry everything a receipt needs — no
+  // extra joined query required per row like the Payments page needs.
+  function buildReceiptDataForThisLoan(p: any): PaymentReceiptData {
+    return {
+      orNumber: p.receipts?.or_number ?? '—',
+      loanNumber: loan.loan_number,
+      releaseDate: loan.release_date ?? null,
+      dueDate: loan.due_date ?? null,
+      customerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),
+      customerPhone: loan.customers?.phone ?? null,
+      currentAddress: p.location_address ?? null,
+      branchName: loan.branches?.name ?? null,
+      areaName: loan.areas?.name ?? null,
+      collectorName: loan.collectors?.profiles?.full_name ?? null,
+      amount: Number(p.amount_paid),
+      remainingBalance: Number(p.remaining_balance),
+      date: p.payment_date,
+      time: p.payment_time ?? null,
+    };
+  }
 
   if (loading) {
     return <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>;
@@ -623,18 +668,31 @@ export default function LoanDetailPage() {
       : (loan.term_days > 0 ? totalPayable / loan.term_days : 0);
     const loansReceivableDebit = principal + interestAmount - firstPayment;
     const cashReleased = Math.max(0, principal - serviceFee - offsetBalance - firstPayment);
+    const disbursedCustomerName = `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim();
+
+    // The live Chart of Accounts now splits Loans Receivable and Cash in
+    // Vault per branch (e.g. code 1100 is Balanga's receivable specifically,
+    // Dinalupihan's is 1200) — resolve the branch-correct code instead of
+    // assuming the Balanga one always applies. Falls back to the old fixed
+    // codes only if no branch-specific account is found, so this never
+    // regresses a single-branch setup.
+    const [loansReceivableCode, cashVaultCode] = await Promise.all([
+      resolveBranchAccountCode('Loans Receivable', loan.branches?.name).then(c => c ?? '1100'),
+      resolveBranchAccountCode('Cash in Vault', loan.branches?.name).then(c => c ?? '1000'),
+    ]);
 
     const ledgerResult = await postJournalEntry({
       entryDate: now.split('T')[0],
-      description: `Loan disbursement — ${loan.loan_number}`,
+      description: `Loan disbursement — ${loan.loan_number}${disbursedCustomerName ? ` — ${disbursedCustomerName}` : ''}`,
       reference: voucherNumber,
       source: 'disbursement',
       sourceId: loan.id,
       createdBy: profile?.id ?? null,
+      branchId: loan.branch_id ?? null,
       lines: [
-        { accountCode: '1100', debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
-        { accountCode: '1100', credit: offsetBalance, memo: 'Offset balance from previous loan' },
-        { accountCode: '1000', credit: cashReleased, memo: 'Cash released to borrower' },
+        { accountCode: loansReceivableCode, debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
+        { accountCode: loansReceivableCode, credit: offsetBalance, memo: 'Offset balance from previous loan' },
+        { accountCode: cashVaultCode, credit: cashReleased, memo: 'Cash released to borrower' },
         { accountCode: '4010', credit: serviceFee, memo: 'Service fee income' },
         { accountCode: '4000', credit: interestAmount, memo: 'Interest income' },
       ],
@@ -643,7 +701,6 @@ export default function LoanDetailPage() {
     toast({ title: 'Loan disbursed', description: `${loan.loan_number} is now active.` });
     // Disbursement had no notification at all before this — Approve/Decline
     // both already announce themselves, this was the missing third leg.
-    const disbursedCustomerName = `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim();
     notifyRoles(['branch_manager', 'administrator'], {
       type: 'loan_disbursed',
       title: 'Loan Disbursed',
@@ -956,12 +1013,22 @@ export default function LoanDetailPage() {
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {payments.map(p => (
-                  <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
-                    <div>
+                  <div key={p.id} className="flex items-center justify-between gap-2 p-3 rounded-lg bg-secondary/50">
+                    <div className="min-w-0">
                       <p className="text-sm font-medium">{formatCurrency(p.amount_paid)}</p>
-                      <p className="text-xs text-muted-foreground">{formatDate(p.payment_date)} {p.receipts?.or_number ? `• ${p.receipts.or_number}` : ''}</p>
+                      <p className="text-xs text-muted-foreground truncate">{formatDate(p.payment_date)} {p.receipts?.or_number ? `• ${p.receipts.or_number}` : ''}</p>
                     </div>
-                    <Badge variant="secondary" className="text-success">{formatCurrency(p.remaining_balance)}</Badge>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Badge variant="secondary" className="text-success">{formatCurrency(p.remaining_balance)}</Badge>
+                      <Button variant="ghost" size="icon" title="View receipt" onClick={() => setReceiptData(buildReceiptDataForThisLoan(p))}>
+                        <Receipt className="w-4 h-4" />
+                      </Button>
+                      {isAdmin && (
+                        <Button variant="ghost" size="icon" title="Delete payment" onClick={() => setDeletePaymentTarget(p)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1498,6 +1565,25 @@ export default function LoanDetailPage() {
       </Dialog>
 
       <DocumentPreviewDialog doc={previewDoc} onClose={() => setPreviewDoc(null)} />
+      <PaymentReceiptDialog receiptData={receiptData} onClose={() => setReceiptData(null)} />
+
+      <Dialog open={!!deletePaymentTarget} onOpenChange={(open) => !open && setDeletePaymentTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Payment</DialogTitle>
+            <DialogDescription>
+              This will remove the payment of {deletePaymentTarget && formatCurrency(deletePaymentTarget.amount_paid)} and restore it to the loan's remaining balance. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletePaymentTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeletePayment} disabled={deletingPayment}>
+              {deletingPayment && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

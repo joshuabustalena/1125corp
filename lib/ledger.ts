@@ -26,6 +26,11 @@ export async function postJournalEntry(params: {
   source: string;
   sourceId?: string | null;
   createdBy?: string | null;
+  // Left undefined/null for anything that isn't tied to one specific
+  // branch (e.g. the 13th Month Voucher, which can span every branch at
+  // once) — shows up as "Shared" in the Journal Entries branch filter,
+  // same convention chart_of_accounts.branch_id already uses.
+  branchId?: string | null;
   lines: LedgerLine[];
 }): Promise<PostJournalEntryResult> {
   try {
@@ -54,6 +59,7 @@ export async function postJournalEntry(params: {
       source: params.source,
       source_id: params.sourceId ?? null,
       created_by: params.createdBy ?? null,
+      branch_id: params.branchId ?? null,
     }).select('id').single();
 
     if (error || !entry) return { ok: false, missingCodes };

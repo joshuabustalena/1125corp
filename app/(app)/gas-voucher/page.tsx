@@ -192,6 +192,7 @@ export default function GasVoucherPage() {
       source: 'gas_voucher',
       sourceId: voucher?.id ?? null,
       createdBy: profile?.id ?? null,
+      branchId: branchId || null,
       lines: [
         { accountCode: '5020', debit: grandTotal, memo: 'Transportation Expense (Gas)' },
         { accountCode: cashAccountCode, credit: grandTotal, memo: cashAccountCode === '1010' ? 'Cash in Bank' : 'Cash in Vault' },

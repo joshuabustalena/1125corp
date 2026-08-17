@@ -22,6 +22,18 @@ const lCell: React.CSSProperties = { border: '1px solid #000', padding: '5px 6px
 const lCellCenter: React.CSSProperties = { ...lCell, textAlign: 'center' };
 const lCellRight: React.CSSProperties = { ...lCell, textAlign: 'right' };
 
+// Same Sunday-exclusion convention as the collection-day calendars used
+// elsewhere (Payments, Payroll) — and the same rule behind the client's own
+// manual "add-one every day, skip Sundays" delay-tracking process in Excel.
+function countCollectionDaysBetween(start: Date, end: Date): number {
+  if (start > end) return 0;
+  let count = 0;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() !== 0) count++;
+  }
+  return count;
+}
+
 export default function CollectionListPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
@@ -99,19 +111,44 @@ export default function CollectionListPage() {
 
   const collector = collectors.find(c => c.id === collectorId);
   const today = new Date();
-  const rows = loans.map(l => ({
-    id: l.id,
-    borrowerName: `${l.customers?.first_name ?? ''} ${l.customers?.last_name ?? ''}`.trim(),
-    dateReleased: l.release_date,
-    dueDate: l.due_date,
-    amountRelease: Number(l.release_amount) || 0,
-    // Same "past due_date" rule the Dashboard/Reports use for Overdue
-    // Amount — the full remaining balance counts once the loan's due date
-    // has passed, not a partial daily-arrears figure.
-    amountOverdue: l.due_date && new Date(l.due_date) < today ? Number(l.remaining_balance) || 0 : 0,
-    dailyPayment: Number(l.daily_payment) || 0,
-    balance: Number(l.remaining_balance) || 0,
-  }));
+  const rows = loans.map(l => {
+    const totalPayable = Number(l.total_payable) || 0;
+    const remainingBalance = Number(l.remaining_balance) || 0;
+    const dailyPayment = Number(l.daily_payment) || 0;
+    const isPastDue = !!(l.due_date && new Date(l.due_date) < today);
+
+    // Delay Amount, matching the client's own field process exactly: how
+    // far behind the customer's cumulative payments are from what should
+    // have been collected by now, day by day (Sundays don't count — no
+    // collection expected then). The release day itself has no delay yet;
+    // the very next day is the first day a payment is actually due.
+    let amountOverdue = 0;
+    if (isPastDue) {
+      // Already past the loan's final due date — same "full balance
+      // counts" rule the Dashboard/Reports/Loans page already use.
+      amountOverdue = remainingBalance;
+    } else if (l.release_date && dailyPayment > 0) {
+      const firstDueDay = new Date(l.release_date);
+      firstDueDay.setDate(firstDueDay.getDate() + 1);
+      if (firstDueDay <= today) {
+        const collectionDaysElapsed = countCollectionDaysBetween(firstDueDay, today);
+        const amountAlreadyPaid = totalPayable - remainingBalance;
+        const expectedByNow = dailyPayment * collectionDaysElapsed;
+        amountOverdue = Math.round(Math.max(0, expectedByNow - amountAlreadyPaid) * 100) / 100;
+      }
+    }
+
+    return {
+      id: l.id,
+      borrowerName: `${l.customers?.first_name ?? ''} ${l.customers?.last_name ?? ''}`.trim(),
+      dateReleased: l.release_date,
+      dueDate: l.due_date,
+      amountRelease: Number(l.release_amount) || 0,
+      amountOverdue,
+      dailyPayment,
+      balance: remainingBalance,
+    };
+  });
   const totalOverdue = rows.reduce((s, r) => s + r.amountOverdue, 0);
   const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
 

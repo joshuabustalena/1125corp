@@ -198,6 +198,7 @@ export default function CashVouchersPage() {
       source: 'general_cash_voucher',
       sourceId: voucher?.id ?? null,
       createdBy: profile?.id ?? null,
+      branchId: branchId || null,
       lines: [
         ...resolvedLines.map(l => ({ accountCode: l.account_code, debit: l.amount, memo: particulars })),
         { accountCode: cashAccountCode, credit: totalAmount, memo: `Cash Voucher — ${payee}` },

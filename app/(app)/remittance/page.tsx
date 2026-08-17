@@ -21,6 +21,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, generateEntryNumber } from '@/lib/format';
+import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { ArrowRightLeft, Loader2, Wallet, Plus, Trash2 } from 'lucide-react';
 
 type Line = { account_id: string; amount: string };
@@ -37,6 +38,13 @@ export default function RemittancePage() {
   const [collectors, setCollectors] = useState<any[]>([]);
   const [collected, setCollected] = useState<Record<string, number>>({});
   const [remitted, setRemitted] = useState<Record<string, number>>({});
+  // All-time (not just this date) collected vs. remitted per collector, as
+  // of end of the selected date — this is what "Balance Owed" is actually
+  // based on now, so an unremitted amount from an earlier day keeps
+  // showing up (carries over) instead of resetting to 0 the next day.
+  // Collected/Remitted columns still show just that day's activity.
+  const [cumulativeCollected, setCumulativeCollected] = useState<Record<string, number>>({});
+  const [cumulativeRemitted, setCumulativeRemitted] = useState<Record<string, number>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -55,34 +63,37 @@ export default function RemittancePage() {
 
   async function loadData() {
     setLoading(true);
-    let colQuery = supabase.from('collectors').select('id, branch_id, profile_id, profiles(full_name)').eq('status', 'active');
+    let colQuery = supabase.from('collectors').select('id, branch_id, profile_id, profiles(full_name), branches(name)').eq('status', 'active');
     if (isFieldCollector && profile) colQuery = colQuery.eq('profile_id', profile.id);
 
-    const [{ data: cols }, { data: pays }, { data: rems }] = await Promise.all([
+    const [{ data: cols }, { data: pays }, { data: rems }, { data: cumPays }, { data: cumRems }] = await Promise.all([
       colQuery,
       supabase.from('payments').select('collector_id, amount_paid').eq('payment_date', date),
       supabase.from('remittances').select('collector_id, amount').eq('remittance_date', date),
+      supabase.from('payments').select('collector_id, amount_paid').lte('payment_date', date),
+      supabase.from('remittances').select('collector_id, amount').lte('remittance_date', date),
     ]);
 
     setCollectors(cols ?? []);
 
-    const collectedMap: Record<string, number> = {};
-    (pays ?? []).forEach((p: any) => {
-      if (!p.collector_id) return;
-      collectedMap[p.collector_id] = (collectedMap[p.collector_id] ?? 0) + Number(p.amount_paid);
-    });
-    setCollected(collectedMap);
+    function sumByCollector(rows: any[], amountKey: string): Record<string, number> {
+      const map: Record<string, number> = {};
+      for (const r of rows) {
+        if (!r.collector_id) continue;
+        map[r.collector_id] = (map[r.collector_id] ?? 0) + Number(r[amountKey]);
+      }
+      return map;
+    }
 
-    const remittedMap: Record<string, number> = {};
-    (rems ?? []).forEach((r: any) => {
-      remittedMap[r.collector_id] = (remittedMap[r.collector_id] ?? 0) + Number(r.amount);
-    });
-    setRemitted(remittedMap);
+    setCollected(sumByCollector(pays ?? [], 'amount_paid'));
+    setRemitted(sumByCollector(rems ?? [], 'amount'));
+    setCumulativeCollected(sumByCollector(cumPays ?? [], 'amount_paid'));
+    setCumulativeRemitted(sumByCollector(cumRems ?? [], 'amount'));
     setLoading(false);
   }
 
   function openRecord(collectorId: string, collectorName: string) {
-    const owed = (collected[collectorId] ?? 0) - (remitted[collectorId] ?? 0);
+    const owed = (cumulativeCollected[collectorId] ?? 0) - (cumulativeRemitted[collectorId] ?? 0);
     setForm({ collector_id: collectorId, collector_name: collectorName, amount: owed > 0 ? owed : 0, notes: '' });
     setLines([{ account_id: '', amount: '' }]);
     setDialogOpen(true);
@@ -124,9 +135,15 @@ export default function RemittancePage() {
     if (!form.collector_id || !canSave) return;
     setSaving(true);
 
-    const loansReceivableAccount = accounts.find(a => a.code === '1100');
+    // Same branch-aware resolution as loan disbursement / the payroll
+    // voucher — the live Chart of Accounts has a separate Loans Receivable
+    // per branch (e.g. 1100 for Balanga, 1200 for Dinalupihan), so this
+    // collector's own branch determines which one gets credited.
+    const collector = collectors.find(c => c.id === form.collector_id);
+    const loansReceivableCode = (await resolveBranchAccountCode('Loans Receivable', (collector as any)?.branches?.name)) ?? '1100';
+    const loansReceivableAccount = accounts.find(a => a.code === loansReceivableCode);
     if (!loansReceivableAccount) {
-      toast({ title: 'Error', description: 'Loans Receivable account (1100) not found in the Chart of Accounts', variant: 'destructive' });
+      toast({ title: 'Error', description: `Loans Receivable account (${loansReceivableCode}) not found in the Chart of Accounts`, variant: 'destructive' });
       setSaving(false);
       return;
     }
@@ -153,6 +170,7 @@ export default function RemittancePage() {
       source: 'remittance',
       source_id: remittance.id,
       created_by: profile?.id ?? null,
+      branch_id: (collector as any)?.branch_id ?? null,
     }).select('id').single();
 
     if (entryError || !entry) {
@@ -191,14 +209,18 @@ export default function RemittancePage() {
   const rows = collectors.map(c => {
     const collectedAmt = collected[c.id] ?? 0;
     const remittedAmt = remitted[c.id] ?? 0;
+    // Owed is the running, all-time balance as of this date — not just
+    // today's collected minus today's remitted — so an unremitted amount
+    // from an earlier day carries over instead of resetting.
+    const owed = (cumulativeCollected[c.id] ?? 0) - (cumulativeRemitted[c.id] ?? 0);
     return {
       id: c.id,
       name: c.profiles?.full_name ?? 'Unassigned',
       collected: collectedAmt,
       remitted: remittedAmt,
-      owed: collectedAmt - remittedAmt,
+      owed,
     };
-  }).filter(r => r.collected > 0 || r.remitted > 0);
+  }).filter(r => r.collected > 0 || r.remitted > 0 || r.owed > 0);
 
   const totalOwed = rows.reduce((s, r) => s + Math.max(0, r.owed), 0);
 

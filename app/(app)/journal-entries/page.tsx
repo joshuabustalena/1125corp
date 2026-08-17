@@ -23,6 +23,7 @@ import { formatCurrency, formatDate, generateEntryNumber } from '@/lib/format';
 import { Plus, Loader2, Trash2 } from 'lucide-react';
 
 type Line = { account_id: string; debit: string; credit: string; memo: string };
+const SHARED_VALUE = 'shared';
 
 export default function JournalEntriesPage() {
   const { toast } = useToast();
@@ -35,19 +36,43 @@ export default function JournalEntriesPage() {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [entryForm, setEntryForm] = useState({ entry_date: new Date().toISOString().split('T')[0], reference: '', description: '' });
+  const [entryForm, setEntryForm] = useState({ entry_date: new Date().toISOString().split('T')[0], reference: '', description: '', branch_id: SHARED_VALUE });
   const [lines, setLines] = useState<Line[]>([
     { account_id: '', debit: '', credit: '', memo: '' },
     { account_id: '', debit: '', credit: '', memo: '' },
   ]);
+  const [branches, setBranches] = useState<any[]>([]);
+  // Defaults to "All Branches" — every entry across every branch, same as
+  // before this filter existed — and narrows down from there.
+  const [branchFilter, setBranchFilter] = useState('all');
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    supabase.from('branches').select('id, name').eq('status', 'active').order('name').then(({ data }) => setBranches(data ?? []));
+  }, []);
+
+  useEffect(() => {
+    if (!profile) return;
+    load();
+  }, [profile, branchFilter]);
 
   async function load() {
     setLoading(true);
+    // Every branch now keeps its own Chart of Accounts — a non-admin only
+    // gets their own branch's accounts plus shared/company-wide ones (no
+    // branch_id) in the picker below. Admin still sees every account,
+    // since a manual entry here isn't tied to one branch the way a loan or
+    // payroll voucher is.
+    let acctsQuery = supabase.from('chart_of_accounts').select('*').order('code');
+    if (!isAdmin && profile?.branch_id) {
+      acctsQuery = acctsQuery.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`);
+    }
+    let entriesQuery = supabase.from('journal_entries').select('*, branches(name), journal_entry_lines(*, chart_of_accounts(code, name, account_type))').order('entry_date', { ascending: false }).order('created_at', { ascending: false }).limit(50);
+    if (branchFilter !== 'all') {
+      entriesQuery = branchFilter === SHARED_VALUE ? entriesQuery.is('branch_id', null) : entriesQuery.eq('branch_id', branchFilter);
+    }
     const [{ data: accts }, { data: ents }] = await Promise.all([
-      supabase.from('chart_of_accounts').select('*').order('code'),
-      supabase.from('journal_entries').select('*, journal_entry_lines(*, chart_of_accounts(code, name, account_type))').order('entry_date', { ascending: false }).order('created_at', { ascending: false }).limit(50),
+      acctsQuery,
+      entriesQuery,
     ]);
     setAccounts(accts ?? []);
     setEntries(ents ?? []);
@@ -55,7 +80,12 @@ export default function JournalEntriesPage() {
   }
 
   function openNewEntry() {
-    setEntryForm({ entry_date: new Date().toISOString().split('T')[0], reference: '', description: '' });
+    setEntryForm({
+      entry_date: new Date().toISOString().split('T')[0],
+      reference: '',
+      description: '',
+      branch_id: !isAdmin && profile?.branch_id ? profile.branch_id : SHARED_VALUE,
+    });
     setLines([
       { account_id: '', debit: '', credit: '', memo: '' },
       { account_id: '', debit: '', credit: '', memo: '' },
@@ -93,6 +123,7 @@ export default function JournalEntriesPage() {
       description: entryForm.description || null,
       source: 'manual',
       created_by: profile?.id ?? null,
+      branch_id: entryForm.branch_id === SHARED_VALUE ? null : entryForm.branch_id,
     }).select('id').single();
 
     if (error) {
@@ -139,6 +170,14 @@ export default function JournalEntriesPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Journal Entries" description="Record and review manual and system-generated journal entries">
+        <Select value={branchFilter} onValueChange={setBranchFilter}>
+          <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All Branches" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Branches</SelectItem>
+            <SelectItem value={SHARED_VALUE}>Shared / Company-wide</SelectItem>
+            {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Button size="sm" onClick={openNewEntry}>
           <Plus className="w-4 h-4 mr-2" />
           New Journal Entry
@@ -164,6 +203,7 @@ export default function JournalEntriesPage() {
                       <span className="font-mono text-sm font-medium">{entry.entry_number}</span>
                       <span className="text-xs text-muted-foreground ml-2">{formatDate(entry.entry_date)}</span>
                       <Badge variant="outline" className="ml-2 capitalize">{entry.source}</Badge>
+                      <Badge variant="secondary" className="ml-2">{entry.branches?.name ?? 'Shared'}</Badge>
                     </div>
                     <div className="flex items-center gap-2">
                       {entry.reference && <span className="text-xs text-muted-foreground">Ref: {entry.reference}</span>}
@@ -209,6 +249,16 @@ export default function JournalEntriesPage() {
               <div className="space-y-2">
                 <Label>Reference *</Label>
                 <Input required value={entryForm.reference} onChange={(e) => setEntryForm({ ...entryForm, reference: e.target.value })} placeholder="OR#, voucher#, etc." />
+              </div>
+              <div className="space-y-2 col-span-2">
+                <Label>Branch</Label>
+                <Select value={entryForm.branch_id} onValueChange={(v) => setEntryForm({ ...entryForm, branch_id: v })} disabled={!isAdmin}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={SHARED_VALUE}>Shared / Company-wide</SelectItem>
+                    {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
