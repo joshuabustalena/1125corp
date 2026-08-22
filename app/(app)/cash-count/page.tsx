@@ -58,7 +58,7 @@ function prevDateStr(dateStr: string): string {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
-const dCell: React.CSSProperties = { border: '1px solid #000', padding: '4px 8px' };
+const dCell: React.CSSProperties = { border: '1px solid #000', padding: '6px 10px' };
 const dCellRight: React.CSSProperties = { ...dCell, textAlign: 'right' };
 const dCellCenter: React.CSSProperties = { ...dCell, textAlign: 'center' };
 
@@ -69,14 +69,24 @@ const dCellCenter: React.CSSProperties = { ...dCell, textAlign: 'center' };
 // body gets a new function identity every render, which made React
 // remount this table (and drop the <input>'s focus) on every keystroke,
 // so only the first digit you typed ever seemed to "stick".
-function DenominationTable({ counts, onChange, readOnly }: { counts: DenomCounts; onChange?: (key: string, value: string) => void; readOnly?: boolean }) {
+function DenominationTable({ counts, onChange, readOnly, shortOver, shortOverLabel }: {
+  counts: DenomCounts;
+  onChange?: (key: string, value: string) => void;
+  readOnly?: boolean;
+  // Rendered as the table's own last row (print view only) so its borders
+  // line up with the denomination columns. It used to be a separate
+  // 3-column table stacked underneath this 4-column one, which left the
+  // cell edges visibly ragged on the printed sheet.
+  shortOver?: number;
+  shortOverLabel?: string;
+}) {
   const row = (label: string, key: string, denom: number) => {
     const qty = Number(counts[key]) || 0;
     return (
       <tr key={key}>
         <td style={dCell}>{label}</td>
         <td style={dCellCenter}>x</td>
-        <td style={{ ...dCell, width: 110 }}>
+        <td style={dCell}>
           {readOnly ? (
             <span style={{ display: 'block', textAlign: 'right' }}>{qty || ''}</span>
           ) : (
@@ -89,7 +99,7 @@ function DenominationTable({ counts, onChange, readOnly }: { counts: DenomCounts
                 const digitsOnly = e.target.value.replace(/[^0-9]/g, '');
                 onChange?.(key, digitsOnly);
               }}
-              style={{ width: '100%', border: 'none', outline: 'none', textAlign: 'right', fontSize: 13, background: 'transparent' }}
+              style={{ width: '100%', border: 'none', outline: 'none', textAlign: 'right', fontSize: 15, background: 'transparent' }}
               placeholder="0"
             />
           )}
@@ -99,15 +109,33 @@ function DenominationTable({ counts, onChange, readOnly }: { counts: DenomCounts
     );
   };
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+    // table-layout: fixed + an explicit colgroup is what actually pins the
+    // quantity column narrow. A plain `width` on the <td> is only a hint in
+    // auto layout, so the count column kept stretching to a third of the
+    // sheet no matter what width was set on it.
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15, tableLayout: 'fixed' }}>
+      <colgroup>
+        <col style={{ width: '44%' }} />
+        <col style={{ width: '7%' }} />
+        <col style={{ width: '15%' }} />
+        <col style={{ width: '34%' }} />
+      </colgroup>
       <tbody>
         {BILL_DENOMS.map((d, i) => row(i === 0 ? `Bills: ${d.toFixed(2)}` : d.toFixed(2), billKey(d), d))}
         {COIN_DENOMS.map((d, i) => row(i === 0 ? `Coins: ${d.toFixed(2)}` : d.toFixed(2), coinKey(d), d))}
         <tr>
-          <td style={{ ...dCell, fontWeight: 700 }} colSpan={2}>Total:</td>
-          <td style={dCell} />
+          {/* Spans all three left columns — previously the label spanned two
+              and left a stray empty bordered box under the count column. */}
+          <td style={{ ...dCell, fontWeight: 700 }} colSpan={3}>Total:</td>
           <td style={{ ...dCellRight, fontWeight: 700, color: '#C00000' }}>{formatCurrency(denomTotal(counts))}</td>
         </tr>
+        {shortOver !== undefined && (
+          <tr>
+            <td style={{ ...dCell, fontWeight: 700 }} colSpan={2}>{shortOverLabel ?? 'Short/over'}</td>
+            <td style={dCellCenter}>PHP</td>
+            <td style={dCellRight}>{formatCurrency(shortOver)}</td>
+          </tr>
+        )}
       </tbody>
     </table>
   );
@@ -325,7 +353,7 @@ export default function CashCountPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
-      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 900, windowWidth: 900 });
+      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 950, windowWidth: 950 });
       const imgData = canvas.toDataURL('image/png');
       const pxToPt = 0.75;
       const contentWidthPt = canvas.width / 2 * pxToPt;
@@ -541,25 +569,20 @@ export default function CashCountPage() {
           Portaled onto <body> so no ancestor layout affects the capture. */}
       {typeof document !== 'undefined' && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
-          <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 36, fontFamily: '"Times New Roman", Calibri, serif' }}>
-            <div style={{ textAlign: 'center', marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 15, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
-              <div style={{ fontWeight: 700, fontSize: 12, color: '#1F4E79' }}>{branding.address}</div>
-              <div style={{ fontWeight: 700, fontSize: 12, color: '#1F4E79' }}>Cel. No. {branding.contact}</div>
-              <div style={{ fontWeight: 700, fontSize: 20, marginTop: 14 }}>Cash Count Sheet</div>
+          <div ref={printRef} style={{ width: 950, background: '#fff', color: '#111', padding: 36, fontFamily: '"Times New Roman", Calibri, serif' }}>
+            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 20, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.headerAddress.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CELL PHONE NUMBER: {branding.contact}</div>
+              <div style={{ fontWeight: 700, fontSize: 22, marginTop: 12 }}>Cash Count Sheet</div>
             </div>
-            <div style={{ textAlign: 'right', fontSize: 13, marginBottom: 10 }}>Date: {formatDate(date)}</div>
+            <div style={{ textAlign: 'right', fontSize: 15, marginBottom: 10 }}>Date: {formatDate(date)}</div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
               <div>
-                <p style={{ fontSize: 13, marginBottom: 4 }}>Cash in Vault</p>
-                <DenominationTable counts={vaultCounts} readOnly />
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: -1 }}>
-                  <tbody>
-                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Short/over</td><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(shortOverVault) || 0)}</td></tr>
-                  </tbody>
-                </table>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 8 }}>
+                <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Cash in Vault</p>
+                <DenominationTable counts={vaultCounts} readOnly shortOver={Number(shortOverVault) || 0} />
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15, marginTop: 8 }}>
                   <tbody>
                     <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Cash Collections for the day</td></tr>
                     <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(totalCollections) || 0)}</td></tr>
@@ -571,17 +594,12 @@ export default function CashCountPage() {
                 </table>
               </div>
               <div>
-                <p style={{ fontSize: 13, marginBottom: 4 }}>Petty Cash Fund</p>
-                <DenominationTable counts={pcfCounts} readOnly />
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: -1 }}>
-                  <tbody>
-                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Short/over PCF</td><td style={dCellRight}>{formatCurrency(Number(shortOverPcf) || 0)}</td></tr>
-                  </tbody>
-                </table>
-                <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 22, color: '#C00000', margin: '10px 0' }}>
+                <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Petty Cash Fund</p>
+                <DenominationTable counts={pcfCounts} readOnly shortOver={Number(shortOverPcf) || 0} shortOverLabel="Short/over PCF" />
+                <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 26, color: '#C00000', margin: '10px 0' }}>
                   RELEASE&nbsp;&nbsp;{formatCurrency(Number(releaseAmount) || 0)}
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
                   <tbody>
                     <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Expenses for the day</td></tr>
                     <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(totalExpenses) || 0)}</td></tr>
@@ -592,11 +610,11 @@ export default function CashCountPage() {
               </div>
             </div>
 
-            <p style={{ fontSize: 12, marginTop: 20, borderTop: '1px solid #000', paddingTop: 10 }}>
+            <p style={{ fontSize: 14, marginTop: 20, borderTop: '1px solid #000', paddingTop: 10 }}>
               The amounts above are true and correct to the best of my knowledge.
             </p>
 
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginTop: 10 }}>
               <tbody>
                 <tr>
                   <td style={{ ...dCell, fontWeight: 700, width: '20%' }}>Date</td>
@@ -606,7 +624,7 @@ export default function CashCountPage() {
                 <tr>
                   <td style={dCell}>{formatDate(date)}</td>
                   <td style={dCell}>{cashierName || '—'}</td>
-                  <td style={{ ...dCell, height: 32 }}>&nbsp;</td>
+                  <td style={{ ...dCell, height: 36 }}>&nbsp;</td>
                 </tr>
                 <tr>
                   <td style={{ ...dCell, fontWeight: 700 }}>Date</td>
@@ -616,7 +634,7 @@ export default function CashCountPage() {
                 <tr>
                   <td style={dCell}>{formatDate(date)}</td>
                   <td style={dCell}>{branchManagerName || '—'}</td>
-                  <td style={{ ...dCell, height: 32 }}>&nbsp;</td>
+                  <td style={{ ...dCell, height: 36 }}>&nbsp;</td>
                 </tr>
               </tbody>
             </table>

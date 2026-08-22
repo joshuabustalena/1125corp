@@ -54,6 +54,16 @@ interface Customer {
   collectors: { profile_id: string } | null;
 }
 
+// Dinalupihan's own default max loan limit is lower than everywhere else
+// (Balanga and any other branch keeps the company-wide 30,000 default) —
+// same branch-name-suffix matching convention already used for the
+// per-branch Chart of Accounts.
+function defaultMaxLoanLimitForBranch(branchId: string, branches: { id: string; name: string }[]): number {
+  const branch = branches.find(b => b.id === branchId);
+  if (branch?.name?.toLowerCase().includes('dinalupihan')) return 20000;
+  return 30000;
+}
+
 export default function CustomersPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -168,7 +178,9 @@ export default function CustomersPage() {
     if (!isCollector && areaFilter !== 'all') query = query.eq('area_id', areaFilter);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
 
-    query = query.range((page - 1) * pageSize, page * pageSize - 1).order('first_name', { ascending: true }).order('last_name', { ascending: true });
+    // Last name first — the list displays names as "Dela Cruz, Juan", so it
+    // has to sort that way too or the alphabetical order looks scrambled.
+    query = query.range((page - 1) * pageSize, page * pageSize - 1).order('last_name', { ascending: true }).order('first_name', { ascending: true });
 
     const { data, count } = await query;
     const list = (data as any) ?? [];
@@ -198,10 +210,12 @@ export default function CustomersPage() {
     setDocsStepStarted(false);
     setPendingRequired({});
     setPendingExtra([]);
+    const initialBranchId = !isAdmin ? (profile?.branch_id ?? '') : '';
     setForm({
       first_name: '', last_name: '', middle_name: '', phone: '', email: '',
       address: '', barangay: '', city: '', province: '', zip_code: '',
-      branch_id: !isAdmin ? (profile?.branch_id ?? '') : '', area_id: '', collector_id: '', max_loan_limit: '30000',
+      branch_id: initialBranchId, area_id: '', collector_id: '',
+      max_loan_limit: String(defaultMaxLoanLimitForBranch(initialBranchId, branches)),
       status: 'active', gender: '', birth_date: '', government_id: '',
     });
     setDialogOpen(true);
@@ -493,7 +507,19 @@ export default function CustomersPage() {
           <Label>Branch</Label>
           <Select
             value={form.branch_id}
-            onValueChange={(v) => setForm({ ...form, branch_id: v, area_id: '', collector_id: '' })}
+            onValueChange={(v) => {
+              // Only follow the branch's default if the limit still matches
+              // A known default (i.e. Admin hasn't typed a custom figure
+              // already) — never clobber a deliberately-entered value.
+              const stillDefault = !editing && (form.max_loan_limit === '30000' || form.max_loan_limit === '20000');
+              setForm({
+                ...form,
+                branch_id: v,
+                area_id: '',
+                collector_id: '',
+                max_loan_limit: stillDefault ? String(defaultMaxLoanLimitForBranch(v, branches)) : form.max_loan_limit,
+              });
+            }}
             disabled={!isAdmin}
           >
             <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>

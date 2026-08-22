@@ -29,7 +29,7 @@ export default function AreaDetailPage() {
     const [{ data: a }, { data: cols }, { data: custs }] = await Promise.all([
       supabase.from('areas').select('*, branches(name)').eq('id', id).maybeSingle(),
       supabase.from('employees').select('id, first_name, last_name, status').eq('area_id', id).eq('position', 'Branch Field Collector').order('first_name'),
-      supabase.from('customers').select('id, first_name, last_name, phone, status').eq('area_id', id).order('first_name'),
+      supabase.from('customers').select('id, first_name, last_name, phone, status').eq('area_id', id).order('last_name').order('first_name'),
     ]);
     setArea(a);
     setCollectors(cols ?? []);

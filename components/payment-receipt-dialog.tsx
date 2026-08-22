@@ -99,9 +99,11 @@ export function PaymentReceiptDialog({ receiptData, onClose }: { receiptData: Pa
           ? 'PENDING SYNC — not yet confirmed'
           : (receiptData.isFullyPaid
             ? 'Loan fully paid'
-            : (receiptData.daysCovered && receiptData.daysCovered > 0
-              ? `Covers ${receiptData.daysCovered} day${receiptData.daysCovered > 1 ? 's' : ''} of payment`
-              : undefined)),
+            : receiptData.daysCovered === 0
+              ? 'Partial Payment'
+              : ((receiptData.daysCovered ?? 0) > 0
+                ? `Covers ${receiptData.daysCovered} day${(receiptData.daysCovered ?? 0) > 1 ? 's' : ''} of payment`
+                : undefined)),
         remainingBalance: isPending ? 'Pending confirmation' : formatCurrency(receiptData.remainingBalance),
       });
       await writeToPrinter(characteristic, buildReceiptBytes(lines));
@@ -215,12 +217,21 @@ export function PaymentReceiptDialog({ receiptData, onClose }: { receiptData: Pa
           <div className="py-4 text-center">
             <p className="text-xs mb-1" style={{ color: '#6B7280' }}>Amount Paid</p>
             <p className="text-3xl font-bold" style={{ color: '#16A34A' }}>{formatCurrency(receiptData.amount)}</p>
+            {/* Each branch here must resolve to an actual boolean before the
+                final `&&` — `0 && <jsx/>` evaluates to 0, and React renders
+                a bare number 0 as literal text "0" (unlike false/null/
+                undefined, which render as nothing). That's what caused a
+                stray "0" to show up after an underpaid or exact-1-day
+                payment. daysCovered === undefined (a reopened historical
+                receipt, not a fresh post) still correctly shows nothing. */}
             {!isPending && (receiptData.isFullyPaid ? (
               <p className="text-xs mt-1 font-medium" style={{ color: '#16A34A' }}>Loan fully paid</p>
-            ) : receiptData.daysCovered && receiptData.daysCovered > 0 && (
+            ) : receiptData.daysCovered === 0 ? (
+              <p className="text-xs mt-1" style={{ color: '#6B7280' }}>Partial Payment</p>
+            ) : (receiptData.daysCovered ?? 0) > 0 && (
               <p className="text-xs mt-1" style={{ color: '#6B7280' }}>
-                Covers {receiptData.daysCovered} day{receiptData.daysCovered > 1 ? 's' : ''} of payment
-                {receiptData.advanceCredit && receiptData.advanceCredit > 0.009 && ` + ${formatCurrency(receiptData.advanceCredit)} advance toward the next day`}
+                Covers {receiptData.daysCovered} day{(receiptData.daysCovered ?? 0) > 1 ? 's' : ''} of payment
+                {(receiptData.advanceCredit ?? 0) > 0.009 && ` + ${formatCurrency(receiptData.advanceCredit!)} advance toward the next day`}
               </p>
             ))}
           </div>

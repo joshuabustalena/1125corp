@@ -30,7 +30,7 @@ export default function BranchDetailPage() {
     const [{ data: b }, { data: emps }, { data: custs }] = await Promise.all([
       supabase.from('branches').select('*').eq('id', id).maybeSingle(),
       supabase.from('employees').select('id, first_name, last_name, position, department, status').eq('branch_id', id).order('first_name'),
-      supabase.from('customers').select('id, first_name, last_name, phone, status').eq('branch_id', id).order('first_name'),
+      supabase.from('customers').select('id, first_name, last_name, phone, status').eq('branch_id', id).order('last_name').order('first_name'),
     ]);
     setBranch(b);
     setEmployees(emps ?? []);

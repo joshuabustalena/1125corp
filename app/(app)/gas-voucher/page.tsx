@@ -19,6 +19,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, numberToWordsPeso } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
+import { buildPrintHtml } from '@/lib/print-document';
 import { postJournalEntry } from '@/lib/ledger';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { Fuel, Loader2, Download, Printer } from 'lucide-react';
@@ -211,21 +212,14 @@ export default function GasVoucherPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 900, windowWidth: 900 });
-      const dataUrl = canvas.toDataURL('image/png');
       const printWindow = window.open('', '_blank', 'width=900,height=1000');
       if (!printWindow) {
         toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the gas voucher', variant: 'destructive' });
         setPrinting(false);
         return;
       }
-      printWindow.document.write(`
-        <html>
-          <head><title>Gas Voucher ${printedVoucherNumber}</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            <img src="${dataUrl}" style="width:100%;display:block;" />
-          </body>
-        </html>
-      `);
+      // 8.5"x11" letter (matching the PDF download's page size).
+      printWindow.document.write(buildPrintHtml(`Gas Voucher ${printedVoucherNumber}`, [{ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height }], 8.5, 11));
       printWindow.document.close();
       printWindow.onload = () => printWindow.print();
       printWindow.onafterprint = () => printWindow.close();

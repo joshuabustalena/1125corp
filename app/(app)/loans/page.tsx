@@ -161,7 +161,7 @@ export default function LoansPage() {
   }, [profile, myCollector, search, statusFilter, customerFilter, areaFilter, page]);
 
   async function loadOptions() {
-    let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('first_name');
+    let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('last_name').order('first_name');
     let areaQuery = supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
     if (isCollector && myCollector) {
       // Same area-based scope as /customers — any customer in the collector's

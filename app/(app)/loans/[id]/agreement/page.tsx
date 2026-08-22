@@ -8,6 +8,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/format';
 import { COMPANY_NAME, getDocumentBranding } from '@/lib/document-branding';
+import { buildPrintHtml } from '@/lib/print-document';
 import { DocumentScaler } from '@/components/document-scaler';
 import { ArrowLeft, FileText, Download, Loader2 } from 'lucide-react';
 
@@ -37,7 +38,7 @@ function formatLongDate(date: string | Date | null | undefined): string {
 const AGREEMENT_CLAUSES = [
   {
     n: 1, title: 'Disclosure of Loan Terms',
-    en: 'The Borrower certifies that prior to the release of the loan proceeds, the Borrower was fully informed and provided with the following information: a. Principal loan amount; b. Interest rate and method of computation; c. Service fees, processing fees, and other charges, if any; d. Documentary Stamp Tax and other government charges, if applicable; e. Penalty charges and surcharges for late payment; f. Payment schedule and maturity date; g. Total amount payable during the loan term; h. Net loan proceeds actually receivable by the Borrower. The Borrower confirms that the foregoing disclosures comply with the requirements of Republic Act No. 3765, otherwise known as the Truth in Lending Act.',
+    en: 'The Borrower certifies that prior to the release of the loan proceeds, the Borrower was fully informed and provided with the following information: a. Principal loan amount; b. Interest rate and method of computation; c. Service fees, processing fees, and other charges, if any; d. Documentary Stamp Tax and other government charges, if applicable; e. Penalty charges and surcharges for late payment; f. Payment schedule and maturity date; g. Total amount payable during the loan term; h. Net loan proceeds actually receivable by the Borrower.',
   },
   {
     n: 2, title: 'Receipt of Loan Proceeds',
@@ -49,11 +50,11 @@ const AGREEMENT_CLAUSES = [
   },
   {
     n: 4, title: 'Waiver of False or Fraudulent Claims',
-    en: 'The Borrower agrees not to make any false, fraudulent, or misleading claim against the Corporation concerning the release, receipt, or amount of the loan proceeds after the execution of the loan documents. Any claim of non-receipt, shortage, or deficiency made after the signing of the loan documents shall be presumed invalid unless supported by clear and convincing evidence of fraud, bad faith, or willful misconduct on the part of the Corporation or its authorized representatives.',
+    en: 'The Borrower agrees not to make any false, fraudulent, or misleading claim against the Lender concerning the release, receipt, or amount of the loan proceeds after the execution of the loan documents. Any claim of non-receipt, shortage, or deficiency made after the signing of the loan documents shall be presumed invalid unless supported by clear and convincing evidence of fraud, bad faith, or willful misconduct on the part of the Lender or its authorized representatives.',
   },
   {
     n: 5, title: 'Authority of Collectors and Representatives',
-    en: 'The Borrower acknowledges that only duly authorized employees, collectors, or representatives of the Corporation may release loan proceeds and receive payments on behalf of the Corporation. The Borrower agrees to transact only with authorized personnel and to request official receipts or payment records for every payment made with existing VALID COMPANY ID.',
+    en: 'The Borrower acknowledges that only duly authorized employees, collectors, or representatives of the Lender may release loan proceeds and receive payments. The Borrower agrees to transact only with authorized personnel and to request official receipts or payment records for every payment made with existing VALID COMPANY ID.',
   },
   {
     n: 6, title: "Borrower's Duty to Keep Records",
@@ -69,7 +70,7 @@ const AGREEMENT_CLAUSES = [
   },
 ];
 
-const AGREEMENT_CLOSING_PARAGRAPH = 'The Borrower affirms that all information and documents submitted to the Corporation are true and correct. Any material misrepresentation or falsification shall constitute a ground for acceleration of the loan and the exercise of all legal remedies available to the Corporation. I acknowledge that my signature herein constitutes my conformity to all the terms and conditions stated in the loan documents and serves as evidence of my receipt of the loan proceeds and disclosure of all applicable charges and obligations.';
+const AGREEMENT_CLOSING_PARAGRAPH = 'The Borrower affirms that all information and documents submitted to the Lender are true and correct. Any material misrepresentation or falsification shall constitute a ground for acceleration of the loan and the exercise of all legal remedies available to the Lender. I acknowledge that my signature herein constitutes my conformity to all the terms and conditions stated in the loan documents and serves as evidence of my receipt of the loan proceeds and disclosure of all applicable charges and obligations.';
 
 export default function LoanAgreementPage() {
   const params = useParams();
@@ -173,10 +174,10 @@ export default function LoanAgreementPage() {
     setPrinting(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const dataUrls: string[] = [];
+      const pages: { url: string; width: number; height: number }[] = [];
       for (const ref of refs) {
         const canvas = await html2canvas(ref.current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
-        dataUrls.push(canvas.toDataURL('image/png'));
+        pages.push({ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
       }
       const printWindow = window.open('', '_blank', 'width=900,height=1000');
       if (!printWindow) {
@@ -184,14 +185,8 @@ export default function LoanAgreementPage() {
         setPrinting(false);
         return;
       }
-      printWindow.document.write(`
-        <html>
-          <head><title>Loan Agreement ${loan.loan_number}</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            ${dataUrls.map((url, i) => `<img src="${url}" style="width:100%;display:block;${i < dataUrls.length - 1 ? 'page-break-after:always;' : ''}" />`).join('')}
-          </body>
-        </html>
-      `);
+      // 8.5"x13" folio (matching the PDF download's page size).
+      printWindow.document.write(buildPrintHtml(`Loan Agreement ${loan.loan_number}`, pages, 8.5, 13));
       printWindow.document.close();
       printWindow.onload = () => printWindow.print();
       printWindow.onafterprint = () => printWindow.close();
@@ -250,8 +245,8 @@ export default function LoanAgreementPage() {
           <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '30px 40px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 13.5, lineHeight: 1.45 }}>
             <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 8, marginBottom: 10 }}>
               <div style={{ fontWeight: 700, fontSize: 18, color: '#1F4E79' }}>{COMPANY_NAME}</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.headerAddress.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CELL PHONE NUMBER: {branding.contact}</div>
             </div>
 
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
@@ -260,7 +255,7 @@ export default function LoanAgreementPage() {
 
             <p style={{ textAlign: 'justify', marginBottom: 6 }}>
               This Loan Agreement executed on the {formatOrdinalDate(agreementData.date)} by {COMPANY_NAME} located at{' '}
-              <span style={{ textDecoration: 'underline' }}>{branding.address}</span> hereinafter referred to as the <strong>LENDER</strong>; - AND -
+              <span style={{ textDecoration: 'underline' }}>{branding.fullAddress}</span> hereinafter referred to as the <strong>LENDER</strong>; - AND -
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -270,9 +265,10 @@ export default function LoanAgreementPage() {
             {aRow('Residence Address:', agreementData.residenceAddress || '—')}
             {aRow('Business Address:', agreementData.businessAddress || '—')}
 
-            <div style={{ display: 'flex', gap: 24, marginTop: 4 }}>
+            <p style={{ fontWeight: 700, marginTop: 6, marginBottom: 2 }}>Loan Details</p>
+            <div style={{ display: 'flex', gap: 24 }}>
               {aRow('Date of Loan:', formatLongDate(agreementData.date))}
-              {aRow(<>Due Date: <em>({agreementData.termMonths}-mo term)</em></>, formatLongDate(agreementData.dueDate))}
+              {aRow(<>Loan Due Date: <em>({agreementData.termMonths}-mo term)</em></>, formatLongDate(agreementData.dueDate))}
             </div>
 
             <table style={dTable}>
@@ -304,7 +300,7 @@ export default function LoanAgreementPage() {
                 </tr>
                 <tr>
                   <td style={dCell} />
-                  <td style={{ ...dCell, fontWeight: 700, fontStyle: 'italic' }}>Service Fee (inclusive of DST)</td>
+                  <td style={{ ...dCell, fontWeight: 700 }}>Service Fee</td>
                   <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.serviceFee)}</td>
                   <td style={dCell} />
                 </tr>
@@ -344,7 +340,11 @@ export default function LoanAgreementPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', textAlign: 'center', fontSize: 12.5 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{agreementData.branchManagerName || ' '}</div>
-                <div style={{ fontStyle: 'italic' }}>Branch Manager{agreementData.branchName ? ` - ${agreementData.branchName} Branch` : ''}</div>
+                {/* branches.name in the DB is already "Balanga Branch", not
+                    just "Balanga" — appending " Branch" unconditionally
+                    produced "Balanga Branch Branch". Strip any existing
+                    trailing "Branch" first so it renders once either way. */}
+                <div style={{ fontStyle: 'italic' }}>Branch Manager{agreementData.branchName ? ` - ${agreementData.branchName.replace(/\s*branch$/i, '').trim()} Branch` : ''}</div>
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{agreementData.collectorName || ' '}</div>

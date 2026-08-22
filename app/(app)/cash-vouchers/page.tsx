@@ -17,6 +17,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { DocumentScaler } from '@/components/document-scaler';
+import { buildPrintHtml } from '@/lib/print-document';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
@@ -245,21 +246,14 @@ export default function CashVouchersPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 900, windowWidth: 900 });
-      const dataUrl = canvas.toDataURL('image/png');
       const printWindow = window.open('', '_blank', 'width=900,height=1000');
       if (!printWindow) {
         toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the cash voucher', variant: 'destructive' });
         setPrinting(false);
         return;
       }
-      printWindow.document.write(`
-        <html>
-          <head><title>Cash Voucher ${voucherNumber}</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            <img src="${dataUrl}" style="width:100%;display:block;" />
-          </body>
-        </html>
-      `);
+      // 8.5"x11" letter (matching the PDF download's page size).
+      printWindow.document.write(buildPrintHtml(`Cash Voucher ${voucherNumber}`, [{ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height }], 8.5, 11));
       printWindow.document.close();
       printWindow.onload = () => printWindow.print();
       printWindow.onafterprint = () => printWindow.close();
@@ -291,19 +285,28 @@ export default function CashVouchersPage() {
   const printedPreparedBy = printedVoucher ? (printedVoucher.prepared_by_name ?? '') : preparedByName;
   const printedApprovedBy = printedVoucher ? (printedVoucher.approved_by_name ?? '') : approvedByName;
 
-  // Matches the client's actual system-generated Cash Voucher report
-  // exactly (plain black text, Report Date/Time/Printed by metadata block)
-  // — a different look from the blue "CASH VOUCHER" paper form template
-  // shared by Gas/Payroll/13th Month vouchers, since this one is itself a
-  // printed accounting report, not a hand-filled paper form.
+  // Professional bordered-ledger look, matching the Payment History
+  // report's style (colored letterhead, shaded label cells, full grid on
+  // the line items) instead of the old plain-text/underline layout —
+  // client asked for the Account-Description column to be visually
+  // separated from the Debit/Credit columns (now real bordered columns,
+  // not just a shared underline) and for the stray rule under Particulars
+  // to go away (replaced by a proper bordered cell like every other field
+  // here). Still its own distinct look from the blue "CASH VOUCHER" paper
+  // form template shared by Gas/Payroll/13th Month vouchers, since this
+  // one is itself a printed accounting report, not a hand-filled form.
   function renderVoucherCopy() {
     const now = new Date();
+    const infoLabel: React.CSSProperties = { border: '1px solid #000', padding: '6px 10px', fontWeight: 700, background: '#F2F4F7', whiteSpace: 'nowrap' };
+    const infoValue: React.CSSProperties = { border: '1px solid #000', padding: '6px 10px' };
+    const thStyle: React.CSSProperties = { border: '1px solid #000', padding: '7px 8px', fontWeight: 700, color: '#fff' };
+    const tdStyle: React.CSSProperties = { border: '1px solid #000', padding: '6px 8px' };
     return (
       <>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <img src="/image/1125_Corp_Logo.png" alt="1125Corp" style={{ width: 56, height: 56, objectFit: 'contain' }} />
-            <div style={{ fontSize: 22, fontWeight: 700 }}>1125 CREDIT COLLECTION SERVICES</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#1F4E79' }}>1125 CREDIT COLLECTION SERVICES</div>
           </div>
           <table style={{ fontSize: 11 }}>
             <tbody>
@@ -314,54 +317,54 @@ export default function CashVouchersPage() {
           </table>
         </div>
 
-        <div style={{ fontWeight: 700, fontSize: 15, marginTop: 14, marginBottom: 10 }}>Cash Voucher</div>
+        <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#1F4E79', letterSpacing: 0.5, marginBottom: 14 }}>CASH VOUCHER</div>
 
-        <table style={{ width: '100%', fontSize: 12, marginBottom: 6, borderCollapse: 'collapse' }}>
+        <table style={{ width: '100%', fontSize: 12.5, marginBottom: 16, borderCollapse: 'collapse' }}>
           <tbody>
             <tr>
-              <td style={{ width: '11%', fontWeight: 700, padding: '2px 0' }}>Payee:</td>
-              <td style={{ borderBottom: '1px solid #000', padding: '2px 0 6px' }}>{printedPayee}</td>
-              <td style={{ width: '15%', fontWeight: 700, textAlign: 'right', paddingRight: 6 }}>Voucher Number:</td>
-              <td style={{ width: '16%', borderBottom: '1px solid #000', fontWeight: 700, paddingBottom: 6 }}>{printedVoucherNumber}</td>
+              <td style={{ ...infoLabel, width: '13%' }}>Payee</td>
+              <td style={infoValue}>{printedPayee}</td>
+              <td style={{ ...infoLabel, width: '15%' }}>Voucher Number</td>
+              <td style={{ ...infoValue, width: '16%', fontWeight: 700 }}>{printedVoucherNumber}</td>
             </tr>
             <tr>
-              <td style={{ fontWeight: 700, padding: '2px 0' }}>Particulars:</td>
-              <td style={{ borderBottom: '1px solid #000', padding: '2px 0 6px' }}>{printedParticulars}</td>
-              <td style={{ fontWeight: 700, textAlign: 'right', paddingRight: 6 }}>Date:</td>
-              <td style={{ borderBottom: '1px solid #000', paddingBottom: 6 }}>{formatDate(printedDate)}</td>
+              <td style={infoLabel}>Particulars</td>
+              <td style={infoValue}>{printedParticulars}</td>
+              <td style={infoLabel}>Date</td>
+              <td style={infoValue}>{formatDate(printedDate)}</td>
             </tr>
           </tbody>
         </table>
 
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 10 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
           <thead>
-            <tr>
-              <th style={{ textAlign: 'left', borderBottom: '1px solid #000', borderTop: '1px solid #000', padding: '4px 4px' }}>Account - Description</th>
-              <th style={{ textAlign: 'right', borderBottom: '1px solid #000', borderTop: '1px solid #000', padding: '4px 4px', width: '20%' }}>Debit Amount</th>
-              <th style={{ textAlign: 'right', borderBottom: '1px solid #000', borderTop: '1px solid #000', padding: '4px 4px', width: '20%' }}>Credit Amount</th>
+            <tr style={{ background: '#1F4E79' }}>
+              <th style={{ ...thStyle, textAlign: 'left' }}>Account - Description</th>
+              <th style={{ ...thStyle, textAlign: 'right', width: '20%' }}>Debit Amount</th>
+              <th style={{ ...thStyle, textAlign: 'right', width: '20%' }}>Credit Amount</th>
             </tr>
           </thead>
           <tbody>
             {printedLines.map((l, i) => (
-              <tr key={i}>
-                <td style={{ padding: '3px 4px', textTransform: 'uppercase' }}>{l.account_name}</td>
-                <td style={{ padding: '3px 4px', textAlign: 'right' }}>{Number(l.amount).toFixed(2)}</td>
-                <td style={{ padding: '3px 4px', textAlign: 'right' }}>0.00</td>
+              <tr key={i} style={{ background: i % 2 === 1 ? '#F7F8FA' : '#fff' }}>
+                <td style={{ ...tdStyle, textTransform: 'uppercase' }}>{l.account_name}</td>
+                <td style={{ ...tdStyle, textAlign: 'right' }}>{Number(l.amount).toFixed(2)}</td>
+                <td style={{ ...tdStyle, textAlign: 'right' }}>0.00</td>
               </tr>
             ))}
-            <tr>
-              <td style={{ borderTop: '1px solid #000' }}>&nbsp;</td>
-              <td style={{ borderTop: '1px solid #000', textAlign: 'right', fontWeight: 700, padding: '4px 4px' }}>{printedTotal.toFixed(2)}</td>
-              <td style={{ borderTop: '1px solid #000', textAlign: 'right', fontWeight: 700, padding: '4px 4px' }}>0.00</td>
+            <tr style={{ fontWeight: 700, background: '#EAEEF3' }}>
+              <td style={tdStyle}>Total</td>
+              <td style={{ ...tdStyle, textAlign: 'right' }}>{printedTotal.toFixed(2)}</td>
+              <td style={{ ...tdStyle, textAlign: 'right' }}>0.00</td>
             </tr>
           </tbody>
         </table>
 
-        <table style={{ width: '100%', fontSize: 12, marginTop: 40 }}>
+        <table style={{ width: '100%', fontSize: 12.5, marginTop: 44 }}>
           <tbody>
             <tr>
-              <td style={{ textAlign: 'center', width: '50%' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedPreparedBy || ' '}</span></td>
-              <td style={{ textAlign: 'center' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedApprovedBy || ' '}</span></td>
+              <td style={{ textAlign: 'center', width: '50%' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedPreparedBy || ' '}</span></td>
+              <td style={{ textAlign: 'center' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedApprovedBy || ' '}</span></td>
             </tr>
             <tr>
               <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 2 }}>Prepared By</td>
@@ -370,27 +373,25 @@ export default function CashVouchersPage() {
           </tbody>
         </table>
 
-        <table style={{ width: '100%', fontSize: 12, marginTop: 30 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginTop: 30 }}>
           <tbody>
             <tr>
-              <td style={{ fontWeight: 700, width: '65%' }}>Received from 1125 CREDIT COLLECTION SERVICES the sum of</td>
-              <td style={{ fontWeight: 700 }}>Payee:</td>
-              <td style={{ borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedPayee}</td>
+              <td style={{ ...tdStyle, fontWeight: 700, width: '55%' }} rowSpan={2}>
+                Received from 1125 CREDIT COLLECTION SERVICES the sum of<br />
+                <span style={{ fontWeight: 700 }}>** {numberToWordsPeso(printedTotal).toUpperCase()} **</span><br />
+                <span style={{ fontStyle: 'italic', fontWeight: 400 }}>in Full / Partial Payment of the above mentioned account</span>
+              </td>
+              <td style={infoLabel}>Payee</td>
+              <td style={infoValue}>{printedPayee}</td>
             </tr>
             <tr>
-              <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 6 }}>** {numberToWordsPeso(printedTotal).toUpperCase()} **</td>
-              <td />
-              <td />
-            </tr>
-            <tr>
-              <td style={{ fontStyle: 'italic', paddingTop: 6 }}>in Full / Partial Payment of the above mentioned account</td>
-              <td style={{ fontWeight: 700, paddingTop: 6 }}>Date Received:</td>
-              <td style={{ borderBottom: '1px solid #000', paddingTop: 6, paddingBottom: 6 }}>{formatDate(printedDate)}</td>
+              <td style={infoLabel}>Date Received</td>
+              <td style={infoValue}>{formatDate(printedDate)}</td>
             </tr>
           </tbody>
         </table>
 
-        <div style={{ textAlign: 'right', fontSize: 11, marginTop: 40 }}>Page 1 of 1</div>
+        <div style={{ textAlign: 'right', fontSize: 11, fontStyle: 'italic', color: '#555', marginTop: 20 }}>Page 1 of 1</div>
       </>
     );
   }

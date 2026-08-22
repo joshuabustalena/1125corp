@@ -17,7 +17,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
 import { FileDown, Download, Loader2, TrendingUp, Receipt } from 'lucide-react';
 
 export default function PaymentReportsPage() {
@@ -65,7 +65,7 @@ export default function PaymentReportsPage() {
     const [b, a, c] = await Promise.all([
       supabase.from('branches').select('id, name').eq('status', 'active').order('name'),
       supabase.from('areas').select('id, name, branch_id').eq('status', 'active').order('name'),
-      supabase.from('customers').select('id, first_name, last_name, branch_id, area_id').eq('status', 'active').order('first_name'),
+      supabase.from('customers').select('id, first_name, last_name, branch_id, area_id').eq('status', 'active').order('last_name').order('first_name'),
     ]);
     setBranches(b.data ?? []);
     setAreas(a.data ?? []);
@@ -344,7 +344,7 @@ export default function PaymentReportsPage() {
                 <div key={p.id} className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{p.customers ? `${p.customers.first_name} ${p.customers.last_name}` : '—'}</p>
+                      <p className="font-medium text-sm truncate">{p.customers ? formatCustomerName(p.customers.first_name, p.customers.last_name) : '—'}</p>
                       <p className="text-xs text-muted-foreground">{p.loans?.loan_number ?? '—'} · {formatDate(p.payment_date)}</p>
                     </div>
                     <p className="text-sm font-medium text-success shrink-0">{formatCurrency(p.amount_paid)}</p>
@@ -370,7 +370,7 @@ export default function PaymentReportsPage() {
                   {payments.map(p => (
                     <TableRow key={p.id}>
                       <TableCell className="text-sm">{formatDate(p.payment_date)}</TableCell>
-                      <TableCell className="text-sm">{p.customers ? `${p.customers.first_name} ${p.customers.last_name}` : '—'}</TableCell>
+                      <TableCell className="text-sm">{p.customers ? formatCustomerName(p.customers.first_name, p.customers.last_name) : '—'}</TableCell>
                       <TableCell className="text-sm">{p.customers?.branches?.name ?? '—'}</TableCell>
                       <TableCell className="text-sm">{p.customers?.areas?.name ?? '—'}</TableCell>
                       <TableCell className="text-sm">{p.loans?.loan_number ?? '—'}</TableCell>
@@ -461,7 +461,7 @@ export default function PaymentReportsPage() {
               {payments.map((p, i) => (
                 <tr key={p.id} style={{ background: i % 2 === 0 ? '#ffffff' : '#f4f6f9' }}>
                   <td style={{ padding: '6px 10px' }}>{formatDate(p.payment_date)}</td>
-                  <td style={{ padding: '6px 10px' }}>{p.customers ? `${p.customers.first_name} ${p.customers.last_name}` : '—'}</td>
+                  <td style={{ padding: '6px 10px' }}>{p.customers ? formatCustomerName(p.customers.first_name, p.customers.last_name) : '—'}</td>
                   <td style={{ padding: '6px 10px' }}>{p.customers?.branches?.name ?? '—'}</td>
                   <td style={{ padding: '6px 10px' }}>{p.customers?.areas?.name ?? '—'}</td>
                   <td style={{ padding: '6px 10px' }}>{p.loans?.loan_number ?? '—'}</td>

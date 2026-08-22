@@ -12,9 +12,10 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { StatCard } from '@/components/dashboard/stat-card';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
-import { Loader2 } from 'lucide-react';
+import { Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
 export default function AccountLedgerPage() {
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -110,7 +111,22 @@ export default function AccountLedgerPage() {
       </Card>
 
       {ledgerRows && (
-        <Card className="glass-card border-border">
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <StatCard
+              title="Total Debit"
+              value={formatCurrency(ledgerRows.reduce((s, r) => s + r.debit, 0))}
+              icon={<TrendingUp className="w-5 h-5" />}
+              subtitle={`${formatDate(ledgerStartDate)} – ${formatDate(ledgerEndDate)}`}
+            />
+            <StatCard
+              title="Total Credit"
+              value={formatCurrency(ledgerRows.reduce((s, r) => s + r.credit, 0))}
+              icon={<TrendingDown className="w-5 h-5" />}
+              subtitle={`${formatDate(ledgerStartDate)} – ${formatDate(ledgerEndDate)}`}
+            />
+          </div>
+          <Card className="glass-card border-border">
           <CardHeader>
             <CardTitle>{accounts.find(a => a.id === ledgerAccountId)?.code} — {accounts.find(a => a.id === ledgerAccountId)?.name}</CardTitle>
             <CardDescription>{formatDate(ledgerStartDate)} – {formatDate(ledgerEndDate)}</CardDescription>
@@ -157,7 +173,8 @@ export default function AccountLedgerPage() {
               </TableBody>
             </Table>
           </CardContent>
-        </Card>
+          </Card>
+        </>
       )}
     </div>
   );

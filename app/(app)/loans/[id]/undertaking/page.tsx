@@ -7,13 +7,29 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
+import { buildPrintHtml } from '@/lib/print-document';
 import { DocumentScaler } from '@/components/document-scaler';
 import { ArrowLeft, FileText, Download, Loader2 } from 'lucide-react';
 
-function formatLongDate(date: string | Date | null | undefined): string {
+function ordinalSuffix(n: number): string {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return 'th';
+  switch (n % 10) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
+}
+
+// Matches the signed paper template's date wording exactly: "20th day of
+// August 2026", not the generic "August 20, 2026" long-date form.
+function formatUndertakingDate(date: string | Date | null | undefined): string {
   if (!date) return '';
   const d = typeof date === 'string' ? new Date(date) : date;
-  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const day = d.getDate();
+  const month = d.toLocaleDateString('en-US', { month: 'long' });
+  return `${day}${ordinalSuffix(day)} day of ${month} ${d.getFullYear()}`;
 }
 
 // Borrower's Undertaking clauses — fixed legal text, English + Tagalog.
@@ -25,13 +41,13 @@ const UNDERTAKING_CLAUSES = [
   },
   {
     n: 2, title: 'Official Payment Records / Mga Resibo at Katibayan ng Bayad',
-    en: 'Every payment made by the Borrower shall be supported by an Acknowledgment Receipt, Official Receipt, or other proof of payment issued by the designated branch employee of the Lending Company.',
+    en: 'Every payment made by the Borrower shall be supported by an Acknowledgment Receipt, Official Receipt, or other proof of payment issued by the designated branch employee of the Lender.',
     tl: '(Ang bawat bayad na aking gagawin ay dapat may kaukulang Acknowledgment Receipt, Official Receipt, o iba pang katibayan ng pagbabayad na ibibigay ng awtorisadong kinatawan ng kompanya.)',
   },
   {
     n: 3, title: 'Disclosure of Loan Terms',
-    en: 'I certify that prior to the release of the loan, the principal amount, interest rate, charges, penalties, payment schedule, and net loan proceeds were disclosed and explained to me in accordance with the Truth in Lending Act.',
-    tl: '(Pinatutunayan ko na bago ang pagpapalabas ng loan ay ipinaliwanag sa akin ang principal amount, interest rate, charges, penalties, payment schedule, at net loan proceeds alinsunod sa Truth in Lending Act.)',
+    en: 'I certify that prior to the release of the loan, the principal amount, interest rate, charges, penalties, payment schedule, and net loan proceeds were disclosed and explained to me.',
+    tl: '(Pinatutunayan ko na bago ang pagpapalabas ng loan ay ipinaliwanag sa akin ang principal amount, interest rate, charges, penalties, payment schedule, at net loan proceeds.)',
   },
   {
     n: 4, title: 'Collateral Loan',
@@ -125,10 +141,10 @@ export default function UndertakingPage() {
     setPrinting(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const dataUrls: string[] = [];
+      const pages: { url: string; width: number; height: number }[] = [];
       for (const ref of refs) {
         const canvas = await html2canvas(ref.current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
-        dataUrls.push(canvas.toDataURL('image/png'));
+        pages.push({ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
       }
       const printWindow = window.open('', '_blank', 'width=900,height=1000');
       if (!printWindow) {
@@ -136,14 +152,8 @@ export default function UndertakingPage() {
         setPrinting(false);
         return;
       }
-      printWindow.document.write(`
-        <html>
-          <head><title>Borrower's Undertaking ${loan.loan_number}</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            ${dataUrls.map((url, i) => `<img src="${url}" style="width:100%;display:block;${i < dataUrls.length - 1 ? 'page-break-after:always;' : ''}" />`).join('')}
-          </body>
-        </html>
-      `);
+      // 8.5"x13" folio (matching the PDF download's page size).
+      printWindow.document.write(buildPrintHtml(`Borrower's Undertaking ${loan.loan_number}`, pages, 8.5, 13));
       printWindow.document.close();
       printWindow.onload = () => printWindow.print();
       printWindow.onafterprint = () => printWindow.close();
@@ -202,8 +212,8 @@ export default function UndertakingPage() {
           <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '30px 38px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 14, lineHeight: 1.4 }}>
             <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 13 }}>
               <div style={{ fontWeight: 700, fontSize: 19, color: '#1F4E79' }}>{COMPANY_NAME}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>{branding.address.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>CEL NO: {branding.contact}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>{branding.headerAddress.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>CELL PHONE NUMBER: {branding.contact}</div>
             </div>
 
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17 }}>BORROWER'S UNDERTAKING</div>
@@ -221,11 +231,11 @@ export default function UndertakingPage() {
             ))}
 
             <p style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.36, marginTop: 8, marginBottom: 16 }}>
-              I hereby authorize {COMPANY_NAME_DISPLAY} to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act of 2012.
+              I hereby authorize {COMPANY_NAME_DISPLAY} to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act.
             </p>
 
             <p style={{ fontSize: 14, marginBottom: 20 }}>
-              IN WITNESS WHEREOF, I hereunto affix my signature this <span style={{ textDecoration: 'underline' }}>{formatLongDate(undertakingData.date)}</span>
+              I hereunto affix my signature this <span style={{ textDecoration: 'underline' }}>{formatUndertakingDate(undertakingData.date)}</span>, at <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span>
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

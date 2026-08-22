@@ -24,6 +24,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
+import { buildPrintHtml } from '@/lib/print-document';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye } from 'lucide-react';
@@ -640,25 +641,50 @@ export default function PayrollPage() {
 
   async function approvePayroll(id: string) {
     const row = payroll.find(p => p.id === id);
-    const { error } = await supabase.from('payroll').update({ status: 'paid' }).eq('id', id);
+    // The status flip is guarded with .neq('status','paid') and .select() so
+    // it only succeeds on a genuine unpaid -> paid transition. Without this,
+    // approving an already-paid row (a double-click, or a stale list where
+    // someone else already approved it) ran the loan deductions a SECOND
+    // time and silently knocked the employee's balance down twice.
+    const { data: updated, error } = await supabase
+      .from('payroll')
+      .update({ status: 'paid' })
+      .eq('id', id)
+      .neq('status', 'paid')
+      .select('id');
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
       return;
     }
+    if (!updated || updated.length === 0) {
+      toast({ title: 'Already approved', description: 'This payroll was already marked paid — no deductions were re-applied.' });
+      load();
+      return;
+    }
 
-    // Actually apply the loan repayment that was deducted on this payslip to
-    // the employee's active loan(s) — same per-loan amount computed at
-    // generation time (deduction_amount capped at remaining_balance).
+    // Apply exactly what this payslip actually deducted (row.loan_deduction),
+    // spread across the employee's active loans oldest-first. Previously this
+    // re-derived the amount from each loan's own deduction_amount, so an
+    // Administrator who edited the deduction on the payslip had a different
+    // amount taken off the balance than the payslip showed.
     if (row && Number(row.loan_deduction) > 0) {
-      const { data: activeLoans } = await supabase.from('employee_loans').select('id, deduction_amount, remaining_balance').eq('employee_id', row.employee_id).eq('status', 'active');
+      const { data: activeLoans } = await supabase
+        .from('employee_loans')
+        .select('id, remaining_balance')
+        .eq('employee_id', row.employee_id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: true });
+      let remaining = Number(row.loan_deduction);
       for (const l of activeLoans ?? []) {
-        const amt = Math.min(Number(l.deduction_amount) || 0, Number(l.remaining_balance) || 0);
-        if (amt <= 0) continue;
-        const newBalance = Number(l.remaining_balance) - amt;
+        if (remaining <= 0) break;
+        const applied = Math.min(remaining, Number(l.remaining_balance) || 0);
+        if (applied <= 0) continue;
+        const newBalance = Number(l.remaining_balance) - applied;
         await supabase.from('employee_loans').update({
           remaining_balance: newBalance,
           status: newBalance <= 0 ? 'completed' : 'active',
         }).eq('id', l.id);
+        remaining -= applied;
       }
     }
 
@@ -1190,21 +1216,14 @@ export default function PayrollPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(payslipRef.current, { backgroundColor: '#ffffff', scale: 2, width: 600, windowWidth: 600 });
-      const dataUrl = canvas.toDataURL('image/png');
       const printWindow = window.open('', '_blank', 'width=700,height=900');
       if (!printWindow) {
         toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the payslip', variant: 'destructive' });
         setPrintingPayslip(false);
         return;
       }
-      printWindow.document.write(`
-        <html>
-          <head><title>Payslip</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            <img src="${dataUrl}" style="width:100%;display:block;" />
-          </body>
-        </html>
-      `);
+      // 8.5"x13" folio (matching the PDF download's own scale-to-fit page size).
+      printWindow.document.write(buildPrintHtml('Payslip', [{ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height }], 8.5, 13));
       printWindow.document.close();
       printWindow.onload = () => printWindow.print();
       printWindow.onafterprint = () => printWindow.close();

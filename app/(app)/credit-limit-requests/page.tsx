@@ -21,7 +21,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import { notifyRoles } from '@/lib/notify';
 import { TrendingUp, Plus, Loader2, CheckCircle, XCircle } from 'lucide-react';
 
@@ -179,7 +179,7 @@ export default function CreditLimitRequestsPage() {
               {requests.map(r => (
                 <div key={r.id} className="p-4 active:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/customers/${r.customer_id}`)}>
                   <div className="flex items-start justify-between gap-3">
-                    <p className="font-medium text-sm truncate">{r.customers?.first_name} {r.customers?.last_name}</p>
+                    <p className="font-medium text-sm truncate">{formatCustomerName(r.customers?.first_name, r.customers?.last_name)}</p>
                     <div className="text-right shrink-0">
                       <Badge variant={statusVariant(r.status)}>{r.status}</Badge>
                       {r.status === 'denied' && r.denial_reason && (
@@ -224,7 +224,7 @@ export default function CreditLimitRequestsPage() {
               <TableBody>
                 {requests.map(r => (
                   <TableRow key={r.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/customers/${r.customer_id}`)}>
-                    <TableCell className="text-sm font-medium">{r.customers?.first_name} {r.customers?.last_name}</TableCell>
+                    <TableCell className="text-sm font-medium">{formatCustomerName(r.customers?.first_name, r.customers?.last_name)}</TableCell>
                     <TableCell className="text-sm">{formatCurrency(r.current_limit)}</TableCell>
                     <TableCell className="text-sm font-medium text-primary">{formatCurrency(r.requested_limit)}</TableCell>
                     <TableCell className="text-sm">{r.requested_by_profile?.full_name ?? '—'}</TableCell>

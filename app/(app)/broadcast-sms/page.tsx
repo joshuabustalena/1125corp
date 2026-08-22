@@ -26,7 +26,37 @@ import { MessageSquare, Loader2, Send, Users } from 'lucide-react';
 // message just gets split into more segments/credits, it doesn't fail.
 const SEGMENT_LENGTH = 160;
 
-interface Customer { id: string; first_name: string; last_name: string; phone: string | null; branch_id: string | null; area_id: string | null; status: string; }
+interface Customer { id: string; first_name: string; last_name: string; phone: string | null; branch_id: string | null; area_id: string | null; status: string; hasDelayOrOverdue?: boolean; }
+
+// Same Sunday-exclusion convention as Collection List's delay formula.
+function countCollectionDaysBetween(start: Date, end: Date): number {
+  if (start > end) return 0;
+  let count = 0;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() !== 0) count++;
+  }
+  return count;
+}
+
+// Same delay/overdue formula as Collection List — full balance once past
+// due_date, otherwise how far behind the daily schedule the loan is. The
+// release date itself counts as Day 1 (client confirmed, Discord Aug 2026).
+function loanHasDelayOrOverdue(l: any, today: Date): boolean {
+  const totalPayable = Number(l.total_payable) || 0;
+  const remainingBalance = Number(l.remaining_balance) || 0;
+  // Always the auto-computed split, never l.daily_payment — same as
+  // Collection List (client confirmed via Discord, Aug 2026).
+  const dailyPayment = l.term_days > 0 ? totalPayable / l.term_days : 0;
+  const isPastDue = !!(l.due_date && new Date(l.due_date) < today);
+  if (isPastDue) return remainingBalance > 0;
+  if (!l.release_date || dailyPayment <= 0) return false;
+  const firstDueDay = new Date(l.release_date);
+  if (firstDueDay > today) return false;
+  const collectionDaysElapsed = countCollectionDaysBetween(firstDueDay, today);
+  const amountAlreadyPaid = totalPayable - remainingBalance;
+  const expectedByNow = dailyPayment * collectionDaysElapsed;
+  return expectedByNow - amountAlreadyPaid > 0.01;
+}
 
 export default function BroadcastSmsPage() {
   const { toast } = useToast();
@@ -39,6 +69,10 @@ export default function BroadcastSmsPage() {
   const [branchFilter, setBranchFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('active');
+  // 'all' = no loan-status narrowing; 'delayed_overdue' = only customers
+  // with at least one active loan currently behind on payments or past its
+  // due date — useful for targeting a payment-reminder blast.
+  const [loanStatusFilter, setLoanStatusFilter] = useState('all');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -53,7 +87,7 @@ export default function BroadcastSmsPage() {
 
   useEffect(() => {
     loadCustomers();
-  }, [branchFilter, areaFilter, statusFilter]);
+  }, [branchFilter, areaFilter, statusFilter, loanStatusFilter]);
 
   async function loadOptions() {
     const [b, a] = await Promise.all([
@@ -82,7 +116,22 @@ export default function BroadcastSmsPage() {
     if (areaFilter !== 'all') query = query.eq('area_id', areaFilter);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     const { data } = await query;
-    setCustomers((data as any) ?? []);
+    let list = (data as any as Customer[]) ?? [];
+
+    if (loanStatusFilter === 'delayed_overdue' && list.length > 0) {
+      const { data: loans } = await supabase
+        .from('loans')
+        .select('customer_id, release_date, due_date, total_payable, remaining_balance, daily_payment, term_days')
+        .in('customer_id', list.map(c => c.id))
+        .in('status', ['active', 'overdue']);
+      const today = new Date();
+      const customerIdsWithDelay = new Set(
+        (loans ?? []).filter((l: any) => loanHasDelayOrOverdue(l, today)).map((l: any) => l.customer_id)
+      );
+      list = list.filter(c => customerIdsWithDelay.has(c.id));
+    }
+
+    setCustomers(list);
     setLoadingCustomers(false);
   }
 
@@ -95,6 +144,7 @@ export default function BroadcastSmsPage() {
     parts.push(branchFilter === 'all' ? 'All Branches' : (branches.find(b => b.id === branchFilter)?.name ?? 'Branch'));
     parts.push(areaFilter === 'all' ? 'All Areas' : (areas.find(a => a.id === areaFilter)?.name ?? 'Area'));
     parts.push(statusFilter === 'all' ? 'All Statuses' : `${statusFilter} customers`);
+    if (loanStatusFilter === 'delayed_overdue') parts.push('Delayed/Overdue only');
     return parts.join(' · ');
   }
 
@@ -166,7 +216,7 @@ export default function BroadcastSmsPage() {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Branch</Label>
                 <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); }}>
@@ -197,6 +247,16 @@ export default function BroadcastSmsPage() {
                     <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="inactive">Inactive</SelectItem>
                     <SelectItem value="all">All Statuses</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Loan Status</Label>
+                <Select value={loanStatusFilter} onValueChange={setLoanStatusFilter}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Any</SelectItem>
+                    <SelectItem value="delayed_overdue">Has Delay/Overdue Balance</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

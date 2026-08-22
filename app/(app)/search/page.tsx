@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import { Search, Users, Landmark, Wallet, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -54,7 +54,7 @@ export default function SearchPage() {
                 <div className="space-y-2">
                   {results.customers.map(c => (
                     <Link key={c.id} href={`/customers/${c.id}`} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors">
-                      <div><p className="text-sm font-medium">{c.first_name} {c.last_name}</p><p className="text-xs text-muted-foreground">{c.phone ?? c.email ?? ''}</p></div>
+                      <div><p className="text-sm font-medium">{formatCustomerName(c.first_name, c.last_name)}</p><p className="text-xs text-muted-foreground">{c.phone ?? c.email ?? ''}</p></div>
                       <Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge>
                     </Link>
                   ))}
@@ -70,7 +70,7 @@ export default function SearchPage() {
                 <div className="space-y-2">
                   {results.loans.map(l => (
                     <Link key={l.id} href={`/loans/${l.id}`} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors">
-                      <div><p className="text-sm font-medium">{l.loan_number}</p><p className="text-xs text-muted-foreground">{l.customers?.first_name} {l.customers?.last_name}</p></div>
+                      <div><p className="text-sm font-medium">{l.loan_number}</p><p className="text-xs text-muted-foreground">{formatCustomerName(l.customers?.first_name, l.customers?.last_name)}</p></div>
                       <div className="flex items-center gap-2"><span className="text-sm">{formatCurrency(l.amount)}</span><Badge variant="outline">{l.status}</Badge></div>
                     </Link>
                   ))}

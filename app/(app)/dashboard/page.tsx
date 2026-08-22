@@ -10,7 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import {
   Users, Landmark, AlertCircle, Wallet, TrendingUp, Banknote,
   Activity, UserCheck, ScrollText, Calendar, ArrowRight, Download, Loader2,
@@ -22,6 +22,7 @@ import {
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
+import { CASH_BUCKETS, cashBucketFor, isSpendableCashAccount } from '@/lib/cash-buckets';
 
 function formatCompact(value: number): string {
   if (value >= 1000) return `₱${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}K`;
@@ -37,10 +38,13 @@ interface DashboardStats {
   overdueRate: number;
   todayCollections: number;
   yesterdayCollections: number;
+  weeklyCollections: number;
   monthlyCollections: number;
   lastMonthCollections: number;
   outstandingBalance: number;
-  totalCash: number;
+  // Real ledger cash position, split per cash location (Vault, BPI,
+  // Producers, …) — see lib/cash-buckets.
+  cashByBucket: Record<string, number>;
   netCashFlowMonth: number;
   paidLoans: number;
   pendingLoans: number;
@@ -60,10 +64,11 @@ const emptyStats: DashboardStats = {
   overdueRate: 0,
   todayCollections: 0,
   yesterdayCollections: 0,
+  weeklyCollections: 0,
   monthlyCollections: 0,
   lastMonthCollections: 0,
   outstandingBalance: 0,
-  totalCash: 0,
+  cashByBucket: {},
   netCashFlowMonth: 0,
   paidLoans: 0,
   pendingLoans: 0,
@@ -153,12 +158,27 @@ export default function DashboardPage() {
       const scopeByCustomerIds = (q: any) => branchCustomerIds === null ? q : q.in('customer_id', branchCustomerIds.length > 0 ? branchCustomerIds : NO_MATCH);
       const scopeByEmployeeIds = (q: any) => branchEmployeeIds === null ? q : q.in('employee_id', branchEmployeeIds.length > 0 ? branchEmployeeIds : NO_MATCH);
 
+      // Real cash position per location, straight from the ledger — the old
+      // "Total Cash" card reused monthlyCollections, which isn't cash on
+      // hand at all. Scoped the same way Accounting scopes it: this branch's
+      // cash accounts plus any shared/company-wide one.
+      let cashAcctQuery = supabase.from('chart_of_accounts').select('id, name').ilike('name', '%cash%');
+      if (branchFilter !== 'all') cashAcctQuery = cashAcctQuery.or(`branch_id.eq.${branchFilter},branch_id.is.null`);
+      const { data: cashAccountsRaw } = await cashAcctQuery;
+      // Drop Cash Short/Over — named like cash and typed as an asset, but
+      // it's a variance account, not spendable cash. See lib/cash-buckets.
+      const cashAccounts = (cashAccountsRaw ?? []).filter((a: any) => isSpendableCashAccount(a.name));
+      const cashAccountIds = cashAccounts.map((a: any) => a.id);
+      const bucketByAccountId = new Map<string, string>(
+        cashAccounts.map((a: any) => [a.id, cashBucketFor(a.name)])
+      );
+
       const [
         customers, newCustomers, loans, allLoanStatuses,
         paymentsToday, paymentsYesterday, paymentsMonth, paymentsLastMonth,
         recentPays, upcoming, paymentsWeek, journalWeek,
         customersByArea, paymentsFourWeeks, disbursedFourWeeks, gasVouchersFourWeeks, cashVouchersFourWeeks,
-        attendanceMonth, employees, attendanceToday, payrollMonth,
+        attendanceMonth, employees, attendanceToday, payrollMonth, cashLines,
       ] = await Promise.all([
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true })),
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
@@ -181,7 +201,18 @@ export default function DashboardPage() {
         scopeByBranch(supabase.from('employees').select('id, position').eq('status', 'active')),
         scopeByEmployeeIds(supabase.from('attendance').select('employee_id, employees(position)').eq('date', today)),
         scopeByEmployeeIds(supabase.from('payroll').select('net_pay').gte('pay_date', monthStart)),
+        cashAccountIds.length > 0
+          ? (branchFilter === 'all'
+            ? supabase.from('journal_entry_lines').select('account_id, debit, credit').in('account_id', cashAccountIds)
+            : supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries!inner(branch_id)').in('account_id', cashAccountIds).or(`branch_id.eq.${branchFilter},branch_id.is.null`, { foreignTable: 'journal_entries' }))
+          : Promise.resolve({ data: [] as any[] }),
       ]);
+
+      const cashByBucket: Record<string, number> = {};
+      for (const l of ((cashLines as any).data ?? []) as any[]) {
+        const bucket = bucketByAccountId.get(l.account_id) ?? 'other';
+        cashByBucket[bucket] = (cashByBucket[bucket] ?? 0) + (Number(l.debit) || 0) - (Number(l.credit) || 0);
+      }
 
       const activeLoans: any[] = loans.data ?? [];
       const overdue = activeLoans.filter((l: any) => l.due_date && new Date(l.due_date) < new Date());
@@ -229,10 +260,11 @@ export default function DashboardPage() {
         overdueRate,
         todayCollections: (paymentsToday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
+        weeklyCollections: (paymentsWeek.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         monthlyCollections,
         lastMonthCollections,
         outstandingBalance,
-        totalCash: monthlyCollections,
+        cashByBucket,
         netCashFlowMonth,
         paidLoans,
         pendingLoans,
@@ -414,6 +446,13 @@ export default function DashboardPage() {
             : {})}
         />
         <StatCard
+          title="Weekly Collections"
+          value={formatCurrency(stats.weeklyCollections)}
+          icon={<TrendingUp className="w-5 h-5" />}
+          variant="success"
+          subtitle="Last 7 days"
+        />
+        <StatCard
           title="Monthly Collections"
           value={formatCurrency(stats.monthlyCollections)}
           icon={<TrendingUp className="w-5 h-5" />}
@@ -429,13 +468,19 @@ export default function DashboardPage() {
           variant="warning"
           subtitle="Total receivables"
         />
-        <StatCard
-          title="Total Cash"
-          value={formatCurrency(stats.totalCash)}
-          icon={<Banknote className="w-5 h-5" />}
-          variant="success"
-          subtitle="Available funds"
-        />
+        {/* Each cash location on its own card (client request) — the old
+            single "Total Cash" card actually showed monthly collections,
+            not cash on hand. Only buckets that exist in this branch's Chart
+            of Accounts render, so an unused one doesn't show a stray ₱0.00. */}
+        {CASH_BUCKETS.filter(b => stats.cashByBucket[b.key] !== undefined).map(b => (
+          <StatCard
+            key={b.key}
+            title={b.label}
+            value={formatCurrency(stats.cashByBucket[b.key] ?? 0)}
+            icon={<Banknote className="w-5 h-5" />}
+            variant="success"
+          />
+        ))}
         <StatCard
           title="Cash Flow"
           value={`${stats.netCashFlowMonth >= 0 ? '+' : '-'}${formatCurrency(Math.abs(stats.netCashFlowMonth))}`}
@@ -644,7 +689,7 @@ export default function DashboardPage() {
                       </div>
                       <div>
                         <p className="text-sm font-medium">
-                          {p.customers?.first_name} {p.customers?.last_name}
+                          {formatCustomerName(p.customers?.first_name, p.customers?.last_name)}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {p.loans?.loan_number} • {formatDate(p.payment_date)}
@@ -689,7 +734,7 @@ export default function DashboardPage() {
                       </div>
                       <div>
                         <p className="text-sm font-medium">
-                          {l.customers?.first_name} {l.customers?.last_name}
+                          {formatCustomerName(l.customers?.first_name, l.customers?.last_name)}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {l.loan_number} • Due {formatDate(l.due_date)}

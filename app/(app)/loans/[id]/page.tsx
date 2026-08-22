@@ -587,12 +587,24 @@ export default function LoanDetailPage() {
     };
     if (amountChanged) {
       const details = computeLoanDetails(approveAmountNum, Number(loan.interest_rate), Number(loan.term_days));
+      // computeLoanDetails().releaseAmount is only the GROSS figure (amount
+      // less the service fee). Writing it straight through here used to wipe
+      // out the two other deductions the loan was created with — the offset
+      // balance carried over from a renewal, and the pre-settled day-one
+      // payment — so approving a renewal at a changed amount would hand the
+      // borrower more cash than they were entitled to and leave
+      // remaining_balance a full day's payment too high. Both are re-applied
+      // below; offset_balance is 0 on a fresh loan, so this reduces to the
+      // same formula the new-loan screen uses.
+      const autoDaily = Number(loan.term_days) > 0 ? details.totalPayable / Number(loan.term_days) : 0;
+      const firstPayment = Number(approveDailyPayment) > 0 ? Number(approveDailyPayment) : autoDaily;
+      const offsetBalance = Number(loan.offset_balance) || 0;
       payload.amount = approveAmountNum;
       payload.interest_amount = details.interestAmount;
       payload.service_fee = details.serviceFee;
-      payload.release_amount = details.releaseAmount;
       payload.total_payable = details.totalPayable;
-      payload.remaining_balance = details.totalPayable;
+      payload.release_amount = Math.max(0, details.releaseAmount - offsetBalance - firstPayment);
+      payload.remaining_balance = Math.max(0, details.totalPayable - firstPayment);
     }
     const { error } = await supabase.from('loans').update(payload).eq('id', loan.id);
     if (error) {

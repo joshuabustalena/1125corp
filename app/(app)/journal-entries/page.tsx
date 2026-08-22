@@ -214,18 +214,22 @@ export default function JournalEntriesPage() {
                       )}
                     </div>
                   </div>
-                  <Table>
+                  {/* Explicit column widths — without them the auto-layout
+                      table hands all the slack to the account column and
+                      flings the debit/credit figures to the far right edge,
+                      leaving the wide empty gap the client asked to remove. */}
+                  <Table className="table-fixed">
                     <TableBody>
                       {(entry.journal_entry_lines ?? []).map((line: any) => (
                         <TableRow key={line.id}>
-                          <TableCell className="text-sm py-1.5">{line.chart_of_accounts?.code} — {line.chart_of_accounts?.name}</TableCell>
-                          <TableCell className="text-sm py-1.5 text-right">{Number(line.debit) > 0 ? formatCurrency(line.debit) : ''}</TableCell>
-                          <TableCell className="text-sm py-1.5 text-right">{Number(line.credit) > 0 ? formatCurrency(line.credit) : ''}</TableCell>
+                          <TableCell className="text-base py-2 w-[55%]">{line.chart_of_accounts?.code} — {line.chart_of_accounts?.name}</TableCell>
+                          <TableCell className="text-base py-2 text-right font-medium w-[22%]">{Number(line.debit) > 0 ? formatCurrency(line.debit) : ''}</TableCell>
+                          <TableCell className="text-base py-2 text-right font-medium w-[23%]">{Number(line.credit) > 0 ? formatCurrency(line.credit) : ''}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
-                  {entry.description && <p className="text-sm text-muted-foreground mt-2">{entry.description}</p>}
+                  {entry.description && <p className="text-xs text-muted-foreground mt-2">{entry.description}</p>}
                 </div>
               ))}
             </div>

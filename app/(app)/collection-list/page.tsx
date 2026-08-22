@@ -12,6 +12,7 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
+import { buildPrintHtml } from '@/lib/print-document';
 import { ClipboardList, Loader2, Download, Printer } from 'lucide-react';
 
 // Printable field worksheet a Cashier hands each collector every morning —
@@ -103,7 +104,9 @@ export default function CollectionListPage() {
       .eq('status', 'active')
       .eq('customers.area_id', areaId);
     const sorted = (data ?? []).slice().sort((a: any, b: any) =>
-      `${a.customers?.first_name ?? ''} ${a.customers?.last_name ?? ''}`.localeCompare(`${b.customers?.first_name ?? ''} ${b.customers?.last_name ?? ''}`)
+      // Sorted last-name-first to match how the sheet displays each name.
+      formatCustomerName(a.customers?.first_name, a.customers?.last_name)
+        .localeCompare(formatCustomerName(b.customers?.first_name, b.customers?.last_name))
     );
     setLoans(sorted);
     setLoading(false);
@@ -114,23 +117,22 @@ export default function CollectionListPage() {
   const rows = loans.map(l => {
     const totalPayable = Number(l.total_payable) || 0;
     const remainingBalance = Number(l.remaining_balance) || 0;
-    // Most loans leave "Daily Payment" blank at application time (the form
-    // itself invites this — "Leave blank to split evenly") and rely on the
-    // auto-computed split shown there instead, so this can't just read
-    // l.daily_payment on its own — it's 0/blank far more often than not,
-    // which silently zeroed out the delay for most loans. Same fallback
-    // formula the application form itself uses, and the same one already
-    // applied to the Loan Agreement/Voucher documents' First Payment.
-    const dailyPayment = l.daily_payment != null && Number(l.daily_payment) > 0
-      ? Number(l.daily_payment)
-      : (l.term_days > 0 ? totalPayable / l.term_days : 0);
+    // Always the auto-computed split (Total Payable ÷ Term Days) — never
+    // l.daily_payment, even when that's been manually customized. Client
+    // confirmed (Discord, Aug 2026): the delay must be based on the
+    // auto-generated daily rate specifically, so it always lines up with
+    // the loan's actual term length (e.g. exactly 60 days for a 60-day
+    // loan) — a custom daily_payment could pay off faster/slower than the
+    // term and throw that off.
+    const dailyPayment = l.term_days > 0 ? totalPayable / l.term_days : 0;
     const isPastDue = !!(l.due_date && new Date(l.due_date) < today);
 
     // Delay Amount, matching the client's own field process exactly: how
     // far behind the customer's cumulative payments are from what should
     // have been collected by now, day by day (Sundays don't count — no
-    // collection expected then). The release day itself has no delay yet;
-    // the very next day is the first day a payment is actually due.
+    // collection expected then). The release date itself counts as Day 1
+    // (client confirmed, Discord Aug 2026) — the first day's payment is
+    // already expected on the day the loan is released, not the day after.
     let amountOverdue = 0;
     if (isPastDue) {
       // Already past the loan's final due date — same "full balance
@@ -138,7 +140,6 @@ export default function CollectionListPage() {
       amountOverdue = remainingBalance;
     } else if (l.release_date && dailyPayment > 0) {
       const firstDueDay = new Date(l.release_date);
-      firstDueDay.setDate(firstDueDay.getDate() + 1);
       if (firstDueDay <= today) {
         const collectionDaysElapsed = countCollectionDaysBetween(firstDueDay, today);
         const amountAlreadyPaid = totalPayable - remainingBalance;
@@ -195,20 +196,13 @@ export default function CollectionListPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 1000, windowWidth: 1000 });
-      const dataUrl = canvas.toDataURL('image/png');
       const printWindow = window.open('', '_blank', 'width=1100,height=850');
       if (!printWindow) {
         setPrinting(false);
         return;
       }
-      printWindow.document.write(`
-        <html>
-          <head><title>Collection List — ${collector?.areas?.name ?? ''}</title></head>
-          <body style="margin:0;padding:0;background:#fff;">
-            <img src="${dataUrl}" style="width:100%;display:block;" />
-          </body>
-        </html>
-      `);
+      // 11"x8.5" landscape (matching the PDF download's page size).
+      printWindow.document.write(buildPrintHtml(`Collection List — ${collector?.areas?.name ?? ''}`, [{ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height }], 11, 8.5));
       printWindow.document.close();
       printWindow.onload = () => printWindow.print();
       printWindow.onafterprint = () => printWindow.close();

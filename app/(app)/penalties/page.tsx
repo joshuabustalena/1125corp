@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, exportToCSV } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
 import { AlertCircle, Plus, Download, Loader2, Trash2 } from 'lucide-react';
 
 export default function PenaltiesPage() {
@@ -45,7 +45,7 @@ export default function PenaltiesPage() {
     setLoading(true);
     const [p, c, l] = await Promise.all([
       supabase.from('penalties').select('*, customers(first_name, last_name), loans(loan_number)').order('applied_at', { ascending: false }),
-      supabase.from('customers').select('id, first_name, last_name').eq('status', 'active').order('first_name'),
+      supabase.from('customers').select('id, first_name, last_name').eq('status', 'active').order('last_name').order('first_name'),
       supabase.from('loans').select('id, loan_number, customer_id').in('status', ['active', 'overdue']),
     ]);
     setPenalties(p.data ?? []);
@@ -126,7 +126,7 @@ export default function PenaltiesPage() {
                 <div key={p.id} className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{p.customers?.first_name} {p.customers?.last_name}</p>
+                      <p className="font-medium text-sm truncate">{formatCustomerName(p.customers?.first_name, p.customers?.last_name)}</p>
                       <p className="text-xs text-muted-foreground">{p.loans?.loan_number ?? '—'}</p>
                     </div>
                     <p className="text-sm font-medium text-destructive shrink-0">{formatCurrency(p.amount)}</p>
@@ -160,7 +160,7 @@ export default function PenaltiesPage() {
               <TableBody>
                 {penalties.map(p => (
                   <TableRow key={p.id} className="hover:bg-secondary/50">
-                    <TableCell className="text-sm">{p.customers?.first_name} {p.customers?.last_name}</TableCell>
+                    <TableCell className="text-sm">{formatCustomerName(p.customers?.first_name, p.customers?.last_name)}</TableCell>
                     <TableCell className="text-sm">{p.loans?.loan_number ?? '—'}</TableCell>
                     <TableCell><Badge variant="outline">{penaltyTypeLabel[p.penalty_type] ?? p.penalty_type}</Badge></TableCell>
                     <TableCell className="text-sm font-medium text-destructive">{formatCurrency(p.amount)}</TableCell>
