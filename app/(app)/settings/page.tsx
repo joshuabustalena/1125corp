@@ -20,11 +20,8 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatDate } from '@/lib/format';
-import {
-  Settings as SettingsIcon, Plus, Loader2, Building2, Calendar, Percent,
-  Bell, Mail, Save, Trash2, MapPin, Receipt, Pencil,
-} from 'lucide-react';
+import { formatDate, formatCurrency } from '@/lib/format';
+import { Settings as SettingsIcon, Plus, Loader2, Building2, Calendar, Percent, Save, Trash2, MapPin, Receipt, Pencil } from 'lucide-react';
 
 export default function SettingsPage() {
   const { toast } = useToast();
@@ -37,6 +34,11 @@ export default function SettingsPage() {
     pagibig: { type: 'percent', period_1: '2', period_16: '2' },
   });
   const [branches, setBranches] = useState<any[]>([]);
+  // Per-branch default credit limit for NEW customers, edited as text so a
+  // half-typed value doesn't get coerced to 0 mid-keystroke.
+  const [branchLimits, setBranchLimits] = useState<Record<string, string>>({});
+  const [branchEmpLimits, setBranchEmpLimits] = useState<Record<string, string>>({});
+  const [savingLimits, setSavingLimits] = useState(false);
   const [areas, setAreas] = useState<any[]>([]);
   const [holidays, setHolidays] = useState<any[]>([]);
   const [loanTypes, setLoanTypes] = useState<any[]>([]);
@@ -60,12 +62,11 @@ export default function SettingsPage() {
   const isAdmin = profile?.role_name === 'Administrator';
 
   const SETTINGS_TABS = [
-    { value: 'general', label: 'General' },
+    { value: 'general', label: 'Loan' },
     { value: 'loan', label: 'Loan & Interest' },
     { value: 'deductions', label: 'Deductions' },
     { value: 'branches', label: 'Branches' },
     { value: 'holidays', label: 'Holidays' },
-    { value: 'notifications', label: 'Notifications' },
   ];
 
   useEffect(() => { load(); }, []);
@@ -108,10 +109,44 @@ export default function SettingsPage() {
     });
 
     setBranches(b.data ?? []);
+    setBranchLimits(Object.fromEntries((b.data ?? []).map((br: any) => [br.id, String(br.default_customer_loan_limit ?? 30000)])));
+    setBranchEmpLimits(Object.fromEntries((b.data ?? []).map((br: any) => [br.id, String(br.default_employee_loan_limit ?? 15000)])));
     setAreas(a.data ?? []);
     setHolidays(h.data ?? []);
     setLoanTypes(lt.data ?? []);
     setLoading(false);
+  }
+
+  // Writes each branch's own limit. Kept separate from saveSettings(),
+  // which only ever touches the company-wide `settings` table.
+  async function saveBranchLimits() {
+    setSavingLimits(true);
+    const rows = branches.filter(b => {
+      const cust = branchLimits[b.id];
+      const emp = branchEmpLimits[b.id];
+      return (cust !== undefined && Number(cust) !== Number(b.default_customer_loan_limit ?? 30000))
+        || (emp !== undefined && Number(emp) !== Number(b.default_employee_loan_limit ?? 15000));
+    });
+    const bad = branches.find(b => !(Number(branchLimits[b.id]) > 0) || !(Number(branchEmpLimits[b.id]) > 0));
+    if (bad) {
+      toast({ title: 'Invalid limit', description: `Lagyan ng halagang mas mataas sa 0 ang ${bad.name}.`, variant: 'destructive' });
+      setSavingLimits(false);
+      return;
+    }
+    const results = await Promise.all(rows.map(b =>
+      supabase.from('branches').update({
+        default_customer_loan_limit: Number(branchLimits[b.id]),
+        default_employee_loan_limit: Number(branchEmpLimits[b.id]),
+      }).eq('id', b.id)
+    ));
+    const failed = results.find(r => r.error);
+    if (failed?.error) {
+      toast({ title: 'Error', description: failed.error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: rows.length === 0 ? 'Walang binago' : `Na-update ang ${rows.length} branch` });
+      load();
+    }
+    setSavingLimits(false);
   }
 
   async function saveSettings() {
@@ -273,22 +308,78 @@ export default function SettingsPage() {
           </SelectContent>
         </Select>
 
-        <TabsList className="hidden sm:grid w-full grid-cols-6 gap-1">
+        <TabsList className="hidden sm:grid w-full grid-cols-5 gap-1">
           {SETTINGS_TABS.map(t => (
             <TabsTrigger key={t.value} value={t.value}>{t.label}</TabsTrigger>
           ))}
         </TabsList>
 
-        {/* General Settings */}
+        {/* Per-branch loan limits. Company Name and Domain used to live here;
+            they were removed because nobody edits them and they had nothing
+            to do with lending. Both limits are per branch now, so opening a
+            new branch no longer needs a code change to give it caps. */}
         <TabsContent value="general">
           <Card className="glass-card border-border">
-            <CardHeader><CardTitle className="flex items-center gap-2"><Building2 className="w-5 h-5" />Company Information</CardTitle></CardHeader>
-            <CardContent className="space-y-4 max-w-lg">
-              <div className="space-y-2"><Label>Company Name</Label><Input value={getStringSetting('company_name', '1125Corp')} onChange={(e) => setStringSetting('company_name', e.target.value)} /></div>
-              <div className="space-y-2"><Label>Domain</Label><Input value={getStringSetting('company_domain', '1125corp.org')} onChange={(e) => setStringSetting('company_domain', e.target.value)} /></div>
-              <div className="space-y-2"><Label>Max Customer Loan (₱)</Label><Input type="number" value={settings.max_customer_loan ?? '30000'} onChange={(e) => setSettings({ ...settings, max_customer_loan: e.target.value })} /></div>
-              <div className="space-y-2"><Label>Max Employee Loan (₱)</Label><Input type="number" value={settings.max_employee_loan ?? '15000'} onChange={(e) => setSettings({ ...settings, max_employee_loan: e.target.value })} /></div>
-              <Button onClick={saveSettings} disabled={saving || !isAdmin}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}<Save className="w-4 h-4 mr-2" />Save Changes</Button>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Building2 className="w-5 h-5" />Loan Limits per Branch</CardTitle>
+              <CardDescription>
+                Bawat bagong branch ay nagsisimula sa ₱30,000 (customer) at ₱15,000 (employee). Ang customer limit ay ang binibigay sa BAGONG customer — hindi nito binabago ang limit ng mga existing.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {branches.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Wala pang branch. Magdagdag muna sa Branches tab.</p>
+              ) : (
+                <>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Branch</TableHead>
+                          <TableHead>Max Customer Loan (₱)</TableHead>
+                          <TableHead>Max Employee Loan (₱)</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {branches.map(b => (
+                          <TableRow key={b.id}>
+                            <TableCell className="text-sm font-medium whitespace-nowrap">{b.name}</TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                className="max-w-[160px]"
+                                value={branchLimits[b.id] ?? ''}
+                                onChange={(e) => setBranchLimits(prev => ({ ...prev, [b.id]: e.target.value }))}
+                                disabled={!isAdmin}
+                                placeholder="30000"
+                              />
+                              <span className="text-xs text-muted-foreground">{formatCurrency(Number(branchLimits[b.id]) || 0)}</span>
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                className="max-w-[160px]"
+                                value={branchEmpLimits[b.id] ?? ''}
+                                onChange={(e) => setBranchEmpLimits(prev => ({ ...prev, [b.id]: e.target.value }))}
+                                disabled={!isAdmin}
+                                placeholder="15000"
+                              />
+                              <span className="text-xs text-muted-foreground">{formatCurrency(Number(branchEmpLimits[b.id]) || 0)}</span>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Ang Branch Manager ay may sariling allowance na ₱20,000 — kung mas mataas ang branch limit dito, ang branch limit ang masusunod.
+                  </p>
+                  <Button onClick={saveBranchLimits} disabled={savingLimits || !isAdmin}>
+                    {savingLimits && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    <Save className="w-4 h-4 mr-2" />Save Branch Limits
+                  </Button>
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -480,30 +571,6 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* Notifications */}
-        <TabsContent value="notifications">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card className="glass-card border-border">
-              <CardHeader><CardTitle className="flex items-center gap-2"><Mail className="w-5 h-5" />Email Configuration</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2"><Label>SMTP Server</Label><Input placeholder="smtp.resend.com" /></div>
-                <div className="space-y-2"><Label>From Email</Label><Input placeholder="noreply@1125corp.org" /></div>
-                <div className="space-y-2"><Label>API Key</Label><Input type="password" placeholder="••••••••" /></div>
-                <Button variant="outline"><Save className="w-4 h-4 mr-2" />Save Configuration</Button>
-              </CardContent>
-            </Card>
-
-            <Card className="glass-card border-border">
-              <CardHeader><CardTitle className="flex items-center gap-2"><Bell className="w-5 h-5" />SMS Configuration</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2"><Label>Provider</Label><Input placeholder="Twilio" /></div>
-                <div className="space-y-2"><Label>Account SID</Label><Input placeholder="AC..." /></div>
-                <div className="space-y-2"><Label>Auth Token</Label><Input type="password" placeholder="••••••••" /></div>
-                <div className="space-y-2"><Label>Sender Number</Label><Input placeholder="+63..." /></div>
-                <Button variant="outline"><Save className="w-4 h-4 mr-2" />Save Configuration</Button>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
       </Tabs>
 
       {/* Branch Dialog */}

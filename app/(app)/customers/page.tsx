@@ -54,14 +54,20 @@ interface Customer {
   collectors: { profile_id: string } | null;
 }
 
-// Dinalupihan's own default max loan limit is lower than everywhere else
-// (Balanga and any other branch keeps the company-wide 30,000 default) —
-// same branch-name-suffix matching convention already used for the
-// per-branch Chart of Accounts.
-function defaultMaxLoanLimitForBranch(branchId: string, branches: { id: string; name: string }[]): number {
+// Each branch carries its own default credit limit for new customers,
+// set by an Administrator under Settings > Loan. This used to be hard-coded
+// against the branch NAME ("...includes('dinalupihan') ? 20000 : 30000"),
+// which meant a new branch needed a code change and a rename silently moved
+// customers onto the wrong default.
+const COMPANY_DEFAULT_LOAN_LIMIT = 30000;
+
+function defaultMaxLoanLimitForBranch(
+  branchId: string,
+  branches: { id: string; name: string; default_customer_loan_limit?: number | null }[],
+): number {
   const branch = branches.find(b => b.id === branchId);
-  if (branch?.name?.toLowerCase().includes('dinalupihan')) return 20000;
-  return 30000;
+  const configured = Number(branch?.default_customer_loan_limit);
+  return configured > 0 ? configured : COMPANY_DEFAULT_LOAN_LIMIT;
 }
 
 export default function CustomersPage() {
@@ -137,7 +143,7 @@ export default function CustomersPage() {
   }, [profile, myCollector, search, branchFilter, areaFilter, statusFilter, page]);
 
   async function loadOptions() {
-    let branchQuery = supabase.from('branches').select('id, name').eq('status', 'active');
+    let branchQuery = supabase.from('branches').select('id, name, default_customer_loan_limit').eq('status', 'active');
     let areaQuery = supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
     if (isCollector && myCollector) {
       branchQuery = branchQuery.eq('id', myCollector.branch_id ?? '00000000-0000-0000-0000-000000000000');
@@ -256,7 +262,10 @@ export default function CustomersPage() {
       branch_id: form.branch_id || null,
       area_id: form.area_id || null,
       collector_id: form.collector_id || null,
-      max_loan_limit: Number(form.max_loan_limit) || 30000,
+      // Falls back to the branch's own configured default rather than a
+      // hard-coded 30000, so an empty field can never quietly grant a
+      // higher limit than the branch allows.
+      max_loan_limit: Number(form.max_loan_limit) || defaultMaxLoanLimitForBranch(form.branch_id, branches),
       status: form.status,
       gender: form.gender || null,
       birth_date: form.birth_date || null,
@@ -509,9 +518,16 @@ export default function CustomersPage() {
             value={form.branch_id}
             onValueChange={(v) => {
               // Only follow the branch's default if the limit still matches
-              // A known default (i.e. Admin hasn't typed a custom figure
-              // already) — never clobber a deliberately-entered value.
-              const stillDefault = !editing && (form.max_loan_limit === '30000' || form.max_loan_limit === '20000');
+              // Only carry the limit over to the new branch's default if the
+              // field still holds the OLD branch's default — i.e. the Admin
+              // hasn't typed a deliberate figure. Comparing against the
+              // previous branch's configured value replaces the old
+              // hard-coded '30000' || '20000' test, which stopped working the
+              // moment a branch was given any other limit.
+              const previousDefault = form.branch_id
+                ? defaultMaxLoanLimitForBranch(form.branch_id, branches)
+                : COMPANY_DEFAULT_LOAN_LIMIT;
+              const stillDefault = !editing && Number(form.max_loan_limit) === previousDefault;
               setForm({
                 ...form,
                 branch_id: v,

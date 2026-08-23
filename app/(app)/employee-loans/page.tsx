@@ -35,7 +35,9 @@ export default function EmployeeLoansPage() {
   const isBranchManager = profile?.role_name === 'Branch Manager';
   const [loans, setLoans] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
-  const [myEmployee, setMyEmployee] = useState<{ id: string; position?: string | null } | null>(null);
+  const [myEmployee, setMyEmployee] = useState<{ id: string; position?: string | null; branch_id?: string | null } | null>(null);
+  // Each branch sets its own employee-loan ceiling in Settings > Loan.
+  const [branchEmpLimits, setBranchEmpLimits] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -151,9 +153,13 @@ export default function EmployeeLoansPage() {
 
   async function load() {
     setLoading(true);
+    // Per-branch employee-loan ceilings, set in Settings > Loan. Loaded here
+    // so maxLoanAmount() has them before any amount is validated.
+    const { data: brs } = await supabase.from('branches').select('id, default_employee_loan_limit');
+    setBranchEmpLimits(Object.fromEntries((brs ?? []).map((b: any) => [b.id, Number(b.default_employee_loan_limit) || 15000])));
     let empId: string | null = null;
     if (!canApprove) {
-      const { data: emp } = await supabase.from('employees').select('id, position').eq('profile_id', profile?.id ?? '').maybeSingle();
+      const { data: emp } = await supabase.from('employees').select('id, position, branch_id').eq('profile_id', profile?.id ?? '').maybeSingle();
       setMyEmployee(emp);
       empId = emp?.id ?? '00000000-0000-0000-0000-000000000000';
     }
@@ -170,8 +176,16 @@ export default function EmployeeLoansPage() {
     setLoading(false);
   }
 
-  function maxLoanAmount(position: string | null | undefined) {
-    return position === 'Branch Manager' ? 20000 : 15000;
+  // The branch's configured ceiling is the base for everyone. A Branch
+  // Manager keeps the long-standing 20,000 allowance on top, but never ends
+  // up with LESS than their own branch allows — so raising a branch past
+  // 20,000 lifts managers too instead of capping them below their staff.
+  const BRANCH_MANAGER_MIN_LIMIT = 20000;
+  const DEFAULT_EMPLOYEE_LOAN_LIMIT = 15000;
+
+  function maxLoanAmount(position: string | null | undefined, branchId?: string | null) {
+    const branchLimit = (branchId && branchEmpLimits[branchId]) || DEFAULT_EMPLOYEE_LOAN_LIMIT;
+    return position === 'Branch Manager' ? Math.max(branchLimit, BRANCH_MANAGER_MIN_LIMIT) : branchLimit;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -186,12 +200,10 @@ export default function EmployeeLoansPage() {
       return;
     }
 
-    // Check max amount — 20,000 for a Branch Manager applicant, 15,000 for
-    // everyone else.
-    const targetPosition = canApprove
-      ? employees.find(e => e.id === form.employee_id)?.position
-      : myEmployee?.position;
-    const maxAmount = maxLoanAmount(targetPosition);
+    // Check max amount against the applicant's own branch ceiling (see
+    // maxLoanAmount) rather than a fixed figure.
+    const applicant = canApprove ? employees.find(e => e.id === form.employee_id) : myEmployee;
+    const maxAmount = maxLoanAmount(applicant?.position, applicant?.branch_id);
     if (Number(form.amount) > maxAmount) {
       toast({ title: 'Error', description: `Maximum employee loan is ${formatCurrency(maxAmount)}`, variant: 'destructive' });
       setSaving(false);
@@ -364,9 +376,8 @@ export default function EmployeeLoansPage() {
   const calendarSchedule = calendarLoan ? computeEmployeeSchedule(calendarLoan) : [];
   const scheduleByDate = new Map(calendarSchedule.map(s => [dateKey(s.date), s]));
 
-  const applicantMaxAmount = maxLoanAmount(
-    canApprove ? employees.find(e => e.id === form.employee_id)?.position : myEmployee?.position
-  );
+  const applicantForLimit = canApprove ? employees.find(e => e.id === form.employee_id) : myEmployee;
+  const applicantMaxAmount = maxLoanAmount(applicantForLimit?.position, applicantForLimit?.branch_id);
 
   const filteredLoans = loans.filter(l => {
     const name = `${l.employees?.first_name ?? ''} ${l.employees?.last_name ?? ''}`.toLowerCase();
@@ -380,7 +391,7 @@ export default function EmployeeLoansPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Employee Loans" description="Manage employee loan applications (max ₱15,000, 2 active, 6 months)">
+      <PageHeader title="Employee Loans" description="Manage employee loan applications (max 2 active, 6 months — amount cap is set per branch)">
         {activeTab === 'employee' ? (
           <>
             <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
@@ -695,7 +706,7 @@ export default function EmployeeLoansPage() {
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Apply Employee Loan</DialogTitle><DialogDescription>Max ₱15,000, max 2 active loans, 6 months repayment</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Apply Employee Loan</DialogTitle><DialogDescription>Max {formatCurrency(applicantMaxAmount)}, max 2 active loans, 6 months repayment</DialogDescription></DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
             {canApprove && (
               <div className="space-y-2">
