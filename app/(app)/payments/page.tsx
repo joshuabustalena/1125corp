@@ -19,7 +19,8 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateORNumber, exportToCSV, formatCustomerName } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
+import { takeOrNumber, nextOrNumberOnline, ensureOrPool, getOrPoolCount } from '@/lib/or-numbers';
 import { PaymentReceiptDialog, buildReceiptDataFromPayment } from '@/components/payment-receipt-dialog';
 import { getStoredReceipts, cacheReceiptForOffline, type CachedReceipt } from '@/lib/offline-receipts';
 import {
@@ -80,6 +81,9 @@ export default function PaymentsPage() {
   const [syncing, setSyncing] = useState(false);
   const syncingRef = useRef(false);
   const [isOnline, setIsOnline] = useState(true);
+  // Reserved OR numbers left on this device — what makes offline collection
+  // possible at all, so the collector needs to see it before losing signal.
+  const [orPool, setOrPool] = useState(0);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
@@ -145,7 +149,10 @@ export default function PaymentsPage() {
   useEffect(() => {
     setPendingPayments(getPendingPayments());
     if (typeof navigator !== 'undefined') setIsOnline(navigator.onLine);
-    function goOnline() { setIsOnline(true); }
+    // Stock up on receipt numbers while there IS signal — offline collection
+    // draws from this block.
+    ensureOrPool().then(setOrPool);
+    function goOnline() { setIsOnline(true); ensureOrPool().then(setOrPool); }
     function goOffline() { setIsOnline(false); }
     window.addEventListener('online', goOnline);
     window.addEventListener('offline', goOffline);
@@ -382,7 +389,19 @@ export default function PaymentsPage() {
   // honestly says "pending" instead of a real balance, and (b) let Sync
   // apply it for real once signal is back.
   function queueOfflinePayment() {
-    const orNumber = generateORNumber();
+    // No invented fallback here on purpose: a made-up number is exactly the
+    // collision this system replaced, and offline it would be printed and
+    // handed to the borrower before anything could catch it.
+    const orNumber = takeOrNumber();
+    if (!orNumber) {
+      toast({
+        title: 'Wala nang OR number',
+        description: 'Naubos na ang naka-reserve na OR numbers sa device na ito. Kailangan mong maka-signal muna para makakuha ng bago bago mag-collect offline.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setOrPool(getOrPoolCount());
     const paymentDate = form.payment_date || new Date().toISOString().split('T')[0];
     const now = new Date();
     const amountPaidNum = Number(form.amount_paid);
@@ -451,7 +470,12 @@ export default function PaymentsPage() {
 
     setSaving(true);
 
-    const orNumber = generateORNumber();
+    const orNumber = await nextOrNumberOnline();
+    if (!orNumber) {
+      toast({ title: 'Error', description: 'Hindi makakuha ng OR number. Subukan ulit.', variant: 'destructive' });
+      setSaving(false);
+      return;
+    }
     const paymentDate = form.payment_date || new Date().toISOString().split('T')[0];
     const now = new Date();
 
@@ -973,7 +997,7 @@ export default function PaymentsPage() {
               <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ backgroundColor: '#FEF3C7', color: '#92400E' }}>
                 <WifiOff className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  Walang signal — mase-save muna ito bilang <strong>pending</strong> sa device na ito. Pwede mo nang i-print ang resibo (walang balance pa), pero kailangan mo pang i-Sync sa Payments page kapag may signal na.
+                  Walang signal — mase-save muna ito bilang <strong>pending</strong> sa device na ito. Pwede mo nang i-print ang resibo (walang balance pa), pero kailangan mo pang i-Sync sa Payments page kapag may signal na. Natitirang OR number sa device: <strong>{orPool}</strong>.
                 </span>
               </div>
             )}

@@ -18,7 +18,11 @@ export const PAGE_PERMISSIONS: Record<string, string | null> = {
   '/broadcast-sms': 'broadcast_sms',
   '/employees': 'employees',
   '/collectors': 'collectors',
-  '/payroll': 'payroll',
+  // Reachable by every signed-in user, but the page itself splits in two:
+  // anyone WITHOUT the 'payroll' permission sees only their own payslips
+  // (self-service), never the generate/edit/delete tooling or anyone
+  // else's pay. See app/(app)/payroll/page.tsx.
+  '/payroll': null,
   '/employee-loans': 'employee_loans',
   '/leave-requests': 'leave_requests',
   '/attendance': 'attendance',

@@ -192,7 +192,7 @@ export default function PenaltiesPage() {
               <Select value={form.customer_id} onValueChange={(v) => setForm({ ...form, customer_id: v })} required>
                 <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
                 <SelectContent>
-                  {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</SelectItem>)}
+                  {customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.first_name, c.last_name)}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

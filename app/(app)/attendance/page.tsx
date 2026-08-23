@@ -19,7 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatDate, formatTime, formatDuration, formatCurrency, exportToCSV } from '@/lib/format';
+import { formatDate, formatTime, formatDuration, formatCurrency, exportToCSV, formatCustomerName } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
@@ -125,7 +125,7 @@ export default function AttendancePage() {
 
   async function loadEmployees() {
     if (isAdmin) {
-      const { data } = await supabase.from('employees').select('id, first_name, last_name, branch_id, position, status');
+      const { data } = await supabase.from('employees').select('id, first_name, last_name, branch_id, position, status').order('last_name').order('first_name');
       setEmployees(data ?? []);
       return;
     }
@@ -498,7 +498,7 @@ export default function AttendancePage() {
                 <Label>Select Employee</Label>
                 <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
                   <SelectTrigger><SelectValue placeholder="Choose employee to check in" /></SelectTrigger>
-                  <SelectContent>{employees.filter(e => e.status === 'active').map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
+                  <SelectContent>{employees.filter(e => e.status === 'active').map(e => <SelectItem key={e.id} value={e.id}>{formatCustomerName(e.first_name, e.last_name)}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
             ) : (

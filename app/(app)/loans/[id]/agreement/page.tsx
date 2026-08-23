@@ -126,9 +126,13 @@ export default function LoanAgreementPage() {
   const serviceFee = Number(loan.service_fee) || 0;
 
   const termMonths = Math.round((loan.term_days / 30) * 10) / 10;
-  const collectionChargeRate = 2;
-  const collectionCharges = Math.round(Number(loan.amount) * (collectionChargeRate / 100) * termMonths * 100) / 100;
-  const totalAmountPayable = Number(loan.amount) + Number(loan.interest_amount) + collectionCharges;
+  // Collection Charges removed at the client's instruction (Aug 2026). It was
+  // a display-only 2%/month line that existed nowhere else in the system, so
+  // it inflated the printed Total Amount Payable above the figure the loan is
+  // actually collected against — a ₱25,000 loan printed ₱30,000 while the
+  // record said ₱29,000. Total now comes straight from loan.total_payable, so
+  // the agreement can never disagree with what the borrower actually owes.
+  const totalAmountPayable = Number(loan.total_payable) || 0;
   const totalDeduction = firstPayment + serviceFee + offsetBalance;
   const loanProceeds = Number(loan.amount) - totalDeduction;
 
@@ -146,8 +150,6 @@ export default function LoanAgreementPage() {
     amount: Number(loan.amount),
     interestRate: Number(loan.interest_rate),
     interestAmount: Number(loan.interest_amount),
-    collectionChargeRate,
-    collectionCharges,
     totalAmountPayable,
     firstPayment,
     serviceFee,
@@ -278,12 +280,6 @@ export default function LoanAgreementPage() {
                   <td style={{ ...dCell, fontWeight: 700 }}>Interest</td>
                   <td style={{ ...dCell, fontStyle: 'italic' }}>(with an interest rate of {agreementData.interestRate}% /month)</td>
                   <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.interestAmount)}</td>
-                  <td style={dCell} />
-                </tr>
-                <tr>
-                  <td style={{ ...dCell, fontWeight: 700 }}>Collection Charges</td>
-                  <td style={{ ...dCell, fontStyle: 'italic' }}>({agreementData.collectionChargeRate}% per month)</td>
-                  <td style={{ ...dCell, textAlign: 'right' }}>{formatCurrency(agreementData.collectionCharges)}</td>
                   <td style={dCell} />
                 </tr>
                 <tr>

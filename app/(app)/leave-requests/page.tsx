@@ -21,7 +21,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatDate } from '@/lib/format';
+import { formatDate, formatCustomerName } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search, Trash2, RotateCcw } from 'lucide-react';
 
@@ -68,7 +68,7 @@ export default function LeaveRequestsPage() {
   }, [profile]);
 
   async function loadEmployees() {
-    let q = supabase.from('employees').select('id, first_name, last_name, paid_leaves_used, special_leaves_used, position, branch_id').eq('status', 'active');
+    let q = supabase.from('employees').select('id, first_name, last_name, paid_leaves_used, special_leaves_used, position, branch_id').eq('status', 'active').order('last_name').order('first_name');
     // A Branch Manager can only request/track leave on behalf of their own branch's staff.
     if (isBranchManager && profile?.branch_id) q = q.eq('branch_id', profile.branch_id);
     const { data } = await q;
@@ -434,7 +434,7 @@ export default function LeaveRequestsPage() {
                 <Label>Employee *</Label>
                 <Select value={form.employee_id} onValueChange={(v) => setForm({ ...form, employee_id: v })} required>
                   <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
-                  <SelectContent>{employees.map(e => <SelectItem key={e.id} value={e.id}>{e.first_name} {e.last_name}</SelectItem>)}</SelectContent>
+                  <SelectContent>{employees.map(e => <SelectItem key={e.id} value={e.id}>{formatCustomerName(e.first_name, e.last_name)}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
             )}

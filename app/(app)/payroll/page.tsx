@@ -20,6 +20,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { hasPermission } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
@@ -91,6 +92,13 @@ export default function PayrollPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  // Employees can open this tab to read their OWN payslips. They hold no
+  // 'payroll' permission, so everything that generates, edits, deletes or
+  // discloses other people's pay stays hidden and their query is pinned to
+  // their own employee record.
+  const canManagePayroll = hasPermission(profile?.permissions, 'payroll');
+  const [selfEmployeeId, setSelfEmployeeId] = useState<string | null>(null);
+  const [selfResolved, setSelfResolved] = useState(false);
   const [payroll, setPayroll] = useState<any[]>([]);
   // Payroll Records is otherwise one flat list of every employee's every
   // cutoff — this narrows it down to one employee's own salary-slip
@@ -147,10 +155,19 @@ export default function PayrollPage() {
   const payrollVoucherPrintRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    load(); loadEmployees(); loadBranches(); loadPayrollVouchers(); loadThirteenthVouchers();
+    // Everything below the payslip list is management tooling — a
+    // self-service employee needs none of it, so don't fetch it for them.
+    if (!canManagePayroll) return;
+    loadEmployees(); loadBranches(); loadPayrollVouchers(); loadThirteenthVouchers();
     getNextVoucherNumber().then(setVoucherNumber);
     getNextVoucherNumber().then(setThirteenthVoucherNumber);
-  }, []);
+  }, [canManagePayroll]);
+
+  // load() bails out early until we know whose payslips to request, so it has
+  // to be re-run once that resolves rather than only firing on mount.
+  useEffect(() => {
+    if (canManagePayroll || selfResolved) load();
+  }, [canManagePayroll, selfResolved, selfEmployeeId]);
 
   useEffect(() => {
     if (profile?.role_name === 'Cashier' && profile?.full_name) {
@@ -180,9 +197,36 @@ export default function PayrollPage() {
     setPayrollVouchers(data ?? []);
   }
 
+  useEffect(() => {
+    if (canManagePayroll) { setSelfResolved(true); return; }
+    if (!profile) return;
+    (async () => {
+      let { data } = await supabase.from('employees').select('id').eq('profile_id', profile.id).maybeSingle();
+      if (!data && profile.email) {
+        ({ data } = await supabase.from('employees').select('id').eq('email', profile.email).maybeSingle());
+      }
+      setSelfEmployeeId(data?.id ?? null);
+      setSelfResolved(true);
+    })();
+  }, [profile, canManagePayroll]);
+
   async function load() {
     setLoading(true);
-    const { data } = await supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, branches(name))').order('pay_date', { ascending: false });
+    // Gate the whole fetch until we know WHOSE payslips to ask for —
+    // otherwise a self-service user briefly pulls everyone's payroll.
+    if (!canManagePayroll) {
+      if (!selfResolved) return;
+      if (!selfEmployeeId) { setPayroll([]); setLoading(false); return; }
+    }
+    let payrollQuery = supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, branches(name))').order('pay_date', { ascending: false });
+    if (!canManagePayroll && selfEmployeeId) {
+      // Own records only, and only once an Administrator has actually
+      // approved them — approvePayroll() is what flips a row to 'paid', so a
+      // still-'pending' payslip is a draft whose deductions can still change.
+      // Showing one would let an employee print a figure that isn't final.
+      payrollQuery = payrollQuery.eq('employee_id', selfEmployeeId).eq('status', 'paid');
+    }
+    const { data } = await payrollQuery;
     setPayroll(data ?? []);
 
     const employeeIds = Array.from(new Set((data ?? []).map(p => p.employee_id)));
@@ -1268,21 +1312,27 @@ export default function PayrollPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Payroll" description="Generate and manage employee payroll">
+      <PageHeader title="Payroll" description={canManagePayroll ? 'Generate and manage employee payroll' : 'Ang mga approved mong payslip'}>
         {activeTab === 'records' && (
           <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
         )}
       </PageHeader>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'records' | 'thirteenth')}>
+        {/* Conditionally rendered, not `hidden` — the Tailwind `grid` class
+            sets display:grid, which overrides the HTML hidden attribute and
+            would have left the management tabs visible to employees. */}
+        {canManagePayroll && (
         <TabsList className="grid grid-cols-3 w-full sm:w-auto">
           <TabsTrigger value="records">Payroll Records</TabsTrigger>
           <TabsTrigger value="voucher"><FileSpreadsheet className="w-4 h-4 mr-1.5" />Payroll Voucher</TabsTrigger>
           <TabsTrigger value="thirteenth"><Gift className="w-4 h-4 mr-1.5" />13th Month Pay</TabsTrigger>
         </TabsList>
+        )}
 
       <TabsContent value="records" className="space-y-6 pt-4">
       {/* Generate panel */}
+      {canManagePayroll && (
       <Card className="glass-card border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Calculator className="w-5 h-5" />Generate Payroll</CardTitle>
@@ -1308,10 +1358,15 @@ export default function PayrollPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Payroll table */}
       <Card className="glass-card border-border">
         <CardHeader>
+          {/* A self-service viewer only ever has their own rows, so an
+              "Employee" filter offering "All Employees" and their own name is
+              just noise. */}
+          {canManagePayroll && (
           <div className="space-y-2 max-w-xs">
             <Label>Employee</Label>
             <Select value={recordsEmployeeFilter} onValueChange={setRecordsEmployeeFilter}>
@@ -1324,6 +1379,7 @@ export default function PayrollPage() {
               </SelectContent>
             </Select>
           </div>
+          )}
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -1331,7 +1387,14 @@ export default function PayrollPage() {
           ) : filteredPayroll.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <ScrollText className="w-12 h-12 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">{recordsEmployeeFilter === 'all' ? 'No payroll records' : 'No payroll records for this employee'}</p>
+              {/* A self-service employee with nothing here isn't looking at a
+                  broken page — their payslips just aren't approved yet, so say
+                  that instead of the manager-facing "No payroll records". */}
+              <p className="text-sm text-muted-foreground">
+                {!canManagePayroll
+                  ? 'Wala ka pang approved na payslip. Lalabas dito ang payslip mo kapag na-approve na ito ng Administrator.'
+                  : recordsEmployeeFilter === 'all' ? 'No payroll records' : 'No payroll records for this employee'}
+              </p>
             </div>
           ) : (
             <>
@@ -1360,17 +1423,17 @@ export default function PayrollPage() {
                         <Button variant="outline" size="sm" onClick={() => setPayslipTarget(p)}>
                           <Receipt className="w-3.5 h-3.5 mr-1.5" />Payslip
                         </Button>
-                        {p.status === 'pending' && (
+                        {canManagePayroll && p.status === 'pending' && (
                           <Button variant="outline" size="sm" onClick={() => openEditDeductions(p)}>
                             <Pencil className="w-3.5 h-3.5 mr-1.5" />Deductions
                           </Button>
                         )}
-                        {p.status === 'pending' && (
+                        {canManagePayroll && p.status === 'pending' && (
                           <Button variant="outline" size="sm" onClick={() => approvePayroll(p.id)}>
                             <CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Approve
                           </Button>
                         )}
-                        {isAdmin && (
+                        {isAdmin && canManagePayroll && (
                           <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(p)}>
                             <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
                           </Button>
@@ -1416,17 +1479,17 @@ export default function PayrollPage() {
                           <Button variant="ghost" size="icon" onClick={() => setPayslipTarget(p)} title="Generate payslip">
                             <Receipt className="w-4 h-4" />
                           </Button>
-                          {p.status === 'pending' && (
+                          {canManagePayroll && p.status === 'pending' && (
                             <Button variant="ghost" size="icon" onClick={() => openEditDeductions(p)} title="Edit deductions">
                               <Pencil className="w-4 h-4" />
                             </Button>
                           )}
-                          {p.status === 'pending' && (
+                          {canManagePayroll && p.status === 'pending' && (
                             <Button variant="ghost" size="icon" onClick={() => approvePayroll(p.id)}>
                               <CheckCircle className="w-4 h-4 text-success" />
                             </Button>
                           )}
-                          {isAdmin && (
+                          {isAdmin && canManagePayroll && (
                             <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(p)}>
                               <Trash2 className="w-4 h-4 text-destructive" />
                             </Button>

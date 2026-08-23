@@ -161,7 +161,7 @@ export default function LoansPage() {
   }, [profile, myCollector, search, statusFilter, customerFilter, areaFilter, page]);
 
   async function loadOptions() {
-    let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('last_name').order('first_name');
+    let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('last_name').order('first_name').order('last_name').order('first_name');
     let areaQuery = supabase.from('areas').select('id, name, branch_id').eq('status', 'active');
     if (isCollector && myCollector) {
       // Same area-based scope as /customers — any customer in the collector's
@@ -559,7 +559,7 @@ export default function LoansPage() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Customers</SelectItem>
-                  {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</SelectItem>)}
+                  {customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.first_name, c.last_name)}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -774,7 +774,7 @@ export default function LoansPage() {
                       <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
                       <SelectContent>
                         {customers.map(c => (
-                          <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</SelectItem>
+                          <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.first_name, c.last_name)}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>

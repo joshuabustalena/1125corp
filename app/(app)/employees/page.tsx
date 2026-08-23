@@ -23,7 +23,7 @@ import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/do
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, getInitials, exportToCSV } from '@/lib/format';
+import { formatCurrency, formatDate, getInitials, exportToCSV, formatCustomerName } from '@/lib/format';
 import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, CheckCircle2, Circle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -97,7 +97,7 @@ export default function EmployeesPage() {
     if (branchFilter !== 'all') query = query.eq('branch_id', branchFilter);
     if (positionFilter !== 'all') query = query.eq('position', positionFilter);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
-    query = query.range((page - 1) * pageSize, page * pageSize - 1).order('created_at', { ascending: false });
+    query = query.range((page - 1) * pageSize, page * pageSize - 1).order('last_name').order('first_name');
     const { data, count } = await query;
     setEmployees(data ?? []);
     setTotal(count ?? 0);
@@ -405,7 +405,7 @@ export default function EmployeesPage() {
                           <AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(`${e.first_name} ${e.last_name}`)}</AvatarFallback>
                         </Avatar>
                         <div className="min-w-0">
-                          <p className="font-medium text-sm truncate">{e.first_name} {e.last_name}</p>
+                          <p className="font-medium text-sm truncate">{formatCustomerName(e.first_name, e.last_name)}</p>
                           <p className="text-xs text-muted-foreground truncate">{e.position ?? '—'}</p>
                         </div>
                       </div>
@@ -445,7 +445,7 @@ export default function EmployeesPage() {
                             <AvatarImage src={e.photo_url ?? undefined} className="object-cover" />
                             <AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(`${e.first_name} ${e.last_name}`)}</AvatarFallback>
                           </Avatar>
-                          <div><p className="font-medium text-sm">{e.first_name} {e.last_name}</p><p className="text-xs text-muted-foreground">{e.email ?? ''}</p></div>
+                          <div><p className="font-medium text-sm">{formatCustomerName(e.first_name, e.last_name)}</p><p className="text-xs text-muted-foreground">{e.email ?? ''}</p></div>
                         </div>
                       </TableCell>
                       <TableCell className="text-sm">{e.department ?? '—'}</TableCell>

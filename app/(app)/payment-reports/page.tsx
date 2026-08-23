@@ -278,7 +278,7 @@ export default function PaymentReportsPage() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Customers</SelectItem>
-                  {filteredCustomers.map(c => <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name}</SelectItem>)}
+                  {filteredCustomers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.first_name, c.last_name)}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

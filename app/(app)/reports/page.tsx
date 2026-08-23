@@ -29,6 +29,45 @@ import {
 // who has no branch assigned down to nothing instead of everything.
 const NO_BRANCH = '00000000-0000-0000-0000-000000000000';
 
+// Same Sunday-exclusion convention as Collection List's delay formula.
+function countCollectionDaysBetween(start: Date, end: Date): number {
+  if (start > end) return 0;
+  let count = 0;
+  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() !== 0) count++;
+  }
+  return count;
+}
+
+// One loan's exposure, merging the two things the client tracks together:
+// the full balance once a loan is genuinely past its due date, and — for a
+// loan still inside its term — how far behind the daily schedule it has
+// fallen. Client asked (Aug 2026) for the Overdue report to include BOTH,
+// "even if not past due", using the same figures the Delayed/Past-Due
+// report shows, so the two reports can't disagree.
+function overdueOrDelayFor(l: any, today: Date): { amount: number; isPastDue: boolean; daysOverdue: number } {
+  const totalPayable = Number(l.total_payable) || 0;
+  const remainingBalance = Number(l.remaining_balance) || 0;
+  const isPastDue = !!(l.due_date && new Date(l.due_date) < today);
+  if (isPastDue) {
+    return {
+      amount: remainingBalance,
+      isPastDue: true,
+      daysOverdue: Math.floor((today.getTime() - new Date(l.due_date).getTime()) / 86400000),
+    };
+  }
+  // Always the auto-computed split (Total Payable / Term Days), never the
+  // stored daily_payment — the same rule Collection List follows.
+  const dailyPayment = l.term_days > 0 ? totalPayable / l.term_days : 0;
+  if (!l.release_date || dailyPayment <= 0) return { amount: 0, isPastDue: false, daysOverdue: 0 };
+  const firstDueDay = new Date(l.release_date);
+  if (firstDueDay > today) return { amount: 0, isPastDue: false, daysOverdue: 0 };
+  const collectionDaysElapsed = countCollectionDaysBetween(firstDueDay, today);
+  const amountAlreadyPaid = totalPayable - remainingBalance;
+  const behind = dailyPayment * collectionDaysElapsed - amountAlreadyPaid;
+  return { amount: Math.round(Math.max(0, behind) * 100) / 100, isPastDue: false, daysOverdue: 0 };
+}
+
 // Explicit list rather than substring guessing on the column name. The old
 // `key.includes('Amount') || key.includes('Pay') || …` test silently missed
 // most of the money columns (CashCollected, Offset, TotalDeduction,
@@ -56,7 +95,7 @@ export default function ReportsPage() {
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [stats, setStats] = useState({ total: 0, count: 0, average: 0 });
+  const [stats, setStats] = useState({ total: 0, count: 0, average: 0, overdueRate: 0 });
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -123,6 +162,9 @@ export default function ReportsPage() {
   async function generateReport() {
     setLoading(true);
     let reportData: any[] = [];
+    // Only the Overdue report sets this; every other report leaves it 0 so
+    // the rate card stays hidden.
+    let overallOverdueRate = 0;
     const customerIds = filteredCustomerIds();
 
     switch (reportType) {
@@ -271,37 +313,49 @@ export default function ReportsPage() {
       // due_date — same rule the dashboard uses (status is never persisted
       // as 'overdue').
       case 'overdue_amount': {
-        let q = supabase.from('loans').select('loan_number, remaining_balance, due_date, branch_id, area_id, customers(first_name, last_name), areas(name)').eq('status', 'active');
+        let q = supabase.from('loans').select('loan_number, remaining_balance, total_payable, term_days, release_date, due_date, branch_id, area_id, customers(first_name, last_name), areas(name)').eq('status', 'active');
         if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
         const { data } = await q;
         const today = new Date();
         const all = data ?? [];
-        // Rate is computed over EVERY active loan in the area (not just the
-        // overdue ones), so it stays a true percentage.
-        const rateByArea: Record<string, { total: number; overdue: number }> = {};
+
+        // Overdue Rate is a PESO ratio — overdue amount over total receivable
+        // (client, Aug 2026: "overdue amount divided by total receivable").
+        // It used to be a head-count ratio (overdue loans / all loans), which
+        // is a different number entirely and understated the exposure
+        // whenever the overdue loans were the larger ones.
+        const byArea: Record<string, { overdue: number; receivable: number }> = {};
+        const rows: any[] = [];
         all.forEach((l: any) => {
-          const name = l.areas?.name ?? 'Unassigned';
-          rateByArea[name] ??= { total: 0, overdue: 0 };
-          rateByArea[name].total++;
-          if (l.due_date && new Date(l.due_date) < today) rateByArea[name].overdue++;
+          const area = l.areas?.name ?? 'Unassigned';
+          byArea[area] ??= { overdue: 0, receivable: 0 };
+          byArea[area].receivable += Number(l.remaining_balance) || 0;
+          const { amount, isPastDue, daysOverdue } = overdueOrDelayFor(l, today);
+          byArea[area].overdue += amount;
+          // Delayed loans still inside their term are included too, not just
+          // past-due ones — that's the merge the client asked for.
+          if (amount > 0) rows.push({ l, area, amount, isPastDue, daysOverdue });
         });
-        reportData = all
-          .filter((l: any) => l.due_date && new Date(l.due_date) < today)
-          .map((l: any) => {
-            const area = l.areas?.name ?? 'Unassigned';
-            const r = rateByArea[area];
-            return {
-              LoanNumber: l.loan_number,
-              Customer: formatCustomerName(l.customers?.first_name, l.customers?.last_name),
-              Area: area,
-              DueDate: l.due_date,
-              DaysOverdue: Math.floor((today.getTime() - new Date(l.due_date).getTime()) / 86400000),
-              OverdueAmount: l.remaining_balance,
-              OverdueRate: r && r.total > 0 ? Math.round((r.overdue / r.total) * 1000) / 10 : 0,
-            };
-          })
-          .sort((a: any, b: any) => b.DaysOverdue - a.DaysOverdue);
+
+        const rate = (o: number, r: number) => (r > 0 ? Math.round((o / r) * 1000) / 10 : 0);
+        overallOverdueRate = rate(
+          Object.values(byArea).reduce((s, v) => s + v.overdue, 0),
+          Object.values(byArea).reduce((s, v) => s + v.receivable, 0),
+        );
+
+        reportData = rows
+          .map((r: any) => ({
+            LoanNumber: r.l.loan_number,
+            Customer: formatCustomerName(r.l.customers?.first_name, r.l.customers?.last_name),
+            Area: r.area,
+            DueDate: r.l.due_date,
+            Status: r.isPastDue ? 'Past Due' : 'Delayed',
+            DaysOverdue: r.daysOverdue,
+            OverdueAmount: r.amount,
+            OverdueRate: rate(byArea[r.area].overdue, byArea[r.area].receivable),
+          }))
+          .sort((a: any, b: any) => b.OverdueAmount - a.OverdueAmount);
         break;
       }
       case 'customers_per_area': {
@@ -349,7 +403,7 @@ export default function ReportsPage() {
 
     setData(reportData);
     const total = reportData.reduce((s, r) => s + (r.Amount ?? r.TotalCollection ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.Customers ?? 0), 0);
-    setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0 });
+    setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0, overdueRate: overallOverdueRate });
     setLoading(false);
   }
 
@@ -465,12 +519,22 @@ export default function ReportsPage() {
           variant="success"
         />
         <StatCard title="Records" value={stats.count.toString()} icon={<FileBarChart className="w-5 h-5" />} />
-        {/* Average is deliberately hidden on the Overdue report — client asked
-            for the overdue rate to stand in its place there (the rate is on
-            each row) rather than an average overdue amount. */}
-        {reportType !== 'overdue_amount' && reportType !== 'customers_per_area' && (
+        {/* On the Overdue report the third card is the overall Overdue Rate,
+            sitting right beside Records where the client asked for it, rather
+            than an average overdue amount. It's the peso ratio for the whole
+            filtered scope; the per-row OverdueRate column is that same ratio
+            computed within each area. */}
+        {reportType === 'overdue_amount' ? (
+          <StatCard
+            title="Overdue Rate"
+            value={`${stats.overdueRate}%`}
+            icon={<TrendingUp className="w-5 h-5" />}
+            variant={stats.overdueRate >= 20 ? 'danger' : stats.overdueRate >= 10 ? 'warning' : 'success'}
+            subtitle="Overdue amount ÷ total receivable"
+          />
+        ) : reportType !== 'customers_per_area' ? (
           <StatCard title="Average" value={formatCurrency(stats.average)} icon={<Wallet className="w-5 h-5" />} />
-        )}
+        ) : null}
       </div>
 
       {/* Chart */}

@@ -72,11 +72,10 @@ export function generateLoanNumber(): string {
   return `LN-${year}-${random}`;
 }
 
-export function generateORNumber(): string {
-  const year = new Date().getFullYear();
-  const random = Math.floor(100000 + Math.random() * 900000);
-  return `OR-${year}-${random}`;
-}
+// Removed: OR numbers now come from a Postgres sequence via lib/or-numbers.ts.
+// The old generator drew 6 random digits, which at the live receipt count
+// already carried a ~14% birthday-paradox collision chance, growing
+// quadratically. See supabase/add_sequential_or_numbers.sql.
 
 export function generateVoucherNumber(): string {
   const year = new Date().getFullYear();

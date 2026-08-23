@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/lib/supabase/client';
+import { formatCustomerName } from '@/lib/format';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 
 export default function AreaDetailPage() {
@@ -28,7 +29,7 @@ export default function AreaDetailPage() {
     const id = params.id as string;
     const [{ data: a }, { data: cols }, { data: custs }] = await Promise.all([
       supabase.from('areas').select('*, branches(name)').eq('id', id).maybeSingle(),
-      supabase.from('employees').select('id, first_name, last_name, status').eq('area_id', id).eq('position', 'Branch Field Collector').order('first_name'),
+      supabase.from('employees').select('id, first_name, last_name, status').eq('area_id', id).eq('position', 'Branch Field Collector').order('last_name').order('first_name'),
       supabase.from('customers').select('id, first_name, last_name, phone, status').eq('area_id', id).order('last_name').order('first_name'),
     ]);
     setArea(a);
@@ -72,7 +73,7 @@ export default function AreaDetailPage() {
                   <TableBody>
                     {collectors.map((c: any) => (
                       <TableRow key={c.id}>
-                        <TableCell className="text-sm font-medium">{c.first_name} {c.last_name}</TableCell>
+                        <TableCell className="text-sm font-medium">{formatCustomerName(c.first_name, c.last_name)}</TableCell>
                         <TableCell><Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge></TableCell>
                       </TableRow>
                     ))}
@@ -89,7 +90,7 @@ export default function AreaDetailPage() {
                   <TableBody>
                     {customers.map((c: any) => (
                       <TableRow key={c.id}>
-                        <TableCell className="text-sm font-medium">{c.first_name} {c.last_name}</TableCell>
+                        <TableCell className="text-sm font-medium">{formatCustomerName(c.first_name, c.last_name)}</TableCell>
                         <TableCell className="text-sm">{c.phone ?? '—'}</TableCell>
                         <TableCell><Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge></TableCell>
                       </TableRow>

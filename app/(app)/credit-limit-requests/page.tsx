@@ -57,7 +57,7 @@ export default function CreditLimitRequestsPage() {
   }, [searchParams, isBranchManager]);
 
   async function loadCustomers() {
-    let q = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id').eq('status', 'active');
+    let q = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id').eq('status', 'active').order('last_name').order('first_name');
     if (profile?.branch_id) q = q.eq('branch_id', profile.branch_id);
     const { data } = await q;
     setCustomers(data ?? []);
@@ -270,7 +270,7 @@ export default function CreditLimitRequestsPage() {
               <Label>Customer *</Label>
               <Select value={form.customer_id} onValueChange={(v) => setForm({ ...form, customer_id: v })} required>
                 <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
-                <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.first_name} {c.last_name} — current {formatCurrency(c.max_loan_limit)}</SelectItem>)}</SelectContent>
+                <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.first_name, c.last_name)} — current {formatCurrency(c.max_loan_limit)}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
