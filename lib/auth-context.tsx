@@ -58,7 +58,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       full_name: data.full_name,
       role_id: data.role_id,
       role_name: data.roles?.name ?? null,
-      permissions: data.roles?.permissions ?? [],
+      // A per-account override set on the Access tab of Add/Edit Employee
+      // wins over the role's list. NULL means "inherit the role" — an empty
+      // array does NOT, it means access was deliberately removed, so the
+      // check is Array.isArray and not a truthiness/?? test (?? would let []
+      // through correctly but || would silently fall back to the role).
+      permissions: Array.isArray(data.permissions_override)
+        ? data.permissions_override
+        : (data.roles?.permissions ?? []),
       branch_id: data.branch_id,
       phone: data.phone,
       avatar_url: data.avatar_url,

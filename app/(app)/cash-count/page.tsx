@@ -21,6 +21,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
+import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { Banknote, Loader2, TrendingUp, Scale, Download } from 'lucide-react';
 
 // Bill and coin denominations exactly as counted on the paper Cash Count
@@ -226,7 +227,24 @@ export default function CashCountPage() {
   // balances are company-wide, matching the same figure shown on the
   // Accounting dashboard — not split per branch.
   async function loadLockedFields() {
-    const { data: cashAccount } = await supabase.from('chart_of_accounts').select('id').eq('code', '1000').maybeSingle();
+    // Resolved by NAME, not by the flat code '1000'. Only one account
+    // actually carries that exact code — "Cash on Hand" — and the client is
+    // retiring it; the moment it's gone this lookup returns nothing and both
+    // balances would silently read ₱0.00 with no error anywhere. Matching
+    // the branch's own "Cash in Vault - <branch>" is also more correct for a
+    // per-branch count than a company-wide figure ever was.
+    const branchName = branches.find(b => b.id === branchId)?.name;
+    const vaultCode = await resolveBranchAccountCode('Cash in Vault', branchName);
+    let cashAccount: { id: string } | null = null;
+    if (vaultCode) {
+      const { data } = await supabase.from('chart_of_accounts').select('id').eq('code', vaultCode).maybeSingle();
+      cashAccount = data;
+    }
+    if (!cashAccount) {
+      // Legacy fallback while "Cash on Hand" still exists.
+      const { data } = await supabase.from('chart_of_accounts').select('id').eq('code', '1000').maybeSingle();
+      cashAccount = data;
+    }
     if (cashAccount) {
       const { data: lines } = await supabase.from('journal_entry_lines').select('debit, credit, journal_entries(entry_date)').eq('account_id', cashAccount.id);
       const prevDay = prevDateStr(date);

@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { DocumentScaler } from '@/components/document-scaler';
 import { buildPrintHtml } from '@/lib/print-document';
+import { isSpendableCashAccount } from '@/lib/cash-buckets';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
@@ -50,7 +51,10 @@ export default function CashVouchersPage() {
   const [payee, setPayee] = useState('');
   const [particulars, setParticulars] = useState('');
   const [voucherDate, setVoucherDate] = useState(new Date().toISOString().split('T')[0]);
-  const [cashAccountCode, setCashAccountCode] = useState('1000');
+  // Starts empty and is set from the accounts actually loaded — '1000'
+  // ("Cash on Hand") is being retired, and a default pointing at a deleted
+  // account silently posts nothing.
+  const [cashAccountCode, setCashAccountCode] = useState('');
   const [lines, setLines] = useState<CashVoucherLine[]>([{ account_code: '', amount: '' }]);
   const [preparedByName, setPreparedByName] = useState('');
   const [approvedByName, setApprovedByName] = useState('');
@@ -133,15 +137,35 @@ export default function CashVouchersPage() {
     setLoading(false);
   }
 
-  // Every cash-on-hand/in-bank account is a valid voucher source, except
-  // Petty Cash Fund — same rule as Remittance's Cash Account picker.
+  // Valid sources of cash for a voucher, scoped to the selected branch (plus
+  // any company-wide account). Two things are excluded:
+  //   - Petty Cash Fund, same rule as Remittance's Cash Account picker.
+  //   - Cash Short/Over, via isSpendableCashAccount — it's named like cash and
+  //     typed as an asset, but it records till DISCREPANCIES. It was offered
+  //     as a disbursement source here, which would post a payout against a
+  //     variance account.
   const cashAccounts = accounts.filter(a =>
-    a.name.toLowerCase().includes('cash') && !a.name.toLowerCase().includes('petty cash')
+    isSpendableCashAccount(a.name)
+    && !a.name.toLowerCase().includes('petty cash')
+    && (!branchId || !a.branch_id || a.branch_id === branchId)
   );
   // Petty Cash Fund specifically is also off-limits on the debit
   // ("Account - Description") side — every other account (including other
   // cash accounts) is still selectable there.
   const debitableAccounts = accounts.filter(a => !a.name.toLowerCase().includes('petty cash'));
+
+  // Pick a sensible source once the accounts (and the branch) are known, and
+  // re-pick if the current choice isn't valid for the selected branch —
+  // otherwise switching branch leaves a stale account selected and the
+  // voucher posts against another branch's cash.
+  useEffect(() => {
+    if (cashAccounts.length === 0) return;
+    setCashAccountCode(prev => {
+      if (prev && cashAccounts.some(a => a.code === prev)) return prev;
+      const vault = cashAccounts.find(a => a.name.toLowerCase().includes('vault'));
+      return (vault ?? cashAccounts[0]).code;
+    });
+  }, [cashAccounts]);
 
   function addLine() {
     setLines(prev => [...prev, { account_code: '', amount: '' }]);
@@ -192,7 +216,7 @@ export default function CashVouchersPage() {
       return;
     }
 
-    await postJournalEntry({
+    const cashVoucherLedger = await postJournalEntry({
       entryDate: voucherDate,
       description: `Cash Voucher — ${particulars}`,
       reference: voucherNumber,
@@ -205,6 +229,18 @@ export default function CashVouchersPage() {
         { accountCode: cashAccountCode, credit: totalAmount, memo: `Cash Voucher — ${payee}` },
       ],
     });
+
+    // A missing account code now blocks the whole entry rather than writing a
+    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
+    // line just quietly never appears.
+    if (cashVoucherLedger.missingCodes.length > 0) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: `Hindi mahanap sa Chart of Accounts ang account(s) ${cashVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
+        variant: 'destructive',
+      });
+    }
+
 
     toast({ title: 'Success', description: 'Cash voucher generated and journal entry posted' });
     await handleDownloadPdf(voucherNumber);

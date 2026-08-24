@@ -20,6 +20,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, numberToWordsPeso } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { buildPrintHtml } from '@/lib/print-document';
+import { isSpendableCashAccount } from '@/lib/cash-buckets';
 import { postJournalEntry } from '@/lib/ledger';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { Fuel, Loader2, Download, Printer } from 'lucide-react';
@@ -38,7 +39,12 @@ export default function GasVoucherPage() {
   const [collectors, setCollectors] = useState<any[]>([]);
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [voucherNumber, setVoucherNumber] = useState('—');
-  const [cashAccountCode, setCashAccountCode] = useState('1000');
+  // Real Chart of Accounts rows, not two hard-coded codes. The old list
+  // offered '1000' and '1010' with fixed labels; in the live COA 1010 is
+  // 'Cash in Bank Gcash - Balanga', so a Dinalupihan gas voucher credited a
+  // BALANGA account while the screen said plain "Cash in Bank".
+  const [cashAccounts, setCashAccounts] = useState<any[]>([]);
+  const [cashAccountCode, setCashAccountCode] = useState('');
   const [cashierOptions, setCashierOptions] = useState<{ id: string; full_name: string }[]>([]);
   const [managerOptions, setManagerOptions] = useState<{ id: string; full_name: string }[]>([]);
   const [cashierName, setCashierName] = useState('');
@@ -64,7 +70,26 @@ export default function GasVoucherPage() {
   useEffect(() => {
     if (!branchId) return;
     loadData();
+    loadCashAccounts();
   }, [branchId, date]);
+
+  // Cash accounts this branch may disburse from: its own, plus any
+  // company-wide one (branch_id null). Short/Over is filtered out by
+  // isSpendableCashAccount — it's a variance account, not a source of cash.
+  async function loadCashAccounts() {
+    let q = supabase.from('chart_of_accounts').select('id, code, name, branch_id').ilike('name', '%cash%').order('code');
+    if (branchId) q = q.or(`branch_id.eq.${branchId},branch_id.is.null`);
+    const { data } = await q;
+    const usable = (data ?? []).filter((a: any) => isSpendableCashAccount(a.name));
+    setCashAccounts(usable);
+    // Keep the current pick if it's still valid for this branch, else fall
+    // back to the branch's vault, else the first available account.
+    setCashAccountCode(prev => {
+      if (prev && usable.some((a: any) => a.code === prev)) return prev;
+      const vault = usable.find((a: any) => a.name.toLowerCase().includes('vault'));
+      return (vault ?? usable[0])?.code ?? '';
+    });
+  }
 
   async function loadBranches() {
     const { data } = await supabase.from('branches').select('id, name').eq('status', 'active').order('name');
@@ -186,7 +211,7 @@ export default function GasVoucherPage() {
       return;
     }
 
-    await postJournalEntry({
+    const gasVoucherLedger = await postJournalEntry({
       entryDate: date,
       description: `Gas Allowance — ${branch?.name ?? ''} — ${formatDate(date)}`,
       reference: voucherNumber,
@@ -196,9 +221,21 @@ export default function GasVoucherPage() {
       branchId: branchId || null,
       lines: [
         { accountCode: '5020', debit: grandTotal, memo: 'Transportation Expense (Gas)' },
-        { accountCode: cashAccountCode, credit: grandTotal, memo: cashAccountCode === '1010' ? 'Cash in Bank' : 'Cash in Vault' },
+        { accountCode: cashAccountCode, credit: grandTotal, memo: cashAccounts.find(a => a.code === cashAccountCode)?.name ?? 'Cash' },
       ],
     });
+
+    // A missing account code now blocks the whole entry rather than writing a
+    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
+    // line just quietly never appears.
+    if (gasVoucherLedger.missingCodes.length > 0) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: `Hindi mahanap sa Chart of Accounts ang account(s) ${gasVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
+        variant: 'destructive',
+      });
+    }
+
 
     toast({ title: 'Success', description: 'Gas voucher generated and journal entry posted' });
     getNextVoucherNumber().then(setVoucherNumber);
@@ -317,8 +354,9 @@ export default function GasVoucherPage() {
                   <Select value={cashAccountCode} onValueChange={setCashAccountCode}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="1000">Cash in Vault (Cash on Hand)</SelectItem>
-                      <SelectItem value="1010">Cash in Bank</SelectItem>
+                      {cashAccounts.map(a => (
+                        <SelectItem key={a.id} value={a.code}>{a.code} — {a.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>

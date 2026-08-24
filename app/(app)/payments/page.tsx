@@ -218,13 +218,25 @@ export default function PaymentsPage() {
     let query = supabase
       .from('loans')
       .select('id, loan_number, remaining_balance, status, total_payable, term_days, daily_payment, release_date, due_date, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
-      .in('status', ['active', 'overdue'])
-      .order('loan_number');
+      .in('status', ['active', 'overdue']);
     if (isCollector) {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
     }
     const { data } = await query;
-    setLoans(data ?? []);
+    // Sorted by the borrower's surname, not by loan_number. Collectors asked
+    // for this: at the doorstep they know the person's name, not their loan
+    // number, and loan_number order scatters the names randomly.
+    //
+    // Done here rather than with .order(): PostgREST's order on an embedded
+    // table sorts WITHIN the embed, it can't sort the parent rows by a child
+    // column. Sorting here also guarantees the same collation the dropdown
+    // renders with.
+    const sorted = (data ?? []).slice().sort((a: any, b: any) =>
+      formatCustomerName(a.customers?.first_name, a.customers?.last_name)
+        .localeCompare(formatCustomerName(b.customers?.first_name, b.customers?.last_name))
+      || String(a.loan_number).localeCompare(String(b.loan_number))
+    );
+    setLoans(sorted);
   }
 
   function handleLoanSelect(loanId: string) {
@@ -373,13 +385,15 @@ export default function PaymentsPage() {
     loadLoans();
   }
 
+  // Derived from the loans list, so without an explicit sort the dropdown
+  // came out in whatever order the loans query returned — not alphabetical.
   const customerOptions = Array.from(
     new Map(
       loans
         .filter(l => l.customer_id)
         .map(l => [l.customer_id, formatCustomerName(l.customers?.first_name, l.customers?.last_name)])
     ).entries()
-  );
+  ).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
 
   const selectedLoan = loans.find(l => l.id === form.loan_id);
   const newBalance = selectedLoan ? Math.max(0, Number(selectedLoan.remaining_balance) - Number(form.amount_paid || 0)) : 0;

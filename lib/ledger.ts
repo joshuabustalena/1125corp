@@ -51,6 +51,20 @@ export async function postJournalEntry(params: {
       );
     }
 
+    // Refuse to write a half-entry. Previously a missing code only produced
+    // a console.warn and the entry was still created with the surviving
+    // lines — or with NO lines at all when every code was missing. That is
+    // how 23 empty and 3 unbalanced entries ended up in the live ledger:
+    // silently, with nothing on screen to show anything had gone wrong.
+    //
+    // An entry that doesn't balance is worse than no entry: the transaction
+    // itself is still recorded in its own table (the payment, the voucher,
+    // the disbursement), so failing here loses the LEDGER line, not the
+    // business record, and it does so loudly enough to be noticed and fixed.
+    if (missingCodes.length > 0) {
+      return { ok: false, missingCodes };
+    }
+
     const { data: entry, error } = await supabase.from('journal_entries').insert({
       entry_number: generateEntryNumber(),
       entry_date: params.entryDate,

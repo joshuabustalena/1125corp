@@ -79,7 +79,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div>
                 <h2 className="text-xl font-bold">Access Denied</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Your role ({profile?.role_name ?? 'Unknown'}) doesn't have permission to view this page.
+                  Wala kang access sa page na ito. Kung kailangan mo ito, pakisabi sa Administrator.
+                </p>
+                {/* Access can now come from a per-account override set on
+                    the Access tab of Edit Employee, not only the role — so
+                    this no longer blames the role for a denial the role may
+                    not have caused. */}
+                <p className="text-xs text-muted-foreground mt-1">
+                  Signed in as {profile?.full_name ?? 'Unknown'} ({profile?.role_name ?? 'no role'})
                 </p>
               </div>
               <Link href="/dashboard"><Button>Back to Dashboard</Button></Link>

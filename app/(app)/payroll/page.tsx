@@ -22,7 +22,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { hasPermission } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso, formatCustomerName } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { buildPrintHtml } from '@/lib/print-document';
@@ -289,7 +289,7 @@ export default function PayrollPage() {
   const payrollYears = Array.from(new Set(payroll.map(p => String(new Date(p.pay_date).getFullYear())))).sort((a, b) => Number(b) - Number(a));
   const filteredPayroll = recordsEmployeeFilter === 'all' ? payroll : payroll.filter(p => p.employee_id === recordsEmployeeFilter);
   const payrollEmployeeOptions = Array.from(
-    new Map(payroll.map(p => [p.employee_id, `${p.employees?.first_name ?? ''} ${p.employees?.last_name ?? ''}`.trim() || 'Unknown'])).entries()
+    new Map(payroll.map(p => [p.employee_id, formatCustomerName(p.employees?.first_name, p.employees?.last_name) || 'Unknown'])).entries()
   ).sort((a, b) => a[1].localeCompare(b[1]));
 
   function getThirteenthMonthRange(year: string, cycle: 'partial' | 'full') {
@@ -964,7 +964,17 @@ export default function PayrollPage() {
     // duplicate in the live Chart of Accounts. Splitting this into one
     // journal entry per branch would fix it properly but is a bigger change
     // than this batch — flagged as a follow-up, not silently left broken.
-    await postJournalEntry({
+    // '1000' ("Cash on Hand") is being retired by the client, and posting to
+    // a code that no longer exists drops the credit line silently. Resolve a
+    // real vault account instead: the selected branch's if there is one, else
+    // any "Cash in Vault" account. The cross-branch caveat above still
+    // stands — this keeps it POSTING correctly until that split is done.
+    const thirteenthCashCode =
+      (await resolveBranchAccountCode('Cash in Vault', branches.find(b => b.id === voucherBranchId)?.name))
+      ?? (await supabase.from('chart_of_accounts').select('code').ilike('name', 'Cash in Vault%').limit(1).maybeSingle()).data?.code
+      ?? '1000';
+
+    const thirteenthLedger = await postJournalEntry({
       entryDate: new Date().toISOString().split('T')[0],
       description: `13th Month Voucher — ${thirteenthCycleLabel}`,
       reference: thirteenthVoucherNumber,
@@ -972,9 +982,21 @@ export default function PayrollPage() {
       createdBy: profile?.id ?? null,
       lines: [
         { accountCode: '5030', debit: thirteenthNetPayTotal, memo: 'Employee Benefits Expense' },
-        { accountCode: '1000', credit: thirteenthNetPayTotal, memo: 'Cash in Vault' },
+        { accountCode: thirteenthCashCode, credit: thirteenthNetPayTotal, memo: 'Cash in Vault' },
       ],
     });
+
+    // A missing account code now blocks the whole entry rather than writing a
+    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
+    // line just quietly never appears.
+    if (thirteenthLedger.missingCodes.length > 0) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: `Hindi mahanap sa Chart of Accounts ang account(s) ${thirteenthLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
+        variant: 'destructive',
+      });
+    }
+
 
     toast({ title: 'Success', description: '13th Month voucher generated and journal entry posted' });
     await handleDownloadThirteenthVoucherPdf(thirteenthVoucherNumber);
@@ -1197,7 +1219,7 @@ export default function PayrollPage() {
       resolveBranchAccountCode('Cash in Vault', branchName).then(c => c ?? '1000'),
     ]);
 
-    await postJournalEntry({
+    const payrollVoucherLedger = await postJournalEntry({
       entryDate: voucherPayDate,
       description: `Payroll Voucher — ${voucherBranch?.name ?? ''} — ${formatDate(voucherPayDate)}`,
       reference: voucherNumber,
@@ -1217,6 +1239,18 @@ export default function PayrollPage() {
         { accountCode: cashVaultCode, credit: netPayTotal, memo: 'Cash in Vault' },
       ],
     });
+
+    // A missing account code now blocks the whole entry rather than writing a
+    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
+    // line just quietly never appears.
+    if (payrollVoucherLedger.missingCodes.length > 0) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: `Hindi mahanap sa Chart of Accounts ang account(s) ${payrollVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
+        variant: 'destructive',
+      });
+    }
+
 
     toast({ title: 'Success', description: 'Payroll voucher generated and journal entry posted' });
     // Download while the just-vouchered rows are still showing in the

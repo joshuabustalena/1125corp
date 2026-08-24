@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
@@ -24,6 +23,8 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials, exportToCSV, formatCustomerName } from '@/lib/format';
+import { ASSIGNABLE_PERMISSIONS, effectivePermissions, nonAssignablePermissions } from '@/lib/permissions';
+import { Checkbox } from '@/components/ui/checkbox';
 import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, CheckCircle2, Circle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -59,13 +60,25 @@ export default function EmployeesPage() {
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [createLogin, setCreateLogin] = useState(true);
-  const [activeEmpTab, setActiveEmpTab] = useState<'info' | 'documents'>('info');
+  const [activeEmpTab, setActiveEmpTab] = useState<'info' | 'documents' | 'access'>('info');
   const [employeeDocs, setEmployeeDocs] = useState<any[]>([]);
   const [pendingEmpDocs, setPendingEmpDocs] = useState<Record<string, File>>({});
   const [uploadingEmpDocType, setUploadingEmpDocType] = useState<string | null>(null);
   const [previewEmpDoc, setPreviewEmpDoc] = useState<PreviewableDocument | null>(null);
   const pageSize = 10;
 
+  // Access tab. accessPerms is what's ticked; accessRoleDefaults is the
+  // role's own list, kept so "Reset to role default" can restore it.
+  const [accessPerms, setAccessPerms] = useState<string[]>([]);
+  const [accessRoleDefaults, setAccessRoleDefaults] = useState<string[]>([]);
+  // Permissions with no checkbox (see nonAssignablePermissions) — held here
+  // so saving re-attaches them instead of dropping them.
+  const [accessHidden, setAccessHidden] = useState<string[]>([]);
+  const [accessLoading, setAccessLoading] = useState(false);
+  // Only true once loadAccessFor() has actually returned. Saving before that
+  // would compare two empty arrays, decide "same as role", and wipe a real
+  // override the account already had.
+  const [accessLoaded, setAccessLoaded] = useState(false);
   const [form, setForm] = useState({
     first_name: '', last_name: '', middle_name: '', department: '', position: '',
     branch_id: '', area_id: '', salary: '', pay_type: 'daily', status: 'active', hire_date: '', birth_date: '', phone: '', email: '', address: '',
@@ -112,10 +125,44 @@ export default function EmployeesPage() {
       contact_person_name: '', contact_person_relationship: '', contact_person_phone: '',
     });
     setCreateLogin(true);
+    setAccessPerms([]);
+    setAccessRoleDefaults([]);
+    setAccessHidden([]);
+    setAccessLoaded(false);
     setActiveEmpTab('info');
     setEmployeeDocs([]);
     setPendingEmpDocs({});
     setDialogOpen(true);
+  }
+
+  // Pulls the account's saved override (if any) and the role list behind
+  // it. With no login account yet, falls back to the role that matches the
+  // chosen position, so the tab still shows what they WOULD get.
+  async function loadAccessFor(profileId: string | null, position: string | null | undefined) {
+    setAccessLoading(true);
+    setAccessLoaded(false);
+    let override: string[] | null = null;
+    let rolePerms: string[] = [];
+
+    if (profileId) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('permissions_override, roles(permissions)')
+        .eq('id', profileId)
+        .maybeSingle();
+      const row = data as any;
+      if (Array.isArray(row?.permissions_override)) override = row.permissions_override;
+      rolePerms = (row?.roles?.permissions ?? []) as string[];
+    } else if (position) {
+      const { data } = await supabase.from('roles').select('permissions').eq('name', position).maybeSingle();
+      rolePerms = ((data as any)?.permissions ?? []) as string[];
+    }
+
+    setAccessRoleDefaults(effectivePermissions(null, rolePerms));
+    setAccessPerms(effectivePermissions(override, rolePerms));
+    setAccessHidden(nonAssignablePermissions(Array.isArray(override) ? override : rolePerms));
+    setAccessLoaded(true);
+    setAccessLoading(false);
   }
 
   async function loadEmployeeDocs(employeeId: string) {
@@ -125,6 +172,7 @@ export default function EmployeesPage() {
 
   function openEdit(e: any) {
     setEditing(e);
+    loadAccessFor(e.profile_id ?? null, e.position);
     setForm({
       first_name: e.first_name, last_name: e.last_name, middle_name: e.middle_name ?? '',
       department: e.department ?? '', position: e.position ?? '', branch_id: e.branch_id ?? '', area_id: e.area_id ?? '',
@@ -186,6 +234,7 @@ export default function EmployeesPage() {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
         if (editing.profile_id) await syncCollectorRecord(editing.profile_id, payload);
+        await saveAccessOverride(editing.profile_id ?? null);
         toast({ title: 'Success', description: 'Employee updated' });
         setDialogOpen(false);
         load();
@@ -212,6 +261,30 @@ export default function EmployeesPage() {
       load();
     }
     setSaving(false);
+  }
+
+  // Stores the ticked list against the account. Writing NULL when it still
+  // matches the role keeps the account INHERITING — so a later change to the
+  // role's permissions still reaches them, instead of being frozen out by a
+  // copy that merely happened to match on the day it was saved.
+  async function saveAccessOverride(profileId: string | null) {
+    if (!profileId) return;
+    // Never write from a half-loaded tab — see accessLoaded.
+    if (!accessLoaded) return;
+    // Never change your own access: with a single Administrator account,
+    // unticking Employees on yourself is unrecoverable from the UI.
+    if (profileId === profile?.id) return;
+    const sameAsRole =
+      accessPerms.length === accessRoleDefaults.length &&
+      accessPerms.every(k => accessRoleDefaults.includes(k));
+    // The saved array is the ticked boxes PLUS the permissions that have no
+    // checkbox, so nothing the account already had disappears.
+    const merged = Array.from(new Set([...accessPerms, ...accessHidden]));
+    const { error } = await supabase
+      .from('profiles')
+      .update({ permissions_override: sameAsRole ? null : merged })
+      .eq('id', profileId);
+    if (error) toast({ title: 'Access not saved', description: error.message, variant: 'destructive' });
   }
 
   async function uploadDocForEmployee(employeeId: string, docType: string, file: File) {
@@ -477,19 +550,20 @@ export default function EmployeesPage() {
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="max-w-2xl h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle>{editing ? 'Edit Employee' : 'Add Employee'}</DialogTitle>
             <DialogDescription>{editing ? 'Update employee information' : 'Register a new employee'}</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
-          <Tabs value={activeEmpTab} onValueChange={(v) => setActiveEmpTab(v as 'info' | 'documents')}>
-            <TabsList className="grid grid-cols-2 w-full">
+          <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 gap-4">
+          <Tabs value={activeEmpTab} onValueChange={(v) => setActiveEmpTab(v as 'info' | 'documents' | 'access')} className="flex flex-col flex-1 min-h-0">
+            <TabsList className="grid grid-cols-3 w-full shrink-0">
               <TabsTrigger value="info">Info</TabsTrigger>
               <TabsTrigger value="documents">Documents</TabsTrigger>
+              <TabsTrigger value="access">Access</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="info" className="space-y-4 pt-2">
+            <TabsContent value="info" className="space-y-4 pt-2 flex-1 min-h-0 overflow-y-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2"><Label>First Name *</Label><Input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Last Name *</Label><Input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></div>
@@ -581,7 +655,59 @@ export default function EmployeesPage() {
             )}
             </TabsContent>
 
-            <TabsContent value="documents" className="space-y-3 pt-2">
+            {/* Access — which sidebar tabs this account can open. Boxes start
+                ticked at whatever the employee's ROLE already grants, so an
+                untouched selection changes nothing. Pages open to everyone
+                (Dashboard, Search, Profile, Payroll) aren't listed, because a
+                checkbox that can't actually deny them would be misleading. */}
+            <TabsContent value="access" className="space-y-3 pt-2 flex-1 min-h-0 overflow-y-auto">
+              {!editing ? (
+                <p className="text-sm text-muted-foreground">
+                  I-save muna ang employee (at ang login account niya) bago i-set ang access. Sa ngayon, susundin muna ang default ng kanyang position.
+                </p>
+              ) : editing.profile_id === profile?.id ? (
+                <p className="text-sm text-muted-foreground">
+                  Hindi mo pwedeng baguhin ang sarili mong access dito. Kung maalis mo ang Employees sa sarili mo, wala nang paraan para maibalik ito mula sa app.
+                </p>
+              ) : !editing.profile_id ? (
+                <p className="text-sm text-muted-foreground">
+                  Walang login account ang employee na ito, kaya wala pang access na maitatakda. Gumawa muna ng account para sa kanya.
+                </p>
+              ) : accessLoading ? (
+                <div className="flex items-center justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      Naka-check = pwedeng buksan ang tab na iyon.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setAccessPerms(accessRoleDefaults)}
+                    >
+                      Reset to role default
+                    </Button>
+                  </div>
+                  <div className="rounded-lg border border-border divide-y divide-border">
+                    {ASSIGNABLE_PERMISSIONS.map(perm => (
+                      <label key={perm.key} className="flex items-start gap-3 p-3 cursor-pointer hover:bg-secondary/40">
+                        <Checkbox
+                          checked={accessPerms.includes(perm.key)}
+                          onCheckedChange={(v) => setAccessPerms(prev =>
+                            v ? Array.from(new Set([...prev, perm.key])) : prev.filter(k => k !== perm.key)
+                          )}
+                        />
+                        <span className="text-sm leading-tight">{perm.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </TabsContent>
+
+            <TabsContent value="documents" className="space-y-3 pt-2 flex-1 min-h-0 overflow-y-auto">
               {EMPLOYEE_DOCUMENT_TYPES.map(dt => {
                 const doc = employeeDocs.find(d => d.document_type === dt.type);
                 const pendingFile = pendingEmpDocs[dt.type];
@@ -635,7 +761,7 @@ export default function EmployeesPage() {
             </TabsContent>
           </Tabs>
 
-            <DialogFooter>
+            <DialogFooter className="shrink-0">
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}{editing ? 'Update' : 'Add'} Employee</Button>
             </DialogFooter>
