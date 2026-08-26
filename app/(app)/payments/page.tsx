@@ -44,12 +44,17 @@ function countCollectionDays(releaseDate: string | null, dueDate: string | null)
   return count;
 }
 
+// Matches no real row — scopes a non-admin with no branch assigned down to
+// nothing, rather than silently showing them every branch.
+const NO_BRANCH = '00000000-0000-0000-0000-000000000000';
+
 export default function PaymentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const isCollector = profile?.role_name === 'Branch Field Collector';
+  const isCashier = profile?.role_name === 'Cashier';
   const [editTarget, setEditTarget] = useState<any>(null);
   const [editForm, setEditForm] = useState({ amount_paid: '', payment_date: '' });
   const [editSaving, setEditSaving] = useState(false);
@@ -221,6 +226,12 @@ export default function PaymentsPage() {
       .in('status', ['active', 'overdue']);
     if (isCollector) {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (!isAdmin) {
+      // Everyone below Administrator is pinned to their own branch — a
+      // Balanga cashier taking a walk-in must not be able to pick, or post
+      // against, a Dinalupihan customer. Collectors are already narrowed by
+      // collector_id above, which is tighter still.
+      query = query.eq('branch_id', profile?.branch_id ?? NO_BRANCH);
     }
     const { data } = await query;
     // Sorted by the borrower's surname, not by loan_number. Collectors asked
@@ -260,7 +271,7 @@ export default function PaymentsPage() {
 
     let query = supabase
       .from('payments')
-      .select('*, loans(loan_number, release_date, due_date, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
+      .select('*, customers!inner(branch_id), loans(loan_number, release_date, due_date, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
 
     if (debouncedSearch) {
       // PostgREST's .or() can't filter on an embedded/joined table's
@@ -293,6 +304,13 @@ export default function PaymentsPage() {
     }
     if (isCollector) {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (!isAdmin) {
+      // Same branch lock on the history below the form. Done as an inner
+      // join, NOT by collecting the branch's customer ids and passing them to
+      // .in(): Balanga alone has 413 customers, which builds a ~15,000
+      // character URL and the request simply fails ("fetch failed"), leaving
+      // the page blank with no error shown.
+      query = query.eq('customers.branch_id', profile?.branch_id ?? NO_BRANCH);
     }
     if (customerFilter !== 'all') {
       query = query.eq('customer_id', customerFilter);
@@ -396,6 +414,13 @@ export default function PaymentsPage() {
   ).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
 
   const selectedLoan = loans.find(l => l.id === form.loan_id);
+  // Always the collector assigned to the customer, whoever posts it — an
+  // Admin or Cashier taking a walk-in at the office included. Client
+  // confirmed (Aug 2026): the money belongs to that collector's area, so it
+  // has to land in THEIR remittance. Attributing it to whoever keyed it in
+  // (or to nobody) would leave the collection outside the remittance process
+  // entirely.
+  const collectorIdForPosting = selectedLoan?.collector_id ?? null;
   const newBalance = selectedLoan ? Math.max(0, Number(selectedLoan.remaining_balance) - Number(form.amount_paid || 0)) : 0;
 
   // Builds and queues an offline payment — no RPC, no balance, nothing
@@ -426,7 +451,7 @@ export default function PaymentsPage() {
       customerId: selectedLoan?.customer_id ?? null,
       customerName: selectedLoan ? `${selectedLoan.customers?.first_name ?? ''} ${selectedLoan.customers?.last_name ?? ''}`.trim() : '',
       customerPhone: selectedLoan?.customers?.phone ?? null,
-      collectorId: selectedLoan?.collector_id ?? null,
+      collectorId: collectorIdForPosting,
       collectorName: selectedLoan?.collectors?.profiles?.full_name ?? null,
       branchName: selectedLoan?.branches?.name ?? null,
       areaName: selectedLoan?.areas?.name ?? null,
@@ -528,7 +553,7 @@ export default function PaymentsPage() {
       or_number: orNumber,
       loan_id: form.loan_id,
       customer_id: selectedLoan?.customer_id ?? null,
-      collector_id: selectedLoan?.collector_id ?? null,
+      collector_id: collectorIdForPosting,
       amount: Number(form.amount_paid),
       remaining_balance: authoritativeNewBalance,
       payment_date: paymentDate,
@@ -545,7 +570,7 @@ export default function PaymentsPage() {
     const { error: payError } = await supabase.from('payments').insert({
       loan_id: form.loan_id,
       customer_id: selectedLoan?.customer_id ?? null,
-      collector_id: selectedLoan?.collector_id ?? null,
+      collector_id: collectorIdForPosting,
       receipt_id: receipt.id,
       amount_paid: Number(form.amount_paid),
       principal: 0,
@@ -793,12 +818,12 @@ export default function PaymentsPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        {profile?.role_name !== 'Cashier' && (
-          <Button size="sm" onClick={openPostCollection}>
-            <Plus className="w-4 h-4 mr-2" />
-            Post Collection
-          </Button>
-        )}
+        {/* Cashiers can post too, for customers who pay at the office
+            instead of to a field collector (client request, Aug 2026). */}
+        <Button size="sm" onClick={openPostCollection}>
+          <Plus className="w-4 h-4 mr-2" />
+          {isCashier ? 'Post Walk-in Payment' : 'Post Collection'}
+        </Button>
       </PageHeader>
 
       {/* Filters */}

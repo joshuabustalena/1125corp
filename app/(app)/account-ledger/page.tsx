@@ -13,11 +13,15 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { StatCard } from '@/components/dashboard/stat-card';
+import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
 export default function AccountLedgerPage() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
+
   const [accounts, setAccounts] = useState<any[]>([]);
   const [ledgerAccountId, setLedgerAccountId] = useState('');
   const [ledgerStartDate, setLedgerStartDate] = useState(new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]);
@@ -27,8 +31,14 @@ export default function AccountLedgerPage() {
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
   useEffect(() => {
-    supabase.from('chart_of_accounts').select('*').order('code').then(({ data }) => setAccounts(data ?? []));
-  }, []);
+    // A non-admin picks from their own branch's accounts plus shared /
+    // company-wide ones, matching Journal Entries' picker.
+    let q = supabase.from('chart_of_accounts').select('*').order('code');
+    if (!isAdmin && profile?.branch_id) {
+      q = q.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`);
+    }
+    q.then(({ data }) => setAccounts(data ?? []));
+  }, [isAdmin, profile?.branch_id]);
 
   // Every line ever posted to one account, in date order, with a running
   // balance — the actual General Ledger, as distinct from the chronological
@@ -39,11 +49,20 @@ export default function AccountLedgerPage() {
     const account = accounts.find(a => a.id === ledgerAccountId);
     const isDebitNormal = account?.account_type === 'asset' || account?.account_type === 'expense';
 
-    const { data } = await supabase
+    // Scoped to the viewer's branch: a SHARED account (e.g. SSS Payable) is
+    // touched by entries from both branches, so without this a Balanga
+    // cashier would see Dinalupihan's postings inside it.
+    let linesQuery = supabase
       .from('journal_entry_lines')
-      .select('debit, credit, memo, journal_entries!inner(entry_number, entry_date, description, reference, created_at)')
+      .select('debit, credit, memo, journal_entries!inner(entry_number, entry_date, description, reference, created_at, branch_id)')
       .eq('account_id', ledgerAccountId)
       .lte('journal_entries.entry_date', ledgerEndDate);
+    if (!isAdmin) {
+      linesQuery = profile?.branch_id
+        ? linesQuery.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`, { foreignTable: 'journal_entries' })
+        : linesQuery.is('journal_entries.branch_id', null);
+    }
+    const { data } = await linesQuery;
 
     const sorted = (data ?? []).slice().sort((a: any, b: any) => {
       const da = a.journal_entries?.entry_date ?? '';

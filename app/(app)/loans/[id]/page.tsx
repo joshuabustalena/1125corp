@@ -688,9 +688,14 @@ export default function LoanDetailPage() {
     // assuming the Balanga one always applies. Falls back to the old fixed
     // codes only if no branch-specific account is found, so this never
     // regresses a single-branch setup.
-    const [loansReceivableCode, cashVaultCode] = await Promise.all([
-      resolveBranchAccountCode('Loans Receivable', loan.branches?.name).then(c => c ?? '1100'),
-      resolveBranchAccountCode('Cash in Vault', loan.branches?.name).then(c => c ?? '1000'),
+    // Interest and Service Fee are per branch now too — they used to post to
+    // the flat '4000'/'4010', which are Balanga's accounts, so every
+    // Dinalupihan release credited Balanga's revenue.
+    const [loansReceivableCode, cashVaultCode, interestCode, serviceFeeCode] = await Promise.all([
+      resolveBranchAccountCode('Loans Receivable', loan.branch_id, loan.branches?.name),
+      resolveBranchAccountCode('Cash in Vault', loan.branch_id, loan.branches?.name),
+      resolveBranchAccountCode('Interest Revenue', loan.branch_id, loan.branches?.name),
+      resolveBranchAccountCode('Service Fee', loan.branch_id, loan.branches?.name),
     ]);
 
     const ledgerResult = await postJournalEntry({
@@ -702,11 +707,11 @@ export default function LoanDetailPage() {
       createdBy: profile?.id ?? null,
       branchId: loan.branch_id ?? null,
       lines: [
-        { accountCode: loansReceivableCode, debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
-        { accountCode: loansReceivableCode, credit: offsetBalance, memo: 'Offset balance from previous loan' },
-        { accountCode: cashVaultCode, credit: cashReleased, memo: 'Cash released to borrower' },
-        { accountCode: '4010', credit: serviceFee, memo: 'Service fee income' },
-        { accountCode: '4000', credit: interestAmount, memo: 'Interest income' },
+        { accountCode: loansReceivableCode ?? '', debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
+        { accountCode: loansReceivableCode ?? '', credit: offsetBalance, memo: 'Offset balance from previous loan' },
+        { accountCode: cashVaultCode ?? '', credit: cashReleased, memo: 'Cash released to borrower' },
+        { accountCode: serviceFeeCode ?? '', credit: serviceFee, memo: 'Service fee' },
+        { accountCode: interestCode ?? '', credit: interestAmount, memo: 'Interest revenue' },
       ],
     });
 

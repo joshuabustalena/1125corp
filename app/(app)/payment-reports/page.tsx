@@ -76,25 +76,25 @@ export default function PaymentReportsPage() {
   async function generateReport() {
     setLoading(true);
 
-    let customerIds: string[] | null = null;
-    if (customerFilter !== 'all') {
-      customerIds = [customerFilter];
-    } else if (areaFilter !== 'all') {
-      customerIds = customers.filter(c => c.area_id === areaFilter).map(c => c.id);
-    } else if (branchFilter !== 'all') {
-      customerIds = customers.filter(c => c.branch_id === branchFilter).map(c => c.id);
-    }
+    // Scoped through an inner join on customers rather than an .in() over a
+    // fetched id list — Balanga alone has 413 customers, and passing them
+    // all as query parameters builds a ~15,000 character URL that fails
+    // outright ('fetch failed'), leaving this whole report blank.
 
     let query = supabase
       .from('payments')
-      .select('*, customers(first_name, last_name, branches(name), areas(name)), loans(loan_number)')
+      .select('*, customers!inner(first_name, last_name, branch_id, area_id, branches(name), areas(name)), loans(loan_number)')
       .order('payment_date', { ascending: false });
 
     if (dateFilter) {
       query = query.eq('payment_date', dateFilter);
     }
-    if (customerIds) {
-      query = query.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+    if (customerFilter !== 'all') {
+      query = query.eq('customer_id', customerFilter);
+    } else if (areaFilter !== 'all') {
+      query = query.eq('customers.area_id', areaFilter);
+    } else if (branchFilter !== 'all') {
+      query = query.eq('customers.branch_id', branchFilter);
     }
 
     const { data, error } = await query;

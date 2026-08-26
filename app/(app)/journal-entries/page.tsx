@@ -67,7 +67,16 @@ export default function JournalEntriesPage() {
       acctsQuery = acctsQuery.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`);
     }
     let entriesQuery = supabase.from('journal_entries').select('*, branches(name), journal_entry_lines(*, chart_of_accounts(code, name, account_type))').order('entry_date', { ascending: false }).order('created_at', { ascending: false }).limit(50);
-    if (branchFilter !== 'all') {
+    if (!isAdmin) {
+      // A non-admin sees only their own branch plus shared/company-wide
+      // entries, with no way to switch — the same lock the Dashboard and
+      // Accounting already apply. A Balanga cashier gets Balanga + shared.
+      // With no branch assigned they get shared entries only, rather than
+      // silently falling through to every branch.
+      entriesQuery = profile?.branch_id
+        ? entriesQuery.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`)
+        : entriesQuery.is('branch_id', null);
+    } else if (branchFilter !== 'all') {
       entriesQuery = branchFilter === SHARED_VALUE ? entriesQuery.is('branch_id', null) : entriesQuery.eq('branch_id', branchFilter);
     }
     const [{ data: accts }, { data: ents }] = await Promise.all([
@@ -170,14 +179,21 @@ export default function JournalEntriesPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Journal Entries" description="Record and review manual and system-generated journal entries">
-        <Select value={branchFilter} onValueChange={setBranchFilter}>
-          <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All Branches" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Branches</SelectItem>
-            <SelectItem value={SHARED_VALUE}>Shared / Company-wide</SelectItem>
-            {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        {isAdmin ? (
+          <Select value={branchFilter} onValueChange={setBranchFilter}>
+            <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All Branches" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Branches</SelectItem>
+              <SelectItem value={SHARED_VALUE}>Shared / Company-wide</SelectItem>
+              {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        ) : (
+          /* A badge, not a dropdown: there is nothing to choose between. */
+          <span className="inline-flex items-center h-9 px-3 rounded-md border border-border bg-secondary/30 text-sm">
+            {branches.find(b => b.id === profile?.branch_id)?.name ?? 'Shared only'}
+          </span>
+        )}
         <Button size="sm" onClick={openNewEntry}>
           <Plus className="w-4 h-4 mr-2" />
           New Journal Entry

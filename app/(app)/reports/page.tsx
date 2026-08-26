@@ -152,11 +152,16 @@ export default function ReportsPage() {
   }
 
   // Payments don't carry branch_id/area_id directly — resolve the filter down
-  // to a customer_id list first, same pattern as payment-reports/page.tsx.
-  function filteredCustomerIds(): string[] | null {
-    if (areaFilter !== 'all') return customers.filter(c => c.area_id === areaFilter).map(c => c.id);
-    if (branchFilter !== 'all') return customers.filter(c => c.branch_id === branchFilter).map(c => c.id);
-    return null;
+  // Payments don't carry branch_id/area_id directly — scoped through an
+  // inner join on customers instead of an .in() over a fetched id list.
+  // Balanga alone has 413 customers: passing them all as query parameters
+  // builds a ~15,000 character URL and the request fails outright ('fetch
+  // failed'), which silently zeroed every payments-based report for a
+  // whole-branch filter.
+  function scopePaymentsByCustomer(q: any) {
+    if (areaFilter !== 'all') return q.eq('customers.area_id', areaFilter);
+    if (branchFilter !== 'all') return q.eq('customers.branch_id', branchFilter);
+    return q;
   }
 
   async function generateReport() {
@@ -165,7 +170,6 @@ export default function ReportsPage() {
     // Only the Overdue report sets this; every other report leaves it 0 so
     // the rate card stays hidden.
     let overallOverdueRate = 0;
-    const customerIds = filteredCustomerIds();
 
     switch (reportType) {
       // Collection is reported per day split into what actually came in as
@@ -175,8 +179,7 @@ export default function ReportsPage() {
       // real collection, but only the first is money that physically moved,
       // so the client wants them on separate lines rather than one figure.
       case 'daily_collection': {
-        let pq = supabase.from('payments').select('amount_paid, payment_date, customer_id').gte('payment_date', startDate).lte('payment_date', endDate);
-        if (customerIds) pq = pq.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+        let pq = scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate));
         let lq = supabase.from('loans').select('release_date, amount, release_amount, offset_balance, daily_payment, total_payable, term_days, branch_id, area_id').gte('release_date', startDate).lte('release_date', endDate);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
@@ -219,8 +222,7 @@ export default function ReportsPage() {
       case 'weekly_collection':
       case 'monthly_collection': {
         const isWeekly = reportType === 'weekly_collection';
-        let q = supabase.from('payments').select('amount_paid, payment_date, customer_id').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date');
-        if (customerIds) q = q.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+        let q = scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date'));
         const { data } = await q;
         const areaNameById = new Map(areas.map((a: any) => [a.id, a.name]));
         const areaIdByCustomer = new Map(customers.map((c: any) => [c.id, c.area_id]));
@@ -254,8 +256,7 @@ export default function ReportsPage() {
         let lq = supabase.from('loans').select('amount, interest_amount, service_fee, offset_balance, daily_payment, total_payable, term_days, release_amount, branch_id, area_id, branches(name), areas(name)').gte('release_date', startDate).lte('release_date', endDate);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
-        let pq = supabase.from('payments').select('amount_paid, customer_id').gte('payment_date', startDate).lte('payment_date', endDate);
-        if (customerIds) pq = pq.in('customer_id', customerIds.length > 0 ? customerIds : ['00000000-0000-0000-0000-000000000000']);
+        let pq = scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate));
         const [{ data: loans }, { data: pays }] = await Promise.all([lq, pq]);
 
         const groupByArea = areaFilter !== 'all';

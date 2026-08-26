@@ -20,6 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDateTime } from '@/lib/format';
+import { selectInChunks } from '@/lib/db-chunk';
 import { MessageSquare, Loader2, Send, Users } from 'lucide-react';
 
 // One SMS "credit" with Semaphore is a 160-character segment — a longer
@@ -119,11 +120,17 @@ export default function BroadcastSmsPage() {
     let list = (data as any as Customer[]) ?? [];
 
     if (loanStatusFilter === 'delayed_overdue' && list.length > 0) {
-      const { data: loans } = await supabase
-        .from('loans')
-        .select('customer_id, release_date, due_date, total_payable, remaining_balance, daily_payment, term_days')
-        .in('customer_id', list.map(c => c.id))
-        .in('status', ['active', 'overdue']);
+      // Chunked, not one .in() over every customer in the branch — Balanga
+      // alone has 413, which builds a URL long enough that the request fails
+      // outright ("fetch failed"), silently emptying the recipient list.
+      const loans = await selectInChunks<any>(
+        (q) => q
+          .select('customer_id, release_date, due_date, total_payable, remaining_balance, daily_payment, term_days')
+          .in('status', ['active', 'overdue']),
+        'loans',
+        'customer_id',
+        list.map(c => c.id),
+      );
       const today = new Date();
       const customerIdsWithDelay = new Set(
         (loans ?? []).filter((l: any) => loanHasDelayOrOverdue(l, today)).map((l: any) => l.customer_id)

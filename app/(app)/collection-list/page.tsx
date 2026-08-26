@@ -48,7 +48,13 @@ export default function CollectionListPage() {
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [printing, setPrinting] = useState(false);
-  const printRef = useRef<HTMLDivElement>(null);
+  // One ref per printed page. A long list must FLOW onto page 2, 3... at
+  // full size — the previous single-image capture was scaled down to fit one
+  // sheet, which squeezed 60+ rows into unreadable type.
+  const printPageRefs = useRef<(HTMLDivElement | null)[]>([]);
+  // Rows per printed page, sized for 8.5" x 13" folio with the header block
+  // and column headings on top of each page.
+  const ROWS_PER_PRINT_PAGE = 34;
 
   useEffect(() => {
     loadBranches();
@@ -159,29 +165,47 @@ export default function CollectionListPage() {
       balance: remainingBalance,
     };
   });
+  // Split for printing so each page carries a full-size table with its own
+  // column headings, instead of one giant image shrunk onto a single sheet.
+  const printPages: (typeof rows)[] = [];
+  for (let i = 0; i < rows.length; i += ROWS_PER_PRINT_PAGE) {
+    printPages.push(rows.slice(i, i + ROWS_PER_PRINT_PAGE));
+  }
+  if (printPages.length === 0) printPages.push([]);
+
   const totalOverdue = rows.reduce((s, r) => s + r.amountOverdue, 0);
   const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
 
   async function handleDownloadPdf() {
-    if (!printRef.current) return;
+    // Trim first: the ref array is written by index and never shrinks, so a
+    // shorter list would otherwise still print the previous run's extra pages.
+    printPageRefs.current.length = printPages.length;
+    const refs = printPageRefs.current.filter(Boolean) as HTMLDivElement[];
+    if (refs.length === 0) return;
     setDownloading(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
-      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 1000, windowWidth: 1000 });
-      const imgData = canvas.toDataURL('image/png');
-      const pxToPt = 0.75;
-      const contentWidthPt = (canvas.width / 2) * pxToPt;
-      const contentHeightPt = (canvas.height / 2) * pxToPt;
-      // Landscape Letter (11" x 8.5") — this worksheet is a wide table, not
-      // a signed paper form, so it doesn't need the folio size every other
-      // document in the app uses.
-      const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: [792, 612] });
-      const margin = 24;
+      // 8.5" x 13" legal/folio, portrait — the paper the collectors print on
+      // (client request, Aug 2026). Each chunk of rows is its own PDF page at
+      // full size; previously the entire list was one image squeezed onto a
+      // single sheet, which is what made a long list unreadable.
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
+      const margin = 18;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
-      pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+      const pxToPt = 0.75;
+
+      for (let i = 0; i < refs.length; i++) {
+        const canvas = await html2canvas(refs[i], { backgroundColor: '#ffffff', scale: 2, width: 820, windowWidth: 820 });
+        const contentWidthPt = (canvas.width / 2) * pxToPt;
+        const contentHeightPt = (canvas.height / 2) * pxToPt;
+        // Only ever shrinks, never enlarges — a page that already fits keeps
+        // its true size.
+        const fit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+        if (i > 0) pdf.addPage();
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, contentWidthPt * fit, contentHeightPt * fit);
+      }
       pdf.save(`collection-list-${collector?.areas?.name ?? ''}-${date}.pdf`);
     } catch (err: any) {
       // eslint-disable-next-line no-console
@@ -191,18 +215,24 @@ export default function CollectionListPage() {
   }
 
   async function handlePrint() {
-    if (!printRef.current) return;
+    printPageRefs.current.length = printPages.length;
+    const refs = printPageRefs.current.filter(Boolean) as HTMLDivElement[];
+    if (refs.length === 0) return;
     setPrinting(true);
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 1000, windowWidth: 1000 });
-      const printWindow = window.open('', '_blank', 'width=1100,height=850');
+      const pages: { url: string; width: number; height: number }[] = [];
+      for (const ref of refs) {
+        const canvas = await html2canvas(ref, { backgroundColor: '#ffffff', scale: 2, width: 820, windowWidth: 820 });
+        pages.push({ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
+      }
+      const printWindow = window.open('', '_blank', 'width=900,height=1000');
       if (!printWindow) {
         setPrinting(false);
         return;
       }
-      // 11"x8.5" landscape (matching the PDF download's page size).
-      printWindow.document.write(buildPrintHtml(`Collection List — ${collector?.areas?.name ?? ''}`, [{ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height }], 11, 8.5));
+      // 8.5"x13" legal/folio portrait, one sheet per chunk of rows.
+      printWindow.document.write(buildPrintHtml(`Collection List — ${collector?.areas?.name ?? ''}`, pages, 8.5, 13));
       printWindow.document.close();
       printWindow.onload = () => printWindow.print();
       printWindow.onafterprint = () => printWindow.close();
@@ -303,11 +333,16 @@ export default function CollectionListPage() {
       {/* Hidden printable copy, matching the paper Collection List sheet. */}
       {typeof document !== 'undefined' && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
-          <div ref={printRef} style={{ width: 1000, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif' }}>
+          {printPages.map((pageRows, pageIndex) => (
+          <div
+            key={pageIndex}
+            ref={(el) => { printPageRefs.current[pageIndex] = el; }}
+            style={{ width: 820, background: '#fff', color: '#111', padding: 24, fontFamily: '"Times New Roman", Calibri, serif' }}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 10 }}>
               <span><strong>Date:</strong> {formatDate(date)}</span>
               <span style={{ fontWeight: 700 }}>Collection List — {collector?.areas?.name ?? ''} {collector?.profiles?.full_name ?? ''}</span>
-              <span>&nbsp;</span>
+              <span>{printPages.length > 1 ? `Page ${pageIndex + 1} of ${printPages.length}` : ' '}</span>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
@@ -323,7 +358,7 @@ export default function CollectionListPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map(r => (
+                {pageRows.map(r => (
                   <tr key={r.id}>
                     <td style={lCell}>{r.borrowerName}</td>
                     <td style={lCellCenter}>{formatDate(r.dateReleased)}</td>
@@ -335,17 +370,21 @@ export default function CollectionListPage() {
                     <td style={{ ...lCell, height: 28 }}>&nbsp;</td>
                   </tr>
                 ))}
-                <tr>
-                  <td style={{ ...lCell, fontWeight: 700 }} colSpan={3}>Total</td>
-                  <td style={lCell} />
-                  <td style={{ ...lCellRight, fontWeight: 700 }}>{formatCurrency(totalOverdue)}</td>
-                  <td style={lCell} />
-                  <td style={{ ...lCellRight, fontWeight: 700 }}>{formatCurrency(totalBalance)}</td>
-                  <td style={lCell} />
-                </tr>
+                {/* Totals belong on the last page only. */}
+                {pageIndex === printPages.length - 1 && (
+                  <tr>
+                    <td style={{ ...lCell, fontWeight: 700 }} colSpan={3}>Total</td>
+                    <td style={lCell} />
+                    <td style={{ ...lCellRight, fontWeight: 700 }}>{formatCurrency(totalOverdue)}</td>
+                    <td style={lCell} />
+                    <td style={{ ...lCellRight, fontWeight: 700 }}>{formatCurrency(totalBalance)}</td>
+                    <td style={lCell} />
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
+          ))}
         </div>,
         document.body
       )}

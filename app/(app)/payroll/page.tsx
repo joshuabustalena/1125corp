@@ -969,6 +969,10 @@ export default function PayrollPage() {
     // real vault account instead: the selected branch's if there is one, else
     // any "Cash in Vault" account. The cross-branch caveat above still
     // stands — this keeps it POSTING correctly until that split is done.
+    // Per branch, same reason as Salaries Expense: '5030' is Balanga's.
+    const thirteenthBenefitsCode = await resolveBranchAccountCode(
+      'Employee Benefits', voucherBranchId, branches.find(b => b.id === voucherBranchId)?.name,
+    );
     const thirteenthCashCode =
       (await resolveBranchAccountCode('Cash in Vault', branches.find(b => b.id === voucherBranchId)?.name))
       ?? (await supabase.from('chart_of_accounts').select('code').ilike('name', 'Cash in Vault%').limit(1).maybeSingle()).data?.code
@@ -981,7 +985,7 @@ export default function PayrollPage() {
       source: 'thirteenth_month_voucher',
       createdBy: profile?.id ?? null,
       lines: [
-        { accountCode: '5030', debit: thirteenthNetPayTotal, memo: 'Employee Benefits Expense' },
+        { accountCode: thirteenthBenefitsCode ?? '', debit: thirteenthNetPayTotal, memo: 'Employee Benefits Expense' },
         { accountCode: thirteenthCashCode, credit: thirteenthNetPayTotal, memo: 'Cash in Vault' },
       ],
     });
@@ -1211,12 +1215,18 @@ export default function PayrollPage() {
     // account at all today) — postJournalEntry's missingCodes warning still
     // catches it if that fallback also doesn't resolve to a real account.
     const branchName = voucherBranch?.name;
-    const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode] = await Promise.all([
-      resolveBranchAccountCode('Service Vehicle Loan', branchName).then(c => c ?? '1120'),
-      resolveBranchAccountCode('Receivable from Uniform', branchName).then(c => c ?? '1130'),
-      resolveBranchAccountCode('Cash Short/Over', branchName).then(c => c ?? '1140'),
-      resolveBranchAccountCode('Employee Loan', branchName).then(c => c ?? '1110'),
-      resolveBranchAccountCode('Cash in Vault', branchName).then(c => c ?? '1000'),
+    // All resolved against this voucher's branch. Salaries Expense used to be
+    // the flat '5010', which is Balanga's account — every Dinalupihan payroll
+    // was charging Balanga's expense. "Service Vehicle" rather than "Service
+    // Vehicle Loan": the cleaned-up Chart names it the former on both
+    // branches, and the prefix match covers either spelling.
+    const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode, salariesCode] = await Promise.all([
+      resolveBranchAccountCode('Service Vehicle', voucherBranchId, branchName),
+      resolveBranchAccountCode('Receivable from Uniform', voucherBranchId, branchName),
+      resolveBranchAccountCode('Cash Short/Over', voucherBranchId, branchName),
+      resolveBranchAccountCode('Employee Loan', voucherBranchId, branchName),
+      resolveBranchAccountCode('Cash in Vault', voucherBranchId, branchName),
+      resolveBranchAccountCode('Salaries Expense', voucherBranchId, branchName),
     ]);
 
     const payrollVoucherLedger = await postJournalEntry({
@@ -1228,15 +1238,15 @@ export default function PayrollPage() {
       createdBy: profile?.id ?? null,
       branchId: voucherBranchId || null,
       lines: [
-        { accountCode: '5010', debit: salariesExpense, memo: 'Salaries Expense' },
+        { accountCode: salariesCode ?? '', debit: salariesExpense, memo: 'Salaries Expense' },
         { accountCode: '2010', credit: sssPayable, memo: 'SSS Payable' },
         { accountCode: '2020', credit: philPayable, memo: 'Philhealth Payable' },
         { accountCode: '2030', credit: pagibigPayable, memo: 'PagIBIG Payable' },
-        { accountCode: svCode, credit: svTotal, memo: 'Service Vehicle Loan' },
-        { accountCode: uniformCode, credit: uniformTotal, memo: 'Uniform' },
-        { accountCode: cashShortageCode, credit: cashShortageTotal, memo: 'Cash Shortage' },
-        { accountCode: employeeLoanCode, credit: employeeLoanTotal, memo: 'Employee Loan' },
-        { accountCode: cashVaultCode, credit: netPayTotal, memo: 'Cash in Vault' },
+        { accountCode: svCode ?? '', credit: svTotal, memo: 'Service Vehicle Loan' },
+        { accountCode: uniformCode ?? '', credit: uniformTotal, memo: 'Uniform' },
+        { accountCode: cashShortageCode ?? '', credit: cashShortageTotal, memo: 'Cash Shortage' },
+        { accountCode: employeeLoanCode ?? '', credit: employeeLoanTotal, memo: 'Employee Loan' },
+        { accountCode: cashVaultCode ?? '', credit: netPayTotal, memo: 'Cash in Vault' },
       ],
     });
 

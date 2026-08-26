@@ -234,7 +234,7 @@ export default function CashCountPage() {
     // the branch's own "Cash in Vault - <branch>" is also more correct for a
     // per-branch count than a company-wide figure ever was.
     const branchName = branches.find(b => b.id === branchId)?.name;
-    const vaultCode = await resolveBranchAccountCode('Cash in Vault', branchName);
+    const vaultCode = await resolveBranchAccountCode('Cash in Vault', branchId, branchName);
     let cashAccount: { id: string } | null = null;
     if (vaultCode) {
       const { data } = await supabase.from('chart_of_accounts').select('id').eq('code', vaultCode).maybeSingle();

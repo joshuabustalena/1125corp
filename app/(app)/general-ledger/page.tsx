@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/page-header';
+import { useAuth } from '@/lib/auth-context';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -16,6 +17,23 @@ import { formatCurrency, formatDate } from '@/lib/format';
 import { Loader2, TrendingUp, TrendingDown, Scale } from 'lucide-react';
 
 export default function GeneralLedgerPage() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role_name === 'Administrator';
+
+  // A non-admin's statements cover only their own branch plus shared /
+  // company-wide entries — the same lock Journal Entries, Accounting and the
+  // Dashboard already apply. Without it a Balanga cashier's Trial Balance,
+  // Income Statement and Balance Sheet all included Dinalupihan's figures.
+  //
+  // The ENTRY is filtered, not the account: an account can be shared while
+  // the entry that touched it belongs to one branch.
+  function scopeToBranch(q: any) {
+    if (isAdmin) return q;
+    return profile?.branch_id
+      ? q.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`, { foreignTable: 'journal_entries' })
+      : q.is('journal_entries.branch_id', null);
+  }
+
   // Shareholders' Capital feeds the Balance Sheet's equity section below —
   // full shareholder management (add/edit) lives on its own /shareholders
   // page now, but this data is still loaded here for that calculation.
@@ -39,10 +57,10 @@ export default function GeneralLedgerPage() {
 
   async function generateTrialBalance() {
     setStatementLoading(true);
-    const { data } = await supabase
+    const { data } = await scopeToBranch(supabase
       .from('journal_entry_lines')
       .select('debit, credit, chart_of_accounts(code, name, account_type), journal_entries!inner(entry_date)')
-      .lte('journal_entries.entry_date', trialBalanceDate);
+      .lte('journal_entries.entry_date', trialBalanceDate));
 
     const byAccount: Record<string, { code: string; name: string; type: string; debit: number; credit: number }> = {};
     (data ?? []).forEach((l: any) => {
@@ -79,11 +97,11 @@ export default function GeneralLedgerPage() {
 
   async function generateIncomeStatement() {
     setStatementLoading(true);
-    const { data } = await supabase
+    const { data } = await scopeToBranch(supabase
       .from('journal_entry_lines')
       .select('debit, credit, chart_of_accounts(name, account_type), journal_entries!inner(entry_date)')
       .gte('journal_entries.entry_date', startDate)
-      .lte('journal_entries.entry_date', endDate);
+      .lte('journal_entries.entry_date', endDate));
 
     const revenue: Record<string, number> = {};
     const expense: Record<string, number> = {};
@@ -101,10 +119,10 @@ export default function GeneralLedgerPage() {
 
   async function generateBalanceSheet() {
     setStatementLoading(true);
-    const { data } = await supabase
+    const { data } = await scopeToBranch(supabase
       .from('journal_entry_lines')
       .select('debit, credit, chart_of_accounts(name, account_type), journal_entries!inner(entry_date)')
-      .lte('journal_entries.entry_date', asOfDate);
+      .lte('journal_entries.entry_date', asOfDate));
 
     const byAccount: Record<string, { type: string; balance: number }> = {};
     (data ?? []).forEach((l: any) => {
@@ -139,7 +157,12 @@ export default function GeneralLedgerPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Financial Statements" description="Trial balance, income statement, and balance sheet" />
+      <PageHeader
+        title="Financial Statements"
+        description={isAdmin
+          ? 'Trial balance, income statement, and balance sheet — all branches'
+          : 'Trial balance, income statement, and balance sheet — your branch and shared entries'}
+      />
 
       <Tabs defaultValue="trial">
         <TabsList>

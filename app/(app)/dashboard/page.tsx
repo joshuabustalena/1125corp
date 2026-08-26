@@ -155,7 +155,11 @@ export default function DashboardPage() {
       }
       const NO_MATCH = ['00000000-0000-0000-0000-000000000000'];
       const scopeByBranch = (q: any) => branchFilter === 'all' ? q : q.eq('branch_id', branchFilter);
-      const scopeByCustomerIds = (q: any) => branchCustomerIds === null ? q : q.in('customer_id', branchCustomerIds.length > 0 ? branchCustomerIds : NO_MATCH);
+      // Joined, NOT an .in() over the branch's customer ids. Balanga has 413
+      // customers; passing them all as query parameters builds a ~15,000
+      // character URL and the request fails outright ("fetch failed"), so
+      // every payment figure here came back empty for a non-admin there.
+      const scopeByCustomerIds = (q: any) => branchFilter === 'all' ? q : q.eq('customers.branch_id', branchFilter);
       const scopeByEmployeeIds = (q: any) => branchEmployeeIds === null ? q : q.in('employee_id', branchEmployeeIds.length > 0 ? branchEmployeeIds : NO_MATCH);
 
       // Real cash position per location, straight from the ledger — the old
@@ -184,16 +188,16 @@ export default function DashboardPage() {
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
         scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date').eq('status', 'active')),
         scopeByBranch(supabase.from('loans').select('status')),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid').gte('payment_date', today)),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid').eq('payment_date', yesterday)),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid').gte('payment_date', monthStart)),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd)),
-        scopeByCustomerIds(supabase.from('payments').select('*, customers(first_name, last_name), loans(loan_number)').order('created_at', { ascending: false }).limit(5)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', today)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', yesterday)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', monthStart)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd)),
+        scopeByCustomerIds(supabase.from('payments').select('*, customers!inner(branch_id), customers(first_name, last_name), loans(loan_number)').order('created_at', { ascending: false }).limit(5)),
         scopeByBranch(supabase.from('loans').select('*, customers(first_name, last_name)').eq('status', 'active').order('due_date', { ascending: true }).limit(5)),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', sevenDaysAgo)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', sevenDaysAgo)),
         supabase.from('journal_entries').select('entry_date, journal_entry_lines(credit, chart_of_accounts(account_type))').gte('entry_date', sevenDaysAgo),
         scopeByBranch(supabase.from('customers').select('area_id, areas(name)').eq('status', 'active')),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date').gte('payment_date', fourWeeksAgo)),
+        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', fourWeeksAgo)),
         scopeByBranch(supabase.from('loans').select('release_amount, disbursed_at').not('disbursed_at', 'is', null).gte('disbursed_at', fourWeeksAgo)),
         scopeByBranch(supabase.from('gas_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo)),
         scopeByBranch(supabase.from('general_cash_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo)),

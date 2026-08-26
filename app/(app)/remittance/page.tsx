@@ -140,7 +140,7 @@ export default function RemittancePage() {
     // per branch (e.g. 1100 for Balanga, 1200 for Dinalupihan), so this
     // collector's own branch determines which one gets credited.
     const collector = collectors.find(c => c.id === form.collector_id);
-    const loansReceivableCode = (await resolveBranchAccountCode('Loans Receivable', (collector as any)?.branches?.name)) ?? '1100';
+    const loansReceivableCode = (await resolveBranchAccountCode('Loans Receivable', (collector as any)?.branch_id, (collector as any)?.branches?.name)) ?? '';
     const loansReceivableAccount = accounts.find(a => a.code === loansReceivableCode);
     if (!loansReceivableAccount) {
       toast({ title: 'Error', description: `Loans Receivable account (${loansReceivableCode}) not found in the Chart of Accounts`, variant: 'destructive' });

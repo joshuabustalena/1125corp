@@ -98,14 +98,12 @@ export default function AccountingPage() {
     );
 
     // Payments/loans don't carry branch_id the same simple way everywhere —
-    // loans has it directly; payments needs the branch's customer ids first
-    // (same approach the Dashboard uses).
-    let branchCustomerIds: string[] | null = null;
-    if (branchFilter !== 'all') {
-      const { data: bc } = await supabase.from('customers').select('id').eq('branch_id', branchFilter);
-      branchCustomerIds = (bc ?? []).map((c: any) => c.id);
-    }
-    const NO_MATCH = ['00000000-0000-0000-0000-000000000000'];
+    // Payments/loans don't carry branch_id the same simple way everywhere —
+    // loans has it directly; payments reaches the branch through its customer,
+    // as an inner join. NOT by fetching the branch's customer ids and passing
+    // them to .in(): Balanga has 413 customers, which builds a ~15,000
+    // character URL and the request fails outright ("fetch failed"), so
+    // Collections Today silently read zero for anyone locked to that branch.
 
     let cashLinesQuery = cashAccountIds.length > 0
       ? supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries!inner(entry_date, source, branch_id)').in('account_id', cashAccountIds)
@@ -117,8 +115,8 @@ export default function AccountingPage() {
       // shouldn't bleed into this branch's balance.
       cashLinesQuery = cashLinesQuery.or(`branch_id.eq.${branchFilter},branch_id.is.null`, { foreignTable: 'journal_entries' });
     }
-    let paymentsQuery = supabase.from('payments').select('amount_paid').eq('payment_date', today);
-    if (branchCustomerIds !== null) paymentsQuery = paymentsQuery.in('customer_id', branchCustomerIds.length > 0 ? branchCustomerIds : NO_MATCH);
+    let paymentsQuery = supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', today);
+    if (branchFilter !== 'all') paymentsQuery = paymentsQuery.eq('customers.branch_id', branchFilter);
     let loansQuery = supabase.from('loans').select('remaining_balance').eq('status', 'active');
     if (branchFilter !== 'all') loansQuery = loansQuery.eq('branch_id', branchFilter);
 
@@ -195,7 +193,10 @@ export default function AccountingPage() {
         // Same branch-aware account resolution as the rest of the ledger —
         // "1000" isn't reliably the right cash account for every branch.
         const branchName = branches.find(b => b.id === entryBranchId)?.name;
-        const cashCode = (await resolveBranchAccountCode('Cash in Vault', branchName)) ?? '1000';
+        const [cashCode, miscExpenseCode] = await Promise.all([
+          resolveBranchAccountCode('Cash in Vault', entryBranchId, branchName),
+          resolveBranchAccountCode('Miscellaneous Expense', entryBranchId, branchName),
+        ]);
         postJournalEntry({
           entryDate: expenseDate,
           description: `Expense — ${form.expense_category}`,
@@ -203,8 +204,8 @@ export default function AccountingPage() {
           createdBy: profile?.id ?? null,
           branchId: entryBranchId,
           lines: [
-            { accountCode: '5000', debit: Number(form.amount), memo: form.description || form.expense_category },
-            { accountCode: cashCode, credit: Number(form.amount), memo: 'Cash paid out' },
+            { accountCode: miscExpenseCode ?? '', debit: Number(form.amount), memo: form.description || form.expense_category },
+            { accountCode: cashCode ?? '', credit: Number(form.amount), memo: 'Cash paid out' },
           ],
         });
         toast({ title: 'Success', description: 'Expense added' });

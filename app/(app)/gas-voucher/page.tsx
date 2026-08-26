@@ -22,6 +22,7 @@ import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-brandi
 import { buildPrintHtml } from '@/lib/print-document';
 import { isSpendableCashAccount } from '@/lib/cash-buckets';
 import { postJournalEntry } from '@/lib/ledger';
+import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { Fuel, Loader2, Download, Printer } from 'lucide-react';
 
@@ -211,6 +212,12 @@ export default function GasVoucherPage() {
       return;
     }
 
+    // Per branch: Dinalupihan gas used to debit Balanga's Transportation
+    // Expense, because '5020' is Balanga's account.
+    const transportCode = await resolveBranchAccountCode(
+      'Transportation Expense', branchId, branches.find(b => b.id === branchId)?.name,
+    );
+
     const gasVoucherLedger = await postJournalEntry({
       entryDate: date,
       description: `Gas Allowance — ${branch?.name ?? ''} — ${formatDate(date)}`,
@@ -220,7 +227,7 @@ export default function GasVoucherPage() {
       createdBy: profile?.id ?? null,
       branchId: branchId || null,
       lines: [
-        { accountCode: '5020', debit: grandTotal, memo: 'Transportation Expense (Gas)' },
+        { accountCode: transportCode ?? '', debit: grandTotal, memo: 'Transportation Expense (Gas)' },
         { accountCode: cashAccountCode, credit: grandTotal, memo: cashAccounts.find(a => a.code === cashAccountCode)?.name ?? 'Cash' },
       ],
     });
