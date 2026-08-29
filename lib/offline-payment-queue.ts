@@ -17,6 +17,13 @@
 
 export interface PendingPayment {
   id: string; // client-generated, used to dedupe if Sync is tapped more than once
+  // Separate from `id` above (which only dedupes THIS queue locally) —
+  // this one is sent to apply_loan_payment itself, so a retry that reaches
+  // the server twice (a lost response before it was ever queued, then this
+  // same attempt queued and synced) is recognized as the same attempt and
+  // the balance is only ever decremented once. See
+  // supabase/add_payment_idempotency_key.sql.
+  idempotencyKey: string;
   loanId: string;
   loanNumber: string;
   customerId: string | null;

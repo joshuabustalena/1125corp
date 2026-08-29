@@ -427,7 +427,7 @@ export default function PaymentsPage() {
   // written to the database yet. Just enough to (a) print a receipt that
   // honestly says "pending" instead of a real balance, and (b) let Sync
   // apply it for real once signal is back.
-  function queueOfflinePayment() {
+  function queueOfflinePayment(idempotencyKeyOverride?: string) {
     // No invented fallback here on purpose: a made-up number is exactly the
     // collision this system replaced, and offline it would be printed and
     // handed to the borrower before anything could catch it.
@@ -446,6 +446,7 @@ export default function PaymentsPage() {
     const amountPaidNum = Number(form.amount_paid);
 
     const pending = queuePendingPayment({
+      idempotencyKey: idempotencyKeyOverride ?? ((typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`),
       loanId: form.loan_id,
       loanNumber: selectedLoan?.loan_number ?? '—',
       customerId: selectedLoan?.customer_id ?? null,
@@ -509,6 +510,14 @@ export default function PaymentsPage() {
 
     setSaving(true);
 
+    // One key per submit attempt, carried through to the offline queue if
+    // this falls back there — see apply_loan_payment's idempotency check
+    // (supabase/add_payment_idempotency_key.sql) for why: without this, a
+    // lost RPC response (server applied it, client never saw the reply)
+    // looked exactly like a real failure, got queued for retry, and
+    // deducted the same payment a second time on sync.
+    const idempotencyKey = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     const orNumber = await nextOrNumberOnline();
     if (!orNumber) {
       toast({ title: 'Error', description: 'Hindi makakuha ng OR number. Subukan ulit.', variant: 'destructive' });
@@ -526,7 +535,7 @@ export default function PaymentsPage() {
     // reads-and-writes as one row-locked operation, so the balance it
     // returns is always correct regardless of how old the local state is.
     const { data: rpcResult, error: rpcError } = await supabase
-      .rpc('apply_loan_payment', { p_loan_id: form.loan_id, p_amount: Number(form.amount_paid) })
+      .rpc('apply_loan_payment', { p_loan_id: form.loan_id, p_amount: Number(form.amount_paid), p_idempotency_key: idempotencyKey })
       .single();
     if (rpcError || !rpcResult) {
       // A network-level failure (no signal, timed out mid-request, etc.)
@@ -538,7 +547,7 @@ export default function PaymentsPage() {
       const looksLikeNetworkFailure = !!rpcError && !(rpcError as any).code;
       if (looksLikeNetworkFailure) {
         setSaving(false);
-        queueOfflinePayment();
+        queueOfflinePayment(idempotencyKey);
         return;
       }
       toast({ title: 'Error', description: rpcError?.message ?? 'Could not update the loan balance', variant: 'destructive' });
@@ -547,6 +556,26 @@ export default function PaymentsPage() {
     }
     const balanceBeforePayment = Number((rpcResult as any).previous_balance);
     const authoritativeNewBalance = Number((rpcResult as any).new_balance);
+
+    if ((rpcResult as any).already_applied) {
+      // The BALANCE for this exact attempt was already applied. That does
+      // not mean the payment was fully recorded — see the migration: in the
+      // lost-response case the client never got as far as inserting the
+      // receipt/payment rows. So only stop here if a payments row for this
+      // key genuinely exists; otherwise fall through and record it, using
+      // the balance the original call produced (returned above).
+      const { data: existingPayment } = await supabase
+        .from('payments').select('id').eq('idempotency_key', idempotencyKey).maybeSingle();
+      if (existingPayment) {
+        toast({ title: 'Success', description: 'Payment already recorded.' });
+        setForm({ ...form, loan_id: '', amount_paid: '', payment_date: new Date().toISOString().split('T')[0], notes: '' });
+        setDialogOpen(false);
+        setSaving(false);
+        loadPayments();
+        loadLoans();
+        return;
+      }
+    }
 
     // Create receipt first
     const { data: receipt, error: receiptError } = await supabase.from('receipts').insert({
@@ -572,6 +601,7 @@ export default function PaymentsPage() {
       customer_id: selectedLoan?.customer_id ?? null,
       collector_id: collectorIdForPosting,
       receipt_id: receipt.id,
+      idempotency_key: idempotencyKey,
       amount_paid: Number(form.amount_paid),
       principal: 0,
       interest: 0,
@@ -685,15 +715,32 @@ export default function PaymentsPage() {
 
       if (!item.balanceApplied) {
         const { data: rpcResult, error: rpcError } = await supabase
-          .rpc('apply_loan_payment', { p_loan_id: item.loanId, p_amount: item.amount })
+          .rpc('apply_loan_payment', { p_loan_id: item.loanId, p_amount: item.amount, p_idempotency_key: item.idempotencyKey })
           .single();
         if (rpcError || !rpcResult) {
           failed++;
           updatePendingPayment(item.id, { syncError: rpcError?.message ?? 'Could not update the loan balance' });
           continue;
         }
+        // already_applied here is the normal, expected outcome for anything
+        // queued by the network-failure fallback in handleSubmit: the
+        // original online call really did apply the balance before its
+        // response was lost. The RPC returns that original result and
+        // doesn't deduct again. Either way newBalance is authoritative.
         newBalance = Number((rpcResult as any).new_balance);
         updatePendingPayment(item.id, { balanceApplied: true, appliedBalance: newBalance, syncError: null });
+      }
+
+      // Whether or not the balance was applied on an earlier attempt, the
+      // receipt/payment may or may not have been written — a lost response
+      // specifically means it wasn't. Keyed off idempotency_key so the same
+      // attempt is never recorded twice, and never silently dropped either.
+      const { data: existingPayment } = await supabase
+        .from('payments').select('id').eq('idempotency_key', item.idempotencyKey).maybeSingle();
+      if (existingPayment) {
+        succeeded++;
+        removePendingPayment(item.id);
+        continue;
       }
 
       const { data: receipt, error: receiptError } = await supabase.from('receipts').insert({
@@ -718,6 +765,7 @@ export default function PaymentsPage() {
         customer_id: item.customerId,
         collector_id: item.collectorId,
         receipt_id: receipt.id,
+        idempotency_key: item.idempotencyKey,
         amount_paid: item.amount,
         principal: 0,
         interest: 0,
