@@ -119,7 +119,7 @@ export default function PayrollPage() {
   const [specialLoanBalances, setSpecialLoanBalances] = useState<Record<string, Record<string, number>>>({});
   const [specialLoanDefaults, setSpecialLoanDefaults] = useState<Record<string, Record<string, number>>>({});
   const [editDeductionsTarget, setEditDeductionsTarget] = useState<any>(null);
-  const [editDeductionsForm, setEditDeductionsForm] = useState({ sss_loan: '', pag_ibig_loan: '', service_vehicle: '', uniform: '', cash_shortage: '' });
+  const [editDeductionsForm, setEditDeductionsForm] = useState({ sss_loan: '', pag_ibig_loan: '', service_vehicle: '', uniform: '', cash_shortage: '', incentive: '' });
   const [savingDeductions, setSavingDeductions] = useState(false);
   const [activeTab, setActiveTab] = useState<'records' | 'voucher' | 'thirteenth'>('records');
   const [thirteenthYear, setThirteenthYear] = useState(String(new Date().getFullYear()));
@@ -570,9 +570,10 @@ export default function PayrollPage() {
       const sss = resolveDeduction('sss_deduction', 4.5, fullPeriodBasic);
       const philhealth = resolveDeduction('philhealth_deduction', 3.5, fullPeriodBasic);
       const pagIbig = resolveDeduction('pagibig_deduction', 2, fullPeriodBasic);
-      // Incentive temporarily disabled per client request — kept at 0 until
-      // turned back on. Retention is 25% of the incentive, so it zeroes out
-      // along with it automatically.
+      // No fixed formula — like the special-loan deductions below, an
+      // approver enters the incentive manually per cutoff via "Pay
+      // Adjustments" on the generated row. Starts at 0 here; retention is
+      // always 25% of whatever incentive ends up entered.
       const incentive = 0;
       const retention = incentive * 0.25;
       const loanDeduction = (activeLoans ?? [])
@@ -753,6 +754,7 @@ export default function PayrollPage() {
       const saved = Number(row[key]) || 0;
       initial[key] = saved > 0 ? String(saved) : (defaults[key] > 0 ? String(defaults[key]) : '');
     }
+    initial.incentive = Number(row.incentive) > 0 ? String(row.incentive) : '';
     setEditDeductionsForm(initial as typeof editDeductionsForm);
   }
 
@@ -765,11 +767,13 @@ export default function PayrollPage() {
     const serviceVehicle = Number(editDeductionsForm.service_vehicle) || 0;
     const uniform = Number(editDeductionsForm.uniform) || 0;
     const cashShortage = Number(editDeductionsForm.cash_shortage) || 0;
+    const incentive = Number(editDeductionsForm.incentive) || 0;
+    const incentiveRetention = Math.round(incentive * 0.25 * 100) / 100;
 
-    const totalDeductions = Number(row.sss) + Number(row.philhealth) + Number(row.pag_ibig) + Number(row.incentive_retention)
+    const totalDeductions = Number(row.sss) + Number(row.philhealth) + Number(row.pag_ibig) + incentiveRetention
       + Number(row.loan_deduction || 0) + Number(row.late_deduction || 0) + Number(row.carry_over_deduction || 0)
       + sssLoan + pagIbigLoan + serviceVehicle + uniform + cashShortage;
-    const grossPay = Number(row.basic_salary) + Number(row.incentive) + Number(row.birthday_bonus || 0) + Number(row.leave_pay || 0);
+    const grossPay = Number(row.basic_salary) + incentive + Number(row.birthday_bonus || 0) + Number(row.leave_pay || 0);
     const netPay = Math.round((grossPay - totalDeductions) * 100) / 100;
 
     const { error } = await supabase.from('payroll').update({
@@ -778,6 +782,8 @@ export default function PayrollPage() {
       service_vehicle: serviceVehicle,
       uniform,
       cash_shortage: cashShortage,
+      incentive,
+      incentive_retention: incentiveRetention,
       net_pay: netPay,
     }).eq('id', row.id);
 
@@ -1023,9 +1029,20 @@ export default function PayrollPage() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
-      pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        // Clamped to the page, not just scaled to its width — a bare
+        // width-only scale let content taller than the page (in proportion)
+        // print past the bottom edge with nothing to stop it, since jsPDF
+        // draws the image at whatever height it's given regardless of
+        // whether that fits. Shrinking (never cropping) on whichever
+        // dimension is tighter, and centering horizontally if that ends up
+        // narrower than the page, is the same fix already applied to the
+        // Payslip download.
+      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+      const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+      const imgWidth = contentWidthPt * scaleToFit;
+      const imgHeight = contentHeightPt * scaleToFit;
+      const xOffset = margin + (usableWidth - imgWidth) / 2;
+      pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
       pdf.save(`13th-month-voucher-${voucherNumberOverride ?? `${thirteenthYear}-${thirteenthCycle}`}.pdf`);
     } catch (err: any) {
       toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the 13th Month voucher PDF', variant: 'destructive' });
@@ -1288,9 +1305,20 @@ export default function PayrollPage() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
-      pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        // Clamped to the page, not just scaled to its width — a bare
+        // width-only scale let content taller than the page (in proportion)
+        // print past the bottom edge with nothing to stop it, since jsPDF
+        // draws the image at whatever height it's given regardless of
+        // whether that fits. Shrinking (never cropping) on whichever
+        // dimension is tighter, and centering horizontally if that ends up
+        // narrower than the page, is the same fix already applied to the
+        // Payslip download.
+      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+      const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+      const imgWidth = contentWidthPt * scaleToFit;
+      const imgHeight = contentHeightPt * scaleToFit;
+      const xOffset = margin + (usableWidth - imgWidth) / 2;
+      pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
       pdf.save(`payroll-voucher-${voucherNumberOverride ?? printedBranchName ?? ''}-${printedPayDate}.pdf`);
     } catch (err: any) {
       toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the payroll voucher PDF', variant: 'destructive' });
@@ -1356,7 +1384,7 @@ export default function PayrollPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Payroll" description={canManagePayroll ? 'Generate and manage employee payroll' : 'Ang mga approved mong payslip'}>
+      <PageHeader title="Payroll" description={canManagePayroll ? 'Generate and manage employee payroll' : 'Your approved payslips'}>
         {activeTab === 'records' && (
           <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
         )}
@@ -1436,7 +1464,7 @@ export default function PayrollPage() {
                   that instead of the manager-facing "No payroll records". */}
               <p className="text-sm text-muted-foreground">
                 {!canManagePayroll
-                  ? 'Wala ka pang approved na payslip. Lalabas dito ang payslip mo kapag na-approve na ito ng Administrator.'
+                  ? "You don't have any approved payslips yet. They'll show up here once an Administrator approves them."
                   : recordsEmployeeFilter === 'all' ? 'No payroll records' : 'No payroll records for this employee'}
               </p>
             </div>
@@ -1469,7 +1497,7 @@ export default function PayrollPage() {
                         </Button>
                         {canManagePayroll && p.status === 'pending' && (
                           <Button variant="outline" size="sm" onClick={() => openEditDeductions(p)}>
-                            <Pencil className="w-3.5 h-3.5 mr-1.5" />Deductions
+                            <Pencil className="w-3.5 h-3.5 mr-1.5" />Adjustments
                           </Button>
                         )}
                         {canManagePayroll && p.status === 'pending' && (
@@ -1524,7 +1552,7 @@ export default function PayrollPage() {
                             <Receipt className="w-4 h-4" />
                           </Button>
                           {canManagePayroll && p.status === 'pending' && (
-                            <Button variant="ghost" size="icon" onClick={() => openEditDeductions(p)} title="Edit deductions">
+                            <Button variant="ghost" size="icon" onClick={() => openEditDeductions(p)} title="Edit pay adjustments (incentive, retention, deductions)">
                               <Pencil className="w-4 h-4" />
                             </Button>
                           )}
@@ -1928,12 +1956,25 @@ export default function PayrollPage() {
       <Dialog open={!!editDeductionsTarget} onOpenChange={(open) => !open && setEditDeductionsTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Deductions</DialogTitle>
+            <DialogTitle>Edit Pay Adjustments</DialogTitle>
             <DialogDescription>
-              {editDeductionsTarget?.employees?.first_name} {editDeductionsTarget?.employees?.last_name} — no fixed formula for these, enter what's actually being deducted this cutoff.
+              {editDeductionsTarget?.employees?.first_name} {editDeductionsTarget?.employees?.last_name} — no fixed formula for these, enter what's actually being applied this cutoff.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-xs">Incentive (addition)</Label>
+              <Input
+                type="number"
+                value={editDeductionsForm.incentive}
+                onChange={(e) => setEditDeductionsForm(f => ({ ...f, incentive: e.target.value }))}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Incentive Retention (deduction, 25% — auto)</Label>
+              <Input type="number" value={(Math.round((Number(editDeductionsForm.incentive) || 0) * 0.25 * 100) / 100) || ''} disabled placeholder="0.00" />
+            </div>
             {SPECIAL_LOAN_LABELS.map(({ key, label }) => {
               const balance = editDeductionsTarget ? (specialLoanBalances[editDeductionsTarget.employee_id]?.[key] ?? 0) : 0;
               return (
