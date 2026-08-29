@@ -114,12 +114,25 @@ export default function JournalEntriesPage() {
     setLines(lines.map((l, idx) => (idx === i ? { ...l, [field]: value } : l)));
   }
 
-  const totalDebit = lines.reduce((s, l) => s + Number(l.debit || 0), 0);
-  const totalCredit = lines.reduce((s, l) => s + Number(l.credit || 0), 0);
-  const isBalanced = totalDebit === totalCredit && totalDebit > 0;
+  // Only lines that actually have an account picked; a line with an amount
+  // typed but no account selected is exactly what postJournalEntry's own
+  // "missing account" rule guards against elsewhere, but this form had no
+  // equivalent — it let totals look balanced from the raw amounts, then
+  // dropped the account-less line at submit, saving a real entry short.
+  const hasAmount = (l: Line) => Number(l.debit) > 0 || Number(l.credit) > 0;
+  const incompleteLines = lines.filter(l => hasAmount(l) && !l.account_id);
+  const validLines = lines.filter(l => l.account_id && hasAmount(l));
+  const totalDebit = validLines.reduce((s, l) => s + Number(l.debit || 0), 0);
+  const totalCredit = validLines.reduce((s, l) => s + Number(l.credit || 0), 0);
+  const isBalanced = incompleteLines.length === 0 && validLines.length >= 2
+    && totalDebit === totalCredit && totalDebit > 0;
 
   async function handleSubmitEntry(e: React.FormEvent) {
     e.preventDefault();
+    if (incompleteLines.length > 0) {
+      toast({ title: 'Missing account', description: 'Every line with an amount needs an account selected — pick one or clear the amount.', variant: 'destructive' });
+      return;
+    }
     if (!isBalanced) {
       toast({ title: 'Not balanced', description: 'Total debits must equal total credits before this entry can be saved.', variant: 'destructive' });
       return;
@@ -141,18 +154,22 @@ export default function JournalEntriesPage() {
       return;
     }
 
-    const linesPayload = lines
-      .filter(l => l.account_id && (Number(l.debit) > 0 || Number(l.credit) > 0))
-      .map(l => ({
-        journal_entry_id: entry.id,
-        account_id: l.account_id,
-        debit: Number(l.debit) || 0,
-        credit: Number(l.credit) || 0,
-        memo: l.memo || null,
-      }));
+    const linesPayload = validLines.map(l => ({
+      journal_entry_id: entry.id,
+      account_id: l.account_id,
+      debit: Number(l.debit) || 0,
+      credit: Number(l.credit) || 0,
+      memo: l.memo || null,
+    }));
 
-    const { error: linesError } = await supabase.from('journal_entry_lines').insert(linesPayload);
+    const { error: linesError } = linesPayload.length > 0
+      ? await supabase.from('journal_entry_lines').insert(linesPayload)
+      : { error: { message: 'No lines to save' } as any };
     if (linesError) {
+      // Don't leave a headless entry behind — this is what let two blank
+      // "Manual" entries sit in the ledger with a description and nothing
+      // else.
+      await supabase.from('journal_entries').delete().eq('id', entry.id);
       toast({ title: 'Error', description: linesError.message, variant: 'destructive' });
     } else {
       toast({ title: 'Success', description: 'Journal entry recorded' });
@@ -316,7 +333,7 @@ export default function JournalEntriesPage() {
             <div className={`flex justify-between text-sm p-3 rounded-lg ${isBalanced ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
               <span>Total Debit: {formatCurrency(totalDebit)}</span>
               <span>Total Credit: {formatCurrency(totalCredit)}</span>
-              <span>{isBalanced ? 'Balanced' : 'Not balanced'}</span>
+              <span>{incompleteLines.length > 0 ? 'Select an account for every amount' : isBalanced ? 'Balanced' : 'Not balanced'}</span>
             </div>
 
             <div className="space-y-2">

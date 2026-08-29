@@ -124,15 +124,26 @@ export default function RemittancePage() {
     a.name.toLowerCase().includes('cash') && !a.name.toLowerCase().includes('petty cash')
   );
 
-  const totalDebit = lines.reduce((s, l) => s + Number(l.amount || 0), 0);
+  // Same bug class as Journal Entries: a line with an amount typed but no
+  // cash account picked used to still count toward totalDebit, so the split
+  // could show "Matches" and let Save through, then get silently dropped at
+  // submit — leaving a remittance entry with ONLY the automatic Loans
+  // Receivable credit and no debit side at all (JE-2026-217886).
+  const incompleteLines = lines.filter(l => Number(l.amount) > 0 && !l.account_id);
+  const validLines = lines.filter(l => l.account_id && Number(l.amount) > 0);
+  const totalDebit = validLines.reduce((s, l) => s + Number(l.amount || 0), 0);
   // Every peso collected has to land in a cash account — the split can't
   // fall short of or exceed the actual amount being remitted.
   const matchesRemittance = totalDebit > 0 && Math.abs(totalDebit - form.amount) < 0.01;
-  const canSave = matchesRemittance;
+  const canSave = incompleteLines.length === 0 && matchesRemittance;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.collector_id || !canSave) return;
+    if (incompleteLines.length > 0) {
+      toast({ title: 'Missing account', description: 'Every line with an amount needs a cash account selected.', variant: 'destructive' });
+      return;
+    }
     setSaving(true);
 
     // Same branch-aware resolution as loan disbursement / the payroll
@@ -181,24 +192,35 @@ export default function RemittancePage() {
       return;
     }
 
-    // Debit whichever cash account(s) the user picked; the credit side
-    // (Loans Receivable) is always automatic — a remittance is collections
-    // coming in, which pays down what customers owe, never a manual choice.
-    const linesPayload = lines
-      .filter(l => l.account_id && Number(l.amount) > 0)
-      .map(l => ({
+    // Debit whichever cash account(s) the user picked (validLines only —
+    // already known to all have an account); the credit side (Loans
+    // Receivable) is always automatic — a remittance is collections coming
+    // in, which pays down what customers owe, never a manual choice.
+    const linesPayload = [
+      ...validLines.map(l => ({
         journal_entry_id: entry.id,
         account_id: l.account_id,
         debit: Number(l.amount) || 0,
         credit: 0,
-      }));
-    linesPayload.push({
-      journal_entry_id: entry.id,
-      account_id: loansReceivableAccount.id,
-      debit: 0,
-      credit: totalDebit,
-    });
-    await supabase.from('journal_entry_lines').insert(linesPayload);
+      })),
+      {
+        journal_entry_id: entry.id,
+        account_id: loansReceivableAccount.id,
+        debit: 0,
+        credit: totalDebit,
+      },
+    ];
+    const { error: linesError } = await supabase.from('journal_entry_lines').insert(linesPayload);
+    if (linesError) {
+      // Don't leave a one-sided ledger entry behind — delete the header so
+      // this doesn't join JE-2026-217886 as a credit-only orphan.
+      await supabase.from('journal_entries').delete().eq('id', entry.id);
+      toast({ title: 'Remittance saved, but ledger post failed', description: linesError.message, variant: 'destructive' });
+      setDialogOpen(false);
+      loadData();
+      setSaving(false);
+      return;
+    }
 
     toast({ title: 'Success', description: 'Remittance recorded' });
     setDialogOpen(false);
@@ -355,7 +377,7 @@ export default function RemittancePage() {
             <div className={`flex flex-wrap justify-between gap-2 text-sm p-3 rounded-lg ${canSave ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
               <span>Total: {formatCurrency(totalDebit)}</span>
               <span>Remittance Amount: {formatCurrency(form.amount)}</span>
-              <span>{canSave ? 'Matches' : 'Does not match remittance amount'}</span>
+              <span>{incompleteLines.length > 0 ? 'Select an account for every amount' : canSave ? 'Matches' : 'Does not match remittance amount'}</span>
             </div>
 
             <div className="space-y-2">
