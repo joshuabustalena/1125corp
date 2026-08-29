@@ -18,13 +18,14 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
 import { notifyRoles } from '@/lib/notify';
 import { SPECIAL_LOAN_LABELS, specialLoanLabel } from '@/lib/special-loans';
-import { Landmark, Plus, Download, Loader2, CalendarDays, ChevronLeft, ChevronRight, Pencil, Trash2, Search, Wallet } from 'lucide-react';
+import { Landmark, Plus, Download, Loader2, CalendarDays, ChevronLeft, ChevronRight, Pencil, Trash2, Search, Wallet, ShieldCheck } from 'lucide-react';
 
 export default function EmployeeLoansPage() {
   const { toast } = useToast();
@@ -35,7 +36,7 @@ export default function EmployeeLoansPage() {
   const isBranchManager = profile?.role_name === 'Branch Manager';
   const [loans, setLoans] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
-  const [myEmployee, setMyEmployee] = useState<{ id: string; position?: string | null; branch_id?: string | null } | null>(null);
+  const [myEmployee, setMyEmployee] = useState<{ id: string; position?: string | null; branch_id?: string | null; special_loan_access?: boolean } | null>(null);
   // Each branch sets its own employee-loan ceiling in Settings > Loan.
   const [branchEmpLimits, setBranchEmpLimits] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -54,7 +55,8 @@ export default function EmployeeLoansPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [appliedFrom, setAppliedFrom] = useState('');
   const [appliedTo, setAppliedTo] = useState('');
-  const [activeTab, setActiveTab] = useState<'employee' | 'special'>('employee');
+  const [activeTab, setActiveTab] = useState<'employee' | 'special' | 'access'>('employee');
+  const [savingAccessId, setSavingAccessId] = useState<string | null>(null);
   const [specialLoans, setSpecialLoans] = useState<any[]>([]);
   const [specialDialogOpen, setSpecialDialogOpen] = useState(false);
   const [specialForm, setSpecialForm] = useState({ employee_id: '', loan_type: 'sss_loan', original_amount: '', deduction_amount: '', notes: '' });
@@ -75,9 +77,21 @@ export default function EmployeeLoansPage() {
   async function loadSpecialLoans() {
     let q = supabase.from('employee_special_loans').select('*, employees(first_name, last_name, branch_id)').order('created_at', { ascending: false });
     const { data } = await q;
-    const scoped = isBranchManager && profile?.branch_id
-      ? (data ?? []).filter((l: any) => l.employees?.branch_id === profile.branch_id)
-      : (data ?? []);
+    let scoped = data ?? [];
+    if (!canApprove) {
+      // Same self-scoping the "Employee Loans" tab already applies (see
+      // load() above) — an employee with access to this page saw every
+      // other employee's SSS/Pag-IBIG/Service Vehicle/Uniform/Cash Shortage
+      // balance here, because only the Branch Manager case was ever
+      // filtered. Resolved independently rather than reading myEmployee
+      // state, since this runs in the same effect as load() and can't
+      // assume that state is set yet.
+      const { data: emp } = await supabase.from('employees').select('id').eq('profile_id', profile?.id ?? '').maybeSingle();
+      const empId = emp?.id ?? '00000000-0000-0000-0000-000000000000';
+      scoped = scoped.filter((l: any) => l.employee_id === empId);
+    } else if (isBranchManager && profile?.branch_id) {
+      scoped = scoped.filter((l: any) => l.employees?.branch_id === profile.branch_id);
+    }
     setSpecialLoans(scoped);
   }
 
@@ -103,6 +117,17 @@ export default function EmployeeLoansPage() {
       loadSpecialLoans();
     }
     setSpecialSaving(false);
+  }
+
+  async function handleToggleSpecialLoanAccess(employeeId: string, checked: boolean) {
+    setSavingAccessId(employeeId);
+    const { error } = await supabase.from('employees').update({ special_loan_access: checked }).eq('id', employeeId);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      setEmployees(prev => prev.map(e => (e.id === employeeId ? { ...e, special_loan_access: checked } : e)));
+    }
+    setSavingAccessId(null);
   }
 
   function openEditSpecialLoan(l: any) {
@@ -144,7 +169,7 @@ export default function EmployeeLoansPage() {
   }
 
   async function loadEmployees() {
-    let q = supabase.from('employees').select('id, first_name, last_name, salary, position, branch_id').eq('status', 'active').order('last_name').order('first_name');
+    let q = supabase.from('employees').select('id, first_name, last_name, salary, position, branch_id, special_loan_access').eq('status', 'active').order('last_name').order('first_name');
     // A Branch Manager can only apply on behalf of their own branch's staff.
     if (isBranchManager && profile?.branch_id) q = q.eq('branch_id', profile.branch_id);
     const { data } = await q;
@@ -159,7 +184,7 @@ export default function EmployeeLoansPage() {
     setBranchEmpLimits(Object.fromEntries((brs ?? []).map((b: any) => [b.id, Number(b.default_employee_loan_limit) || 15000])));
     let empId: string | null = null;
     if (!canApprove) {
-      const { data: emp } = await supabase.from('employees').select('id, position, branch_id').eq('profile_id', profile?.id ?? '').maybeSingle();
+      const { data: emp } = await supabase.from('employees').select('id, position, branch_id, special_loan_access').eq('profile_id', profile?.id ?? '').maybeSingle();
       setMyEmployee(emp);
       empId = emp?.id ?? '00000000-0000-0000-0000-000000000000';
     }
@@ -405,7 +430,7 @@ export default function EmployeeLoansPage() {
             </Button>
           </>
         ) : (
-          canApprove && (
+          activeTab === 'special' && canApprove && (
             <Button size="sm" onClick={() => setSpecialDialogOpen(true)}>
               <Plus className="w-4 h-4 mr-2" />
               Add Special Loan
@@ -414,10 +439,20 @@ export default function EmployeeLoansPage() {
         )}
       </PageHeader>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'employee' | 'special')}>
-        <TabsList className="grid grid-cols-2 w-full sm:w-auto">
+      {/* "Special Loans" only shows for someone who can approve (sees
+          everyone's) or has been individually granted special_loan_access
+          (sees only their own — see loadSpecialLoans). Everyone else never
+          sees the tab exists. "Access" is the Admin-only checklist that
+          grants that per-employee. */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'employee' | 'special' | 'access')}>
+        <TabsList className="w-full sm:w-auto" style={{ display: 'grid', gridTemplateColumns: `repeat(${1 + (canApprove || myEmployee?.special_loan_access ? 1 : 0) + (isAdmin ? 1 : 0)}, minmax(0, 1fr))` }}>
           <TabsTrigger value="employee">Employee Loans</TabsTrigger>
-          <TabsTrigger value="special"><Wallet className="w-4 h-4 mr-1.5" />Special Loans</TabsTrigger>
+          {(canApprove || myEmployee?.special_loan_access) && (
+            <TabsTrigger value="special"><Wallet className="w-4 h-4 mr-1.5" />Special Loans</TabsTrigger>
+          )}
+          {isAdmin && (
+            <TabsTrigger value="access"><ShieldCheck className="w-4 h-4 mr-1.5" />Special Loan Access</TabsTrigger>
+          )}
         </TabsList>
 
       <TabsContent value="employee" className="space-y-6 pt-4">
@@ -613,6 +648,37 @@ export default function EmployeeLoansPage() {
         </CardContent>
       </Card>
       </TabsContent>
+
+      {isAdmin && (
+        <TabsContent value="access" className="pt-4">
+          <Card className="glass-card border-border">
+            <CardContent className="p-0">
+              <div className="p-4 border-b border-border">
+                <p className="text-sm font-medium">Special Loans access</p>
+                <p className="text-xs text-muted-foreground">
+                  Checked employees can see the "Special Loans" tab on their own account (their own SSS Loan, Pag-IBIG Loan, Service Vehicle, Uniform, and Cash Shortage balances only — never anyone else's). Unchecked, the tab doesn't appear for them at all.
+                </p>
+              </div>
+              <div className="divide-y divide-border">
+                {employees.map(e => (
+                  <label key={e.id} className="flex items-center gap-3 p-3 px-4 cursor-pointer hover:bg-secondary/30">
+                    <Checkbox
+                      checked={!!e.special_loan_access}
+                      disabled={savingAccessId === e.id}
+                      onCheckedChange={(checked) => handleToggleSpecialLoanAccess(e.id, checked === true)}
+                    />
+                    <span className="text-sm">{e.first_name} {e.last_name}</span>
+                    {savingAccessId === e.id && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+                  </label>
+                ))}
+                {employees.length === 0 && (
+                  <p className="text-sm text-muted-foreground text-center py-8">No active employees</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      )}
       </Tabs>
 
       <Dialog open={specialDialogOpen} onOpenChange={setSpecialDialogOpen}>
