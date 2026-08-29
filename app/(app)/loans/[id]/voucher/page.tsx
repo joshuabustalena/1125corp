@@ -92,12 +92,14 @@ export default function VoucherPage() {
   };
   const branding = getDocumentBranding(loan.branches?.name);
 
-  // Sized up from the original 12px/6px-10px — at this document's actual
-  // content length, printing at full page width with the old small type
-  // left most of the physical page blank below the signature block.
-  // Bigger text and roomier cells make it actually fill the page instead.
-  const vTable: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 14 };
-  const vCell: React.CSSProperties = { border: '1px solid #000', padding: '9px 14px', verticalAlign: 'middle' };
+  // Back down to 12px/6x10px. A later pass sized this up to 14-21px/9x14px
+  // to fill out the page, but at that size the content ran taller than the
+  // physical page and the bottom got cut off in the downloaded PDF — the
+  // jsPDF export had no height clamp at all (fixed separately, in
+  // handleDownload below), and even with that fixed this size left very
+  // little headroom. Client's own ask, and it fits comfortably now.
+  const vTable: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 12 };
+  const vCell: React.CSSProperties = { border: '1px solid #000', padding: '6px 10px', verticalAlign: 'middle' };
   const vCellCenter: React.CSSProperties = { ...vCell, textAlign: 'center' };
   const vHeader: React.CSSProperties = { ...vCellCenter, fontWeight: 700 };
   const vItalic: React.CSSProperties = { ...vCellCenter, fontStyle: 'italic' };
@@ -114,7 +116,7 @@ export default function VoucherPage() {
       )}
     </span>
   );
-  const pageStyle: React.CSSProperties = { width: 780, background: '#fff', color: '#111', padding: 40, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 14 };
+  const pageStyle: React.CSSProperties = { width: 780, background: '#fff', color: '#111', padding: 40, fontFamily: '"Times New Roman", Calibri, serif', fontSize: 12 };
 
   async function handlePrint() {
     const refs = [page1Ref, page2Ref].filter(r => r.current);
@@ -160,10 +162,23 @@ export default function VoucherPage() {
       for (let i = 0; i < refs.length; i++) {
         const canvas = await html2canvas(refs[i].current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
         const imgData = canvas.toDataURL('image/png');
-        const imgWidth = usableWidth;
-        const imgHeight = ((canvas.height / 2) * pxToPt / ((canvas.width / 2) * pxToPt)) * imgWidth;
+        // Clamped to the page, not just scaled to its width — a bare
+        // width-only scale let content taller than the page (in proportion)
+        // print past the bottom edge with nothing to stop it, since jsPDF
+        // draws the image at whatever height it's given regardless of
+        // whether that fits. Shrinking (never cropping) on whichever
+        // dimension is tighter, and centering horizontally if that ends up
+        // narrower than the page, is the same fix already applied to the
+        // Payslip download.
+        const contentWidthPt = (canvas.width / 2) * pxToPt;
+        const contentHeightPt = (canvas.height / 2) * pxToPt;
+        const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+        const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+        const imgWidth = contentWidthPt * scaleToFit;
+        const imgHeight = contentHeightPt * scaleToFit;
+        const xOffset = margin + (usableWidth - imgWidth) / 2;
         if (i > 0) pdf.addPage();
-        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
       }
       pdf.save(`voucher-${voucherData.voucherNumber}.pdf`);
     } catch (err: any) {
@@ -193,14 +208,14 @@ export default function VoucherPage() {
           {/* PAGE 1 — Loan Release Cash Voucher */}
           <div ref={page1Ref} style={pageStyle}>
             <div style={{ textAlign: 'center', marginBottom: 22 }}>
-              <div style={{ fontWeight: 700, fontSize: 21, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0B1F3A' }}>{branding.headerAddress.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0B1F3A' }}>CELL PHONE NUMBER: {branding.contact}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.headerAddress.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CELL PHONE NUMBER: {branding.contact}</div>
             </div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 21, color: '#0B1F3A', marginBottom: 16, textDecoration: 'underline' }}>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: '#0B1F3A', marginBottom: 16, textDecoration: 'underline' }}>
               LOAN RELEASE CASH VOUCHER
             </div>
-            <div style={{ display: 'flex', gap: 24, marginBottom: 14, fontSize: 15 }}>
+            <div style={{ display: 'flex', gap: 24, marginBottom: 14, fontSize: 12 }}>
               <span>{vCheckbox(voucherData.isRenewal)}Renewal</span>
               <span>{vCheckbox(!voucherData.isRenewal)}New Loan Account</span>
             </div>
@@ -210,23 +225,23 @@ export default function VoucherPage() {
                 <tr><td style={vHeader}>Name of Borrower</td><td style={vHeader}>Net Loan Proceeds</td></tr>
                 <tr><td style={vCellCenter}>{voucherData.borrowerName}</td><td style={vCellCenter}>{formatCurrency(voucherData.netProceeds)}</td></tr>
                 <tr><td style={vCell}>Disbursed by:</td><td style={vCell}>Received by:</td></tr>
-                <tr style={{ height: 54 }}><td style={vCell}>&nbsp;</td><td style={vCell}>&nbsp;</td></tr>
+                <tr style={{ height: 38 }}><td style={vCell}>&nbsp;</td><td style={vCell}>&nbsp;</td></tr>
                 <tr><td style={vCellCenter}>{voucherData.fieldCollectorName}</td><td style={vCellCenter}>{voucherData.borrowerName}</td></tr>
                 <tr><td style={vItalic}>Field Collector</td><td style={vItalic}>Borrower</td></tr>
               </tbody>
             </table>
 
-            <p style={{ fontWeight: 700, fontSize: 14, marginTop: 24, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
+            <p style={{ fontWeight: 700, fontSize: 12, marginTop: 24, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
               I further certify that this Cash Voucher constitutes sufficient proof and evidence of my receipt of the net loan proceeds. I hereby waive any claim, demand, complaint, or action against {COMPANY_NAME_DISPLAY} for any alleged cash shortage, deficiency, or non-receipt of the loan proceeds after the execution and signing of this document.
             </p>
-            <p style={{ fontStyle: 'italic', fontSize: 13, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 8 }}>
+            <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 8 }}>
               (Pinatutunayan ko na ang Cash Voucher na ito ay sapat na katibayan at patunay na aking natanggap ang nitong halaga ng aking loan. Nauunawaan ko na hindi maari ang anumang paghahabol, reklamo, demanda, o anumang aksyon laban sa {COMPANY_NAME_DISPLAY} kaugnay ng anumang kakulangan sa salapi, diperensya, o hindi pagtanggap ng loan proceeds matapos kong lagdaan at maisakatuparan ang dokumentong ito)
             </p>
 
-            <p style={{ fontWeight: 700, fontSize: 14, marginTop: 18, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
+            <p style={{ fontWeight: 700, fontSize: 12, marginTop: 18, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
               The amount of my loan shall be reflected in the Field Collector's Customer List together with the corresponding beginning balance. Attached hereto are copies of the Loan Agreement and Kasunduan, which shall serve as proof of the proper and lawful release of the loan proceeds by the duly authorized collectors of {COMPANY_NAME_DISPLAY}.
             </p>
-            <p style={{ fontStyle: 'italic', fontSize: 13, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 8 }}>
+            <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 8 }}>
               (Ang halaga ng aking loan ay makikita sa Customer List ng Field Collector kasama ang kaukulang panimulang balanse. Nakalakip dito ang mga kopya ng Loan Agreement at Kasunduan na magsisilbing patunay ng maayos, tama, at naaayon sa batas na pagpapalabas ng loan proceeds ng mga awtorisadong kolektor ng {COMPANY_NAME_DISPLAY}.)
             </p>
 
@@ -253,13 +268,13 @@ export default function VoucherPage() {
               </table>
             )}
 
-            <p style={{ color: '#C00000', fontWeight: 700, fontSize: 14, marginTop: 22 }}>
+            <p style={{ color: '#C00000', fontWeight: 700, fontSize: 12, marginTop: 22 }}>
               Paalala sa mga customers ng 1125 Credit Collection Services:
             </p>
-            <p style={{ fontSize: 13, textAlign: 'justify', textIndent: 40, lineHeight: 1.4, marginTop: 8 }}>
+            <p style={{ fontSize: 11, textAlign: 'justify', textIndent: 40, lineHeight: 1.4, marginTop: 8 }}>
               Mangyaring itago ang Cash Voucher na ito at lahat ng kaugnay na dokumento ng inyong loan bilang inyong opisyal na rekord. Ugaliing humingi at suriin ang inyong resibo at kasaysayan ng pagbabayad mula sa inyong nakatalagang kolektor. Ang inyong lagda sa dokumentong ito ay nagpapatunay na natanggap ninyo ang netong halaga ng inyong loan proceeds.
             </p>
-            <p style={{ fontSize: 13, textAlign: 'justify', textIndent: 40, lineHeight: 1.4, marginTop: 10 }}>
+            <p style={{ fontSize: 11, textAlign: 'justify', textIndent: 40, lineHeight: 1.4, marginTop: 10 }}>
               Mahalagang humingi ng resibo sa bawat bayad na ginagawa para sa iyong loan upang maiwasan ang anumang hindi pagkakaintindihan sa balance. Maaari ka ring mag-request ng payment history mula sa iyong assigned collector kung nais mong mas malinawan ang status ng iyong loan. Basahin ng maigi ang bawat pinipirmahang dokumento na katibayang ikaw ay may loan sa 1125 Credit Collection Services.
             </p>
           </div>
@@ -269,14 +284,14 @@ export default function VoucherPage() {
               the Cash Voucher block alone is short enough to share a sheet. */}
           <div ref={page2Ref} style={pageStyle}>
             <div style={{ textAlign: 'center', marginBottom: 18 }}>
-              <div style={{ fontWeight: 700, fontSize: 21, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0B1F3A' }}>{branding.headerAddress.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0B1F3A' }}>CELL PHONE NUMBER: {branding.contact}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.headerAddress.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CELL PHONE NUMBER: {branding.contact}</div>
             </div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17, color: '#0B1F3A', marginBottom: 14, textDecoration: 'underline' }}>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: '#0B1F3A', marginBottom: 14, textDecoration: 'underline' }}>
               LOAN RELEASE CASH VOUCHER
             </div>
-            <div style={{ display: 'flex', gap: 24, marginBottom: 14, fontSize: 15 }}>
+            <div style={{ display: 'flex', gap: 24, marginBottom: 14, fontSize: 12 }}>
               <span>{vCheckbox(voucherData.isRenewal)}Renewal</span>
               <span>{vCheckbox(!voucherData.isRenewal)}New Loan Account</span>
             </div>
@@ -286,19 +301,19 @@ export default function VoucherPage() {
                 <tr><td style={vHeader}>Name of Borrower</td><td style={vHeader}>Net Proceeds</td></tr>
                 <tr><td style={vCellCenter}>{voucherData.borrowerName}</td><td style={vCellCenter}>{formatCurrency(voucherData.netProceeds)}</td></tr>
                 <tr><td style={vCell}>Disbursed by:</td><td style={vCell}>Received by:</td></tr>
-                <tr style={{ height: 50 }}><td style={vCell}>&nbsp;</td><td style={vCell}>&nbsp;</td></tr>
+                <tr style={{ height: 38 }}><td style={vCell}>&nbsp;</td><td style={vCell}>&nbsp;</td></tr>
                 <tr><td style={vCellCenter}>{voucherData.branchCashierName}</td><td style={vCellCenter}>{voucherData.fieldCollectorName}</td></tr>
                 <tr><td style={vItalic}>Branch Cashier</td><td style={vItalic}>Field Collector</td></tr>
               </tbody>
             </table>
 
             <div style={{ textAlign: 'center', marginTop: 38 }}>
-              <div style={{ fontWeight: 700, fontSize: 21, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0B1F3A' }}>{branding.headerAddress.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0B1F3A' }}>CELL PHONE NUMBER: {branding.contact}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{COMPANY_NAME}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>{branding.headerAddress.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#0B1F3A' }}>CELL PHONE NUMBER: {branding.contact}</div>
             </div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17, color: '#0B1F3A', marginTop: 10 }}>ACKNOWLEDGEMENT RECEIPT OF LOAN</div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, color: '#0B1F3A', marginBottom: 18 }}>(via Field Release)</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: '#0B1F3A', marginTop: 10 }}>ACKNOWLEDGEMENT RECEIPT OF LOAN</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: '#0B1F3A', marginBottom: 18 }}>(via Field Release)</div>
             <table style={vTable}>
               <tbody>
                 <tr><td style={vCell}>Date of Receipt:</td><td style={vCell}>{formatVoucherDate(voucherData.date)}</td></tr>
@@ -318,7 +333,7 @@ export default function VoucherPage() {
                 <tr>
                   <td style={vCellCenter}>{formatCurrency(voucherData.netProceeds)}</td>
                   <td style={vCellCenter}>{voucherData.borrowerName}</td>
-                  <td style={{ ...vCell, height: 50 }}>&nbsp;</td>
+                  <td style={{ ...vCell, height: 38 }}>&nbsp;</td>
                 </tr>
               </tbody>
             </table>
@@ -335,17 +350,17 @@ export default function VoucherPage() {
               </tbody>
             </table>
 
-            <p style={{ fontWeight: 700, fontSize: 14, marginTop: 20, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
+            <p style={{ fontWeight: 700, fontSize: 12, marginTop: 20, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
               I further certify that this Cash Voucher constitutes sufficient proof and evidence of my receipt of the net loan proceeds. I hereby waive any claim, demand, complaint, or action against {COMPANY_NAME_DISPLAY} for any alleged cash shortage, deficiency, or non-receipt of the loan proceeds after the execution and signing of this document.
             </p>
-            <p style={{ fontStyle: 'italic', fontSize: 13, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 6 }}>
+            <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 6 }}>
               (Pinatutunayan ko na ang Cash Voucher na ito ay sapat na katibayan at patunay na aking natanggap ang nitong halaga ng aking loan. Nauunawaan ko na hindi maari ang anumang paghahabol, reklamo, demanda, o anumang aksyon laban sa {COMPANY_NAME_DISPLAY} kaugnay ng anumang kakulangan sa salapi, diperensya, o hindi pagtanggap ng loan proceeds matapos kong lagdaan at maisakatuparan ang dokumentong ito)
             </p>
 
-            <p style={{ fontWeight: 700, fontSize: 14, marginTop: 14, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
+            <p style={{ fontWeight: 700, fontSize: 12, marginTop: 14, textAlign: 'justify', textIndent: 40, lineHeight: 1.4 }}>
               The amount of my loan shall be reflected in the Field Collector's Customer List together with the corresponding beginning balance. Attached hereto are copies of the Loan Agreement and Kasunduan, which shall serve as proof of the proper and lawful release of the loan proceeds by the duly authorized collectors of {COMPANY_NAME_DISPLAY}.
             </p>
-            <p style={{ fontStyle: 'italic', fontSize: 13, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 6 }}>
+            <p style={{ fontStyle: 'italic', fontSize: 11, textAlign: 'justify', color: '#333', lineHeight: 1.4, marginTop: 6 }}>
               (Ang halaga ng aking loan ay makikita sa Customer List ng Field Collector kasama ang kaukulang panimulang balanse. Nakalakip dito ang mga kopya ng Loan Agreement at Kasunduan na magsisilbing patunay ng maayos, tama, at naaayon sa batas na pagpapalabas ng loan proceeds ng mga awtorisadong kolektor ng {COMPANY_NAME_DISPLAY}.)
             </p>
           </div>

@@ -214,10 +214,23 @@ export default function LoanAgreementPage() {
       for (let i = 0; i < refs.length; i++) {
         const canvas = await html2canvas(refs[i].current as HTMLDivElement, { backgroundColor: '#ffffff', scale: 2 });
         const imgData = canvas.toDataURL('image/png');
-        const imgWidth = usableWidth;
-        const imgHeight = ((canvas.height / 2) * pxToPt / ((canvas.width / 2) * pxToPt)) * imgWidth;
+        // Clamped to the page, not just scaled to its width — a bare
+        // width-only scale let content taller than the page (in proportion)
+        // print past the bottom edge with nothing to stop it, since jsPDF
+        // draws the image at whatever height it's given regardless of
+        // whether that fits. Shrinking (never cropping) on whichever
+        // dimension is tighter, and centering horizontally if that ends up
+        // narrower than the page, is the same fix already applied to the
+        // Payslip download.
+        const contentWidthPt = (canvas.width / 2) * pxToPt;
+        const contentHeightPt = (canvas.height / 2) * pxToPt;
+        const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+        const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+        const imgWidth = contentWidthPt * scaleToFit;
+        const imgHeight = contentHeightPt * scaleToFit;
+        const xOffset = margin + (usableWidth - imgWidth) / 2;
         if (i > 0) pdf.addPage();
-        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
       }
       pdf.save(`loan-agreement-${loan.loan_number}.pdf`);
     } catch (err: any) {

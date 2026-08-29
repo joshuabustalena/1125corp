@@ -17,7 +17,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, numberToWordsPeso } from '@/lib/format';
+import { formatCurrency, formatDate, formatTime } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { buildPrintHtml } from '@/lib/print-document';
 import { isSpendableCashAccount } from '@/lib/cash-buckets';
@@ -25,9 +25,6 @@ import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { Fuel, Loader2, Download, Printer } from 'lucide-react';
-
-const gCell: React.CSSProperties = { border: '1px solid #000', padding: '5px 8px' };
-const gCellCenter: React.CSSProperties = { ...gCell, textAlign: 'center' };
 
 export default function GasVoucherPage() {
   const { toast } = useToast();
@@ -166,7 +163,6 @@ export default function GasVoucherPage() {
   const printedVoucherNumber = printedVoucher ? printedVoucher.voucher_number : voucherNumber;
   const printedDate = printedVoucher ? printedVoucher.voucher_date : date;
   const printedBranch = printedVoucher ? branches.find(b => b.id === printedVoucher.branch_id) : branch;
-  const printedBranding = getDocumentBranding(printedBranch?.name);
   const printedLines: { key: string; name: string; amount: number }[] = printedVoucher
     ? (printedVoucher.lines ?? []).map((l: any) => ({ key: l.collector_id, name: l.name, amount: Number(l.amount) || 0 }))
     : collectors.map(c => ({ key: c.id, name: c.profiles?.full_name ?? '', amount: Number(amounts[c.id]) || 0 }));
@@ -288,9 +284,20 @@ export default function GasVoucherPage() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 792] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
-      pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        // Clamped to the page, not just scaled to its width — a bare
+        // width-only scale let content taller than the page (in proportion)
+        // print past the bottom edge with nothing to stop it, since jsPDF
+        // draws the image at whatever height it's given regardless of
+        // whether that fits. Shrinking (never cropping) on whichever
+        // dimension is tighter, and centering horizontally if that ends up
+        // narrower than the page, is the same fix already applied to the
+        // Payslip download.
+      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+      const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+      const imgWidth = contentWidthPt * scaleToFit;
+      const imgHeight = contentHeightPt * scaleToFit;
+      const xOffset = margin + (usableWidth - imgWidth) / 2;
+      pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
       pdf.save(`gas-voucher-${voucherNumber}.pdf`);
     } catch (err: any) {
       toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the gas voucher PDF', variant: 'destructive' });
@@ -470,71 +477,92 @@ export default function GasVoucherPage() {
       {typeof document !== 'undefined' && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
           <div ref={printRef} style={{ width: 900, background: '#fff', color: '#111', padding: 40, fontFamily: '"Times New Roman", Calibri, serif' }}>
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 16 }}>
-              <img src="/image/1125_Corp_Logo.png" alt="1125Corp" style={{ width: 64, height: 64, objectFit: 'contain' }} />
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontWeight: 700, fontSize: 16, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
-                <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{printedBranding.address}</div>
-                <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>Cel. No. {printedBranding.contact}</div>
-              </div>
-            </div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#1F4E79', marginTop: 8, marginBottom: 16 }}>CASH VOUCHER</div>
+            {/* Same "professional bordered-ledger" look as the general Cash
+                Voucher (app/(app)/cash-vouchers/page.tsx) — client asked for
+                the two to match instead of this one keeping the older plain
+                paper-form template. */}
+            {(() => {
+              const now = new Date();
+              const infoLabel: React.CSSProperties = { border: '1px solid #000', padding: '6px 10px', fontWeight: 700, background: '#F2F4F7', whiteSpace: 'nowrap' };
+              const infoValue: React.CSSProperties = { border: '1px solid #000', padding: '6px 10px' };
+              const thStyle: React.CSSProperties = { border: '1px solid #000', padding: '7px 8px', fontWeight: 700, color: '#fff' };
+              const tdStyle: React.CSSProperties = { border: '1px solid #000', padding: '6px 8px' };
+              return (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <img src="/image/1125_Corp_Logo.png" alt="1125Corp" style={{ width: 56, height: 56, objectFit: 'contain' }} />
+                      <div style={{ fontSize: 22, fontWeight: 700, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
+                    </div>
+                    <table style={{ fontSize: 11 }}>
+                      <tbody>
+                        <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Report Date:</td><td>{formatDate(now.toISOString())}</td></tr>
+                        <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Report Time:</td><td>{formatTime(now.toISOString())}</td></tr>
+                        <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Printed by:</td><td>{profile?.role_name ?? ''}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'baseline', fontSize: 13, marginBottom: 10 }}>
-              <span style={{ textDecoration: 'underline' }}><strong>PARTICULARS:</strong></span>
-              <span style={{ fontWeight: 700, fontSize: 16, textAlign: 'center', whiteSpace: 'nowrap' }}>Gas Allowance</span>
-              <span style={{ textAlign: 'right' }}><strong>Date</strong>&nbsp;&nbsp;&nbsp;&nbsp;{formatDate(printedDate)}</span>
-            </div>
+                  <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#1F4E79', letterSpacing: 0.5, marginBottom: 14 }}>CASH VOUCHER</div>
 
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <colgroup>
-                <col style={{ width: '24%' }} />
-                <col style={{ width: '36%' }} />
-                <col style={{ width: '14%' }} />
-                <col style={{ width: '26%' }} />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th style={{ ...gCellCenter, fontWeight: 700 }}>PAID TO:</th>
-                  <th colSpan={2} style={{ ...gCellCenter, fontWeight: 700 }}>AMOUNT</th>
-                  <th style={{ ...gCellCenter, fontWeight: 700 }}>
-                    <div>Received by:</div>
-                    <div style={{ fontWeight: 400 }}>(Signature)</div>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {printedLines.map(l => (
-                  <tr key={l.key}>
-                    <td style={{ ...gCell, fontWeight: 700 }}>{l.name}</td>
-                    <td style={gCell}>{l.amount > 0 ? numberToWordsPeso(l.amount) : ''}</td>
-                    <td style={gCellCenter}>{l.amount > 0 ? l.amount.toFixed(2) : ''}</td>
-                    <td style={{ ...gCell, height: 28 }}>&nbsp;</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 24, fontWeight: 700, fontSize: 13, paddingTop: 10 }}>
-              <span>Grand Total:</span>
-              <span style={{ minWidth: 90, textAlign: 'right' }}>{printedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
-            </div>
+                  <table style={{ width: '100%', fontSize: 12.5, marginBottom: 16, borderCollapse: 'collapse' }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ ...infoLabel, width: '13%' }}>Particulars</td>
+                        <td style={infoValue}>Gas Allowance</td>
+                        <td style={{ ...infoLabel, width: '15%' }}>Voucher Number</td>
+                        <td style={{ ...infoValue, width: '16%', fontWeight: 700 }}>{printedVoucherNumber}</td>
+                      </tr>
+                      <tr>
+                        <td style={infoLabel}>Branch</td>
+                        <td style={infoValue}>{printedBranch?.name ?? ''}</td>
+                        <td style={infoLabel}>Date</td>
+                        <td style={infoValue}>{formatDate(printedDate)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
 
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 32 }}>
-              <tbody>
-                <tr>
-                  <td style={{ border: 'none', width: '50%', paddingBottom: 30 }}>Disbursed &amp; Prepared by:</td>
-                  <td style={{ border: 'none', textAlign: 'right', paddingBottom: 30 }}>Approved by:</td>
-                </tr>
-                <tr>
-                  <td style={{ border: 'none', textDecoration: 'underline' }}>{printedCashierName || ' '}</td>
-                  <td style={{ border: 'none', textAlign: 'right', textDecoration: 'underline' }}>{printedBranchManagerName || ' '}</td>
-                </tr>
-                <tr>
-                  <td style={{ border: 'none', paddingTop: 2 }}>Cashier</td>
-                  <td style={{ border: 'none', textAlign: 'right', paddingTop: 2 }}>Branch Manager</td>
-                </tr>
-              </tbody>
-            </table>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ background: '#1F4E79' }}>
+                        <th style={{ ...thStyle, textAlign: 'left' }}>Paid To</th>
+                        <th style={{ ...thStyle, textAlign: 'right', width: '18%' }}>Amount</th>
+                        <th style={{ ...thStyle, textAlign: 'left', width: '20%' }}>Received by (Signature)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {printedLines.map((l, i) => (
+                        <tr key={l.key} style={{ background: i % 2 === 1 ? '#F7F8FA' : '#fff' }}>
+                          <td style={{ ...tdStyle, fontWeight: 700 }}>{l.name}</td>
+                          <td style={{ ...tdStyle, textAlign: 'right' }}>{l.amount > 0 ? l.amount.toFixed(2) : ''}</td>
+                          <td style={{ ...tdStyle, height: 26 }}>&nbsp;</td>
+                        </tr>
+                      ))}
+                      <tr style={{ fontWeight: 700, background: '#EAEEF3' }}>
+                        <td style={tdStyle}>Grand Total</td>
+                        <td style={{ ...tdStyle, textAlign: 'right' }}>{printedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+                        <td style={tdStyle}></td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <table style={{ width: '100%', fontSize: 12.5, marginTop: 44 }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ textAlign: 'center', width: '50%' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedCashierName || ' '}</span></td>
+                        <td style={{ textAlign: 'center' }}><span style={{ display: 'inline-block', minWidth: 220, borderBottom: '1px solid #000', paddingBottom: 6 }}>{printedBranchManagerName || ' '}</span></td>
+                      </tr>
+                      <tr>
+                        <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 2 }}>Disbursed &amp; Prepared By (Cashier)</td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, paddingTop: 2 }}>Approved By (Branch Manager)</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <div style={{ textAlign: 'right', fontSize: 11, fontStyle: 'italic', color: '#555', marginTop: 20 }}>Page 1 of 1</div>
+                </>
+              );
+            })()}
           </div>
         </div>,
         document.body

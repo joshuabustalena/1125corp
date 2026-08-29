@@ -151,8 +151,18 @@ export default function CashVouchersPage() {
   );
   // Petty Cash Fund specifically is also off-limits on the debit
   // ("Account - Description") side — every other account (including other
-  // cash accounts) is still selectable there.
-  const debitableAccounts = accounts.filter(a => !a.name.toLowerCase().includes('petty cash'));
+  // cash accounts) is still selectable there. Branch-scoped the same way
+  // cashAccounts above is: without this, a Cashier locked to one branch
+  // (branchId already fixed to their own, can't be changed — see the
+  // isAdmin-gated Select below) still saw every OTHER branch's accounts
+  // here too — e.g. Balanga's Cashier picking from both "Cash in Vault -
+  // Balanga" (branch-tagged) AND the untagged-name "Cash in Vault" that's
+  // actually Dinalupihan's own account (branch_id set, just never renamed
+  // with a suffix after the Chart of Accounts cleanup).
+  const debitableAccounts = accounts.filter(a =>
+    !a.name.toLowerCase().includes('petty cash')
+    && (!branchId || !a.branch_id || a.branch_id === branchId)
+  );
 
   // Pick a sensible source once the accounts (and the branch) are known, and
   // re-pick if the current choice isn't valid for the selected branch —
@@ -266,9 +276,20 @@ export default function CashVouchersPage() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 792] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
-      pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        // Clamped to the page, not just scaled to its width — a bare
+        // width-only scale let content taller than the page (in proportion)
+        // print past the bottom edge with nothing to stop it, since jsPDF
+        // draws the image at whatever height it's given regardless of
+        // whether that fits. Shrinking (never cropping) on whichever
+        // dimension is tighter, and centering horizontally if that ends up
+        // narrower than the page, is the same fix already applied to the
+        // Payslip download.
+      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+      const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+      const imgWidth = contentWidthPt * scaleToFit;
+      const imgHeight = contentHeightPt * scaleToFit;
+      const xOffset = margin + (usableWidth - imgWidth) / 2;
+      pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
       pdf.save(`cash-voucher-${voucherNumberOverride ?? voucherNumber}.pdf`);
     } catch (err: any) {
       toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the cash voucher PDF', variant: 'destructive' });

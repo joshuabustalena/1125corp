@@ -380,9 +380,20 @@ export default function CashCountPage() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
       const margin = 24;
       const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-      const imgWidth = usableWidth;
-      const imgHeight = (contentHeightPt / contentWidthPt) * imgWidth;
-      pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        // Clamped to the page, not just scaled to its width — a bare
+        // width-only scale let content taller than the page (in proportion)
+        // print past the bottom edge with nothing to stop it, since jsPDF
+        // draws the image at whatever height it's given regardless of
+        // whether that fits. Shrinking (never cropping) on whichever
+        // dimension is tighter, and centering horizontally if that ends up
+        // narrower than the page, is the same fix already applied to the
+        // Payslip download.
+      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+      const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+      const imgWidth = contentWidthPt * scaleToFit;
+      const imgHeight = contentHeightPt * scaleToFit;
+      const xOffset = margin + (usableWidth - imgWidth) / 2;
+      pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
       pdf.save(`cash-count-${date}.pdf`);
     } catch (err: any) {
       toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the cash count PDF', variant: 'destructive' });
