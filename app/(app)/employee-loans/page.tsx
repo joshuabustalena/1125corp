@@ -683,7 +683,7 @@ export default function EmployeeLoansPage() {
 
       <Dialog open={specialDialogOpen} onOpenChange={setSpecialDialogOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Add Special Loan</DialogTitle><DialogDescription>SSS Loan, Pag-IBIG Loan, and Special Loans (Service Vehicle, Uniform, Cash Shortage) have no fixed term — the amount is just deducted from payroll manually each cutoff until the balance is paid off.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Add Special Loan</DialogTitle><DialogDescription>SSS Loan, Pag-IBIG Loan, and Special Loans (Service Vehicle, Uniform, Cash Shortage, Special Deduction) have no fixed term — the amount is just deducted from payroll manually each cutoff until the balance is paid off.</DialogDescription></DialogHeader>
           <form onSubmit={handleAddSpecialLoan} className="space-y-4">
             <div className="space-y-2">
               <Label>Employee *</Label>

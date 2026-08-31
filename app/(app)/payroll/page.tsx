@@ -38,7 +38,8 @@ const pvCellCenter: React.CSSProperties = { ...pvCell, textAlign: 'center' };
 function payrollDeductionsTotal(p: any): number {
   return Number(p.sss) + Number(p.philhealth) + Number(p.pag_ibig) + Number(p.incentive_retention)
     + Number(p.loan_deduction || 0) + Number(p.late_deduction || 0) + Number(p.carry_over_deduction || 0)
-    + Number(p.sss_loan || 0) + Number(p.pag_ibig_loan || 0) + Number(p.service_vehicle || 0) + Number(p.uniform || 0) + Number(p.cash_shortage || 0);
+    + Number(p.sss_loan || 0) + Number(p.pag_ibig_loan || 0) + Number(p.service_vehicle || 0) + Number(p.uniform || 0) + Number(p.cash_shortage || 0)
+    + Number(p.special_deduction || 0);
 }
 
 // Semi-monthly payroll, paid on the 1st and the 16th of each month, each
@@ -119,7 +120,7 @@ export default function PayrollPage() {
   const [specialLoanBalances, setSpecialLoanBalances] = useState<Record<string, Record<string, number>>>({});
   const [specialLoanDefaults, setSpecialLoanDefaults] = useState<Record<string, Record<string, number>>>({});
   const [editDeductionsTarget, setEditDeductionsTarget] = useState<any>(null);
-  const [editDeductionsForm, setEditDeductionsForm] = useState({ sss_loan: '', pag_ibig_loan: '', service_vehicle: '', uniform: '', cash_shortage: '', incentive: '' });
+  const [editDeductionsForm, setEditDeductionsForm] = useState({ sss_loan: '', pag_ibig_loan: '', service_vehicle: '', uniform: '', cash_shortage: '', special_deduction: '', incentive: '' });
   const [savingDeductions, setSavingDeductions] = useState(false);
   const [activeTab, setActiveTab] = useState<'records' | 'voucher' | 'thirteenth'>('records');
   const [thirteenthYear, setThirteenthYear] = useState(String(new Date().getFullYear()));
@@ -353,6 +354,7 @@ export default function PayrollPage() {
     const serviceVehicle = Number(target.service_vehicle) || 0;
     const uniform = Number(target.uniform) || 0;
     const cashShortage = Number(target.cash_shortage) || 0;
+    const specialDeduction = Number(target.special_deduction) || 0;
     const deductions = payrollDeductionsTotal(target);
     const loanBalance = activeLoanBalances[target.employee_id] ?? 0;
     const specialBalances = specialLoanBalances[target.employee_id] ?? {};
@@ -444,6 +446,9 @@ export default function PayrollPage() {
             )}
             {cashShortage > 0 && (
               <tr><td style={{ padding: '3px 0', color: '#666' }}>Cash Shortage</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(cashShortage)}</td></tr>
+            )}
+            {specialDeduction > 0 && (
+              <tr><td style={{ padding: '3px 0', color: '#666' }}>Special Deduction</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(specialDeduction)}</td></tr>
             )}
             {SPECIAL_LOAN_LABELS.map(({ key, label }) => (specialBalances[key] ?? 0) > 0 && (
               <tr key={key}><td colSpan={2} style={{ padding: '0 0 3px', fontSize: 10, color: '#999', fontStyle: 'italic' }}>Remaining {label} Balance: {formatCurrency(specialBalances[key])}</td></tr>
@@ -678,6 +683,7 @@ export default function PayrollPage() {
         service_vehicle: 0,
         uniform: 0,
         cash_shortage: 0,
+        special_deduction: 0,
         birthday_bonus: Math.round(birthdayBonus * 100) / 100,
         birthday_worked: birthdayDate ? birthdayWorked : null,
         leave_pay: Math.round(leavePay * 100) / 100,
@@ -809,12 +815,13 @@ export default function PayrollPage() {
     const serviceVehicle = Number(editDeductionsForm.service_vehicle) || 0;
     const uniform = Number(editDeductionsForm.uniform) || 0;
     const cashShortage = Number(editDeductionsForm.cash_shortage) || 0;
+    const specialDeduction = Number(editDeductionsForm.special_deduction) || 0;
     const incentive = Number(editDeductionsForm.incentive) || 0;
     const incentiveRetention = Math.round(incentive * 0.25 * 100) / 100;
 
     const totalDeductions = Number(row.sss) + Number(row.philhealth) + Number(row.pag_ibig) + incentiveRetention
       + Number(row.loan_deduction || 0) + Number(row.late_deduction || 0) + Number(row.carry_over_deduction || 0)
-      + sssLoan + pagIbigLoan + serviceVehicle + uniform + cashShortage;
+      + sssLoan + pagIbigLoan + serviceVehicle + uniform + cashShortage + specialDeduction;
     const grossPay = Number(row.basic_salary) + incentive + Number(row.birthday_bonus || 0) + Number(row.leave_pay || 0) + Number(row.holiday_pay || 0);
     const netPay = Math.round((grossPay - totalDeductions) * 100) / 100;
 
@@ -824,6 +831,7 @@ export default function PayrollPage() {
       service_vehicle: serviceVehicle,
       uniform,
       cash_shortage: cashShortage,
+      special_deduction: specialDeduction,
       incentive,
       incentive_retention: incentiveRetention,
       net_pay: netPay,
@@ -857,7 +865,7 @@ export default function PayrollPage() {
         Overtime: p.overtime_pay, Incentive: p.incentive, SSS: p.sss,
         PhilHealth: p.philhealth, PagIBIG: p.pag_ibig, Retention: p.incentive_retention,
         LoanDeduction: p.loan_deduction ?? 0, LateDeduction: p.late_deduction ?? 0, CarryOverDeduction: p.carry_over_deduction ?? 0,
-        SSSLoan: p.sss_loan ?? 0, PagIBIGLoan: p.pag_ibig_loan ?? 0, ServiceVehicle: p.service_vehicle ?? 0, Uniform: p.uniform ?? 0, CashShortage: p.cash_shortage ?? 0,
+        SSSLoan: p.sss_loan ?? 0, PagIBIGLoan: p.pag_ibig_loan ?? 0, ServiceVehicle: p.service_vehicle ?? 0, Uniform: p.uniform ?? 0, CashShortage: p.cash_shortage ?? 0, SpecialDeduction: p.special_deduction ?? 0,
         NetPay: p.net_pay, Status: p.status,
       };
     }), 'payroll.csv');
@@ -1227,6 +1235,10 @@ export default function PayrollPage() {
       // this ledger entry at all, not folded into SSS/PagIBIG Payable.
       // They're still deducted from the employee's net pay on the payslip
       // itself, just not booked as part of this company-ledger expense.
+      // special_deduction gets the same treatment, for a different reason:
+      // it's a deliberately general/catch-all category with no single fixed
+      // Chart of Accounts line the way Service Vehicle/Uniform/Cash Shortage
+      // each have one — see supabase/add_special_deduction_type.sql.
       sssPayable += Number(p.sss);
       philPayable += Number(p.philhealth);
       pagibigPayable += Number(p.pag_ibig);
