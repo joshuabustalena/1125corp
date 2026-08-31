@@ -347,6 +347,7 @@ export default function PayrollPage() {
     const carryOverDeduction = Number(target.carry_over_deduction) || 0;
     const birthdayBonus = Number(target.birthday_bonus) || 0;
     const leavePay = Number(target.leave_pay) || 0;
+    const holidayPay = Number(target.holiday_pay) || 0;
     const sssLoan = Number(target.sss_loan) || 0;
     const pagIbigLoan = Number(target.pag_ibig_loan) || 0;
     const serviceVehicle = Number(target.service_vehicle) || 0;
@@ -403,7 +404,15 @@ export default function PayrollPage() {
                 <td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 600, color: '#0B7A3D' }}>{formatCurrency(leavePay)}</td>
               </tr>
             )}
-            <tr style={{ borderTop: '1px solid #ddd' }}><td style={{ padding: '8px 0 4px', fontWeight: 700 }}>Gross Pay</td><td style={{ padding: '8px 0 4px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(Number(target.basic_salary) + Number(target.incentive) + birthdayBonus + leavePay)}</td></tr>
+            {holidayPay > 0 && (
+              <tr>
+                <td style={{ padding: '5px 0', color: '#666' }}>
+                  🎉 Holiday Pay ({target.holiday_days} holiday{Number(target.holiday_days) !== 1 ? 's' : ''})
+                </td>
+                <td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 600, color: '#0B7A3D' }}>{formatCurrency(holidayPay)}</td>
+              </tr>
+            )}
+            <tr style={{ borderTop: '1px solid #ddd' }}><td style={{ padding: '8px 0 4px', fontWeight: 700 }}>Gross Pay</td><td style={{ padding: '8px 0 4px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(Number(target.basic_salary) + Number(target.incentive) + birthdayBonus + leavePay + holidayPay)}</td></tr>
             <tr><td colSpan={2} style={{ padding: '10px 0 2px', fontWeight: 700, color: '#0B1F3A' }}>Deductions</td></tr>
             <tr><td style={{ padding: '3px 0', color: '#666' }}>SSS</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(target.sss)}</td></tr>
             <tr><td style={{ padding: '3px 0', color: '#666' }}>PhilHealth</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(target.philhealth)}</td></tr>
@@ -484,6 +493,7 @@ export default function PayrollPage() {
     const { start, end } = getPeriodRange(payDate, period);
     const employeeIds = employees.map(e => e.id);
     const { data: att } = await supabase.from('attendance').select('employee_id, date, status, review_status, late_deduction').in('employee_id', employeeIds).gte('date', start).lte('date', end);
+    const { data: holidaysInPeriod } = await supabase.from('holidays').select('holiday_date, name, type').gte('holiday_date', start).lte('holiday_date', end);
 
     // Approved leave counts as a paid present day even with no attendance
     // record for that day — an employee correctly out on approved leave
@@ -521,6 +531,34 @@ export default function PayrollPage() {
         }
       }
       return creditedDates.size;
+    }
+
+    // Holiday pay (daily-rate employees only — a fixed-monthly salary
+    // already doesn't depend on attendance, same reasoning as birthday/leave
+    // above). Stored as the EXTRA amount on top of whatever basicSalary
+    // already counted for that day (1x if worked, 0x if not), which is why
+    // both DOLE cases collapse to one rule per type:
+    //   Regular Holiday: always +1x dailyRate — worked lands at 1x+1x=2x
+    //     total (double pay); not worked lands at 0x+1x=1x (still a paid day).
+    //   Special Holiday: worked +0.3x dailyRate -> 1x+0.3x=1.3x total;
+    //     not worked +0 -> 0x total, no pay, same as an ordinary absence.
+    // excludeDate skips the employee's birthday so a day that's both a
+    // holiday and a birthday isn't paid twice by two different bonus rules.
+    function holidayPayForPeriod(employeeId: string, dailyRate: number, excludeDate: string | null): { pay: number; days: number } {
+      let pay = 0;
+      let days = 0;
+      for (const h of holidaysInPeriod ?? []) {
+        if (h.holiday_date === excludeDate) continue;
+        if (new Date(h.holiday_date).getDay() === 0) continue; // Sunday isn't a scheduled work/collection day
+        const worked = (att ?? []).some(a => a.employee_id === employeeId && a.date === h.holiday_date && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected');
+        if (h.type === 'special') {
+          if (worked) { pay += dailyRate * 0.30; days++; }
+        } else {
+          pay += dailyRate;
+          days++;
+        }
+      }
+      return { pay, days };
     }
 
     // Employees with an active salary loan get its per-payroll deduction
@@ -612,8 +650,10 @@ export default function PayrollPage() {
       const leaveDaysCredited = isMonthly ? 0 : countLeaveDaysInPeriod(e.id, birthdayDate);
       const leavePay = leaveDaysCredited * dailyRate;
 
+      const { pay: holidayPay, days: holidayDays } = isMonthly ? { pay: 0, days: 0 } : holidayPayForPeriod(e.id, dailyRate, birthdayDate);
+
       const totalDeductions = sss + philhealth + pagIbig + retention + loanDeduction + carryOverDeduction + lateDeduction;
-      const netPay = basicSalary + incentive + birthdayBonus + leavePay - totalDeductions;
+      const netPay = basicSalary + incentive + birthdayBonus + leavePay + holidayPay - totalDeductions;
 
       return {
         employee_id: e.id,
@@ -642,6 +682,8 @@ export default function PayrollPage() {
         birthday_worked: birthdayDate ? birthdayWorked : null,
         leave_pay: Math.round(leavePay * 100) / 100,
         leave_days_credited: leaveDaysCredited,
+        holiday_pay: Math.round(holidayPay * 100) / 100,
+        holiday_days: holidayDays,
         net_pay: Math.round(netPay * 100) / 100,
         status: 'pending',
       };
@@ -773,7 +815,7 @@ export default function PayrollPage() {
     const totalDeductions = Number(row.sss) + Number(row.philhealth) + Number(row.pag_ibig) + incentiveRetention
       + Number(row.loan_deduction || 0) + Number(row.late_deduction || 0) + Number(row.carry_over_deduction || 0)
       + sssLoan + pagIbigLoan + serviceVehicle + uniform + cashShortage;
-    const grossPay = Number(row.basic_salary) + incentive + Number(row.birthday_bonus || 0) + Number(row.leave_pay || 0);
+    const grossPay = Number(row.basic_salary) + incentive + Number(row.birthday_bonus || 0) + Number(row.leave_pay || 0) + Number(row.holiday_pay || 0);
     const netPay = Math.round((grossPay - totalDeductions) * 100) / 100;
 
     const { error } = await supabase.from('payroll').update({
@@ -1428,6 +1470,24 @@ export default function PayrollPage() {
               Generate Payroll
             </Button>
           </div>
+          {/* Period and Pay Date are two independent controls with nothing
+              tying them together, and getPeriodRange derives the cutoff from
+              Pay Date's YEAR/MONTH only — its exact day doesn't matter (the
+              1st through the 15th all resolve identically for a "1st"
+              period, since Pay Date is just "whenever this was actually
+              processed/disbursed", not a fixed calendar anchor). What DOES
+              matter is the MONTH: Pay Date "Aug 31" for a "1st" period
+              resolved to July 16-31 instead of August's, generating a
+              payroll with zero attendance and ₱0 pay for everyone, because
+              picking the cutoff's own END date (a natural but wrong mental
+              model — "pay date = last day of the cutoff") lands in the
+              PREVIOUS month for this period. Shown live so that's obvious
+              before Generate is ever clicked, not after — no separate
+              validation, since there's no day-of-month rule to check against,
+              only this computed range to eyeball. */}
+          <p className="text-xs mt-3 text-muted-foreground">
+            Covers: {(() => { const { start, end } = getPeriodRange(payDate, period); return `${formatDate(start)} – ${formatDate(end)}`; })()}
+          </p>
         </CardContent>
       </Card>
       )}
