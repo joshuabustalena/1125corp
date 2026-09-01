@@ -356,8 +356,25 @@ export default function PayrollPage() {
     const cashShortage = Number(target.cash_shortage) || 0;
     const specialDeduction = Number(target.special_deduction) || 0;
     const deductions = payrollDeductionsTotal(target);
-    const loanBalance = activeLoanBalances[target.employee_id] ?? 0;
-    const specialBalances = specialLoanBalances[target.employee_id] ?? {};
+    // activeLoanBalances/specialLoanBalances are always the CURRENT live
+    // balance on employee_loans/employee_special_loans. Real balance
+    // reduction only happens at approval (see approvePayroll ->
+    // applySpecialLoanDeduction and the employee_loans update below it), so
+    // for a still-PENDING payroll this cutoff's own deduction, shown right
+    // above, hasn't actually come off that balance yet — the "Remaining
+    // Balance" line looked stale, as if the deduction had no effect. Net out
+    // this row's own deduction for a pending payslip so what's shown is what
+    // the employee will actually be left owing once this posts; an
+    // already-approved payslip's live balance already reflects it for real,
+    // so nothing further is subtracted there. Clamped at 0 in case a
+    // not-yet-approved amount was typed larger than the balance actually
+    // supports.
+    const isPending = target.status === 'pending';
+    const loanBalance = Math.max(0, (activeLoanBalances[target.employee_id] ?? 0) - (isPending ? loanDeduction : 0));
+    const specialBalancesRaw = specialLoanBalances[target.employee_id] ?? {};
+    const specialBalances: Record<string, number> = isPending
+      ? Object.fromEntries(SPECIAL_LOAN_LABELS.map(({ key }) => [key, Math.max(0, (specialBalancesRaw[key] ?? 0) - (Number(target[key]) || 0))]))
+      : specialBalancesRaw;
     const branding = getDocumentBranding(target.employees?.branches?.name);
     return (
       <div ref={opts.ref} style={{ width: opts.fixed ? 600 : '100%', maxWidth: 600, background: '#ffffff', color: '#1a1a1a', padding: 28, fontFamily: 'Arial, sans-serif', boxSizing: 'border-box' }}>
@@ -517,8 +534,12 @@ export default function PayrollPage() {
     // that specific day is already credited/paid via the birthday bonus
     // logic below, so it's excluded here to avoid paying the same physical
     // day twice just because it happens to be both a birthday and an
-    // approved leave day.
-    function countLeaveDaysInPeriod(employeeId: string, excludeDate: string | null): number {
+    // approved leave day. Returns the actual dates (not just a count) so
+    // holidayPayForPeriod below can exclude them too — a day that's both an
+    // approved-leave day AND a Regular Holiday was being paid twice (leave
+    // pay's 1x, plus holiday pay's unconditional +1x on top) before this was
+    // threaded through.
+    function leaveCreditedDatesInPeriod(employeeId: string, excludeDate: string | null): Set<string> {
       const attendedDates = new Set(
         (att ?? [])
           .filter(a => a.employee_id === employeeId && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected')
@@ -535,7 +556,7 @@ export default function PayrollPage() {
           if (!attendedDates.has(key)) creditedDates.add(key);
         }
       }
-      return creditedDates.size;
+      return creditedDates;
     }
 
     // Holiday pay (daily-rate employees only — a fixed-monthly salary
@@ -549,11 +570,16 @@ export default function PayrollPage() {
     //     not worked +0 -> 0x total, no pay, same as an ordinary absence.
     // excludeDate skips the employee's birthday so a day that's both a
     // holiday and a birthday isn't paid twice by two different bonus rules.
-    function holidayPayForPeriod(employeeId: string, dailyRate: number, excludeDate: string | null): { pay: number; days: number } {
+    // excludeLeaveDates does the same for a day that's both a holiday and an
+    // already-credited approved-leave day — leave pay already gives that day
+    // its 1x, so a Regular Holiday's unconditional +1x would otherwise stack
+    // on top of it for a day genuinely not worked.
+    function holidayPayForPeriod(employeeId: string, dailyRate: number, excludeDate: string | null, excludeLeaveDates: Set<string>): { pay: number; days: number } {
       let pay = 0;
       let days = 0;
       for (const h of holidaysInPeriod ?? []) {
         if (h.holiday_date === excludeDate) continue;
+        if (excludeLeaveDates.has(h.holiday_date)) continue;
         if (new Date(h.holiday_date).getDay() === 0) continue; // Sunday isn't a scheduled work/collection day
         const worked = (att ?? []).some(a => a.employee_id === employeeId && a.date === h.holiday_date && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected');
         if (h.type === 'special') {
@@ -652,10 +678,11 @@ export default function PayrollPage() {
       // physical day is never paid twice (e.g. an employee whose birthday
       // happens to fall on an approved leave day still only gets paid once
       // for that one day).
-      const leaveDaysCredited = isMonthly ? 0 : countLeaveDaysInPeriod(e.id, birthdayDate);
+      const leaveCreditedDates = isMonthly ? new Set<string>() : leaveCreditedDatesInPeriod(e.id, birthdayDate);
+      const leaveDaysCredited = leaveCreditedDates.size;
       const leavePay = leaveDaysCredited * dailyRate;
 
-      const { pay: holidayPay, days: holidayDays } = isMonthly ? { pay: 0, days: 0 } : holidayPayForPeriod(e.id, dailyRate, birthdayDate);
+      const { pay: holidayPay, days: holidayDays } = isMonthly ? { pay: 0, days: 0 } : holidayPayForPeriod(e.id, dailyRate, birthdayDate, leaveCreditedDates);
 
       const totalDeductions = sss + philhealth + pagIbig + retention + loanDeduction + carryOverDeduction + lateDeduction;
       const netPay = basicSalary + incentive + birthdayBonus + leavePay + holidayPay - totalDeductions;
