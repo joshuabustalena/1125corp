@@ -17,6 +17,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
+import { selectAllRows } from '@/lib/db-chunk';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
 import {
   FileBarChart, Download, Loader2, Printer, TrendingUp, Users, Wallet, Landmark,
@@ -179,11 +180,14 @@ export default function ReportsPage() {
       // real collection, but only the first is money that physically moved,
       // so the client wants them on separate lines rather than one figure.
       case 'daily_collection': {
-        let pq = scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate));
+        // Paginated — a wide enough date range takes this past PostgREST's
+        // silent 1000-row cap, which would drop payments from the totals with
+        // nothing on screen to show it (see lib/db-chunk.ts).
+        const paysPromise = selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate)));
         let lq = supabase.from('loans').select('release_date, amount, release_amount, offset_balance, daily_payment, total_payable, term_days, branch_id, area_id').gte('release_date', startDate).lte('release_date', endDate);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
-        const [{ data: pays }, { data: loans }] = await Promise.all([pq, lq]);
+        const [pays, { data: loans }] = await Promise.all([paysPromise, lq]);
 
         const byDate: Record<string, { cash: number; offset: number; firstPayment: number; deduction: number }> = {};
         const ensure = (d: string) => (byDate[d] ??= { cash: 0, offset: 0, firstPayment: 0, deduction: 0 });
@@ -222,8 +226,8 @@ export default function ReportsPage() {
       case 'weekly_collection':
       case 'monthly_collection': {
         const isWeekly = reportType === 'weekly_collection';
-        let q = scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date'));
-        const { data } = await q;
+        // Paginated for the same reason as daily_collection above.
+        const data = await selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date')));
         const areaNameById = new Map(areas.map((a: any) => [a.id, a.name]));
         const areaIdByCustomer = new Map(customers.map((c: any) => [c.id, c.area_id]));
         const grouped: Record<string, { period: string; area: string; amount: number }> = {};
@@ -256,8 +260,9 @@ export default function ReportsPage() {
         let lq = supabase.from('loans').select('amount, interest_amount, service_fee, offset_balance, daily_payment, total_payable, term_days, release_amount, branch_id, area_id, branches(name), areas(name)').gte('release_date', startDate).lte('release_date', endDate);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
-        let pq = scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate));
-        const [{ data: loans }, { data: pays }] = await Promise.all([lq, pq]);
+        // Paginated for the same reason as daily_collection above.
+        const paysPromise = selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate)));
+        const [{ data: loans }, pays] = await Promise.all([lq, paysPromise]);
 
         const groupByArea = areaFilter !== 'all';
         const areaNameById = new Map(areas.map((a: any) => [a.id, a.name]));

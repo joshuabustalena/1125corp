@@ -17,6 +17,42 @@ import { supabase } from '@/lib/supabase/client';
 */
 const CHUNK_SIZE = 150;
 
+/*
+  Fetches EVERY row a query matches, page by page.
+
+  PostgREST caps a response at 1000 rows by default and says nothing when it
+  truncates — no error, no flag, just a short array. Any code that sums or
+  counts what comes back is then quietly wrong, and only starts being wrong
+  once the table crosses 1000 rows, long after the code was written and
+  tested.
+
+  That is exactly what happened on the Collector Remittance page: `payments`
+  reached 1,077 rows, the page's unpaginated "every payment up to this date"
+  query silently returned only the first 1000, and the 77 it dropped belonged
+  mostly to two collectors — whose Balance Owed then read -₱73,450 and
+  -₱174,870 because their collected total was short while their remitted
+  total (54 rows, well under the cap) was complete.
+
+  Use this for any query whose result is AGGREGATED (summed, counted,
+  reconciled) rather than just displayed a page at a time. A query already
+  narrowed to one day, one loan, or one customer doesn't need it.
+*/
+const PAGE_SIZE = 1000;
+
+export async function selectAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await buildQuery().range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const batch = (data as T[]) ?? [];
+    rows.push(...batch);
+    // A short page means this was the last one. A full page might be the
+    // last one too — the next round trip returns empty and ends it.
+    if (batch.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
+
 export async function selectInChunks<T>(
   build: (query: ReturnType<typeof supabase.from>) => any,
   tableName: string,

@@ -19,6 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
+import { selectAllRows } from '@/lib/db-chunk';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
 import { takeOrNumber, nextOrNumberOnline, ensureOrPool, getOrPoolCount } from '@/lib/or-numbers';
 import { PaymentReceiptDialog, buildReceiptDataFromPayment } from '@/components/payment-receipt-dialog';
@@ -269,9 +270,7 @@ export default function PaymentsPage() {
     setLoading(true);
     const requestId = ++loadPaymentsRequestRef.current;
 
-    let query = supabase
-      .from('payments')
-      .select('*, customers!inner(branch_id), loans(loan_number, release_date, due_date, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
+    let searchLoanIds: string[] | null = null;
 
     if (debouncedSearch) {
       // PostgREST's .or() can't filter on an embedded/joined table's
@@ -300,34 +299,49 @@ export default function PaymentsPage() {
         }
         return;
       }
-      query = query.in('loan_id', loanIds);
-    }
-    if (isCollector) {
-      query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
-    } else if (!isAdmin) {
-      // Same branch lock on the history below the form. Done as an inner
-      // join, NOT by collecting the branch's customer ids and passing them to
-      // .in(): Balanga alone has 413 customers, which builds a ~15,000
-      // character URL and the request simply fails ("fetch failed"), leaving
-      // the page blank with no error shown.
-      query = query.eq('customers.branch_id', profile?.branch_id ?? NO_BRANCH);
-    }
-    if (customerFilter !== 'all') {
-      query = query.eq('customer_id', customerFilter);
+      searchLoanIds = loanIds;
     }
 
-    query = query.order('created_at', { ascending: false });
-    const { data, error } = await query;
+    // Built fresh per page by selectAllRows below — a Supabase query builder
+    // is single-use, so reusing one instance across pages would replay the
+    // first page forever and never terminate. Paginated because the collapse
+    // further down needs EVERY payment to work out which one is each loan's
+    // most recent, and PostgREST silently caps a plain query at 1000 rows.
+    // Past that (payments is at 1,077), whole loans would drop off this list
+    // and the pager's own total would be short, with nothing on screen to say
+    // anything was missing.
+    function buildPaymentsQuery() {
+      let q = supabase
+        .from('payments')
+        .select('*, customers!inner(branch_id), loans(loan_number, release_date, due_date, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
+      if (searchLoanIds) q = q.in('loan_id', searchLoanIds);
+      if (isCollector) {
+        q = q.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
+      } else if (!isAdmin) {
+        // Same branch lock on the history below the form. Done as an inner
+        // join, NOT by collecting the branch's customer ids and passing them
+        // to .in(): Balanga alone has 413 customers, which builds a ~15,000
+        // character URL and the request simply fails ("fetch failed"),
+        // leaving the page blank with no error shown.
+        q = q.eq('customers.branch_id', profile?.branch_id ?? NO_BRANCH);
+      }
+      if (customerFilter !== 'all') q = q.eq('customer_id', customerFilter);
+      return q.order('created_at', { ascending: false });
+    }
+
+    let data: any[];
+    try {
+      data = await selectAllRows<any>(buildPaymentsQuery);
+    } catch (err: any) {
+      if (requestId !== loadPaymentsRequestRef.current) return;
+      toast({ title: 'Error', description: err?.message ?? 'Could not load payments', variant: 'destructive' });
+      setLoading(false);
+      return;
+    }
 
     // A response for a since-superseded request — drop it, the newer
     // request's result (or one still in flight) is what should win.
     if (requestId !== loadPaymentsRequestRef.current) return;
-
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      setLoading(false);
-      return;
-    }
 
     // Collapse to one row per loan (its most recent payment) — the full
     // history for a loan is available by clicking into its row.

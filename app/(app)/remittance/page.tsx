@@ -22,6 +22,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, generateEntryNumber } from '@/lib/format';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
+import { selectAllRows } from '@/lib/db-chunk';
 import { ArrowRightLeft, Loader2, Wallet, Plus, Trash2 } from 'lucide-react';
 
 type Line = { account_id: string; amount: string };
@@ -66,12 +67,20 @@ export default function RemittancePage() {
     let colQuery = supabase.from('collectors').select('id, branch_id, profile_id, profiles(full_name), branches(name)').eq('status', 'active');
     if (isFieldCollector && profile) colQuery = colQuery.eq('profile_id', profile.id);
 
-    const [{ data: cols }, { data: pays }, { data: rems }, { data: cumPays }, { data: cumRems }] = await Promise.all([
+    // The two cumulative queries are paginated: they read EVERY payment and
+    // remittance ever recorded up to this date, and PostgREST silently caps
+    // a plain query at 1000 rows. Once `payments` crossed that (1,077 rows),
+    // the missing 77 made Balance Owed read as a large NEGATIVE number for
+    // the two collectors whose payments happened to fall outside the first
+    // 1000 — collected came back short while remitted, only 54 rows, stayed
+    // complete. The two same-day queries above them are one date each and
+    // stay far under the cap.
+    const [{ data: cols }, { data: pays }, { data: rems }, cumPays, cumRems] = await Promise.all([
       colQuery,
       supabase.from('payments').select('collector_id, amount_paid').eq('payment_date', date),
       supabase.from('remittances').select('collector_id, amount').eq('remittance_date', date),
-      supabase.from('payments').select('collector_id, amount_paid').lte('payment_date', date),
-      supabase.from('remittances').select('collector_id, amount').lte('remittance_date', date),
+      selectAllRows<any>(() => supabase.from('payments').select('collector_id, amount_paid').lte('payment_date', date)),
+      selectAllRows<any>(() => supabase.from('remittances').select('collector_id, amount').lte('remittance_date', date)),
     ]);
 
     setCollectors(cols ?? []);
@@ -87,8 +96,8 @@ export default function RemittancePage() {
 
     setCollected(sumByCollector(pays ?? [], 'amount_paid'));
     setRemitted(sumByCollector(rems ?? [], 'amount'));
-    setCumulativeCollected(sumByCollector(cumPays ?? [], 'amount_paid'));
-    setCumulativeRemitted(sumByCollector(cumRems ?? [], 'amount'));
+    setCumulativeCollected(sumByCollector(cumPays, 'amount_paid'));
+    setCumulativeRemitted(sumByCollector(cumRems, 'amount'));
     setLoading(false);
   }
 

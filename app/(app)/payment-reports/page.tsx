@@ -18,6 +18,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
+import { selectAllRows } from '@/lib/db-chunk';
 import { FileDown, Download, Loader2, TrendingUp, Receipt } from 'lucide-react';
 
 export default function PaymentReportsPage() {
@@ -81,28 +82,35 @@ export default function PaymentReportsPage() {
     // all as query parameters builds a ~15,000 character URL that fails
     // outright ('fetch failed'), leaving this whole report blank.
 
-    let query = supabase
-      .from('payments')
-      .select('*, customers!inner(first_name, last_name, branch_id, area_id, branches(name), areas(name)), loans(loan_number)')
-      .order('payment_date', { ascending: false });
+    // Paginated: with no date/customer/area/branch filter this is "every
+    // payment ever", and PostgREST silently truncates a plain query at 1000
+    // rows. `payments` passed that (1,077), so an unfiltered report was
+    // quietly leaving rows out of both the table and its totals with nothing
+    // on screen to say so.
+    function buildQuery() {
+      let query = supabase
+        .from('payments')
+        .select('*, customers!inner(first_name, last_name, branch_id, area_id, branches(name), areas(name)), loans(loan_number)')
+        .order('payment_date', { ascending: false });
 
-    if (dateFilter) {
-      query = query.eq('payment_date', dateFilter);
-    }
-    if (customerFilter !== 'all') {
-      query = query.eq('customer_id', customerFilter);
-    } else if (areaFilter !== 'all') {
-      query = query.eq('customers.area_id', areaFilter);
-    } else if (branchFilter !== 'all') {
-      query = query.eq('customers.branch_id', branchFilter);
+      if (dateFilter) {
+        query = query.eq('payment_date', dateFilter);
+      }
+      if (customerFilter !== 'all') {
+        query = query.eq('customer_id', customerFilter);
+      } else if (areaFilter !== 'all') {
+        query = query.eq('customers.area_id', areaFilter);
+      } else if (branchFilter !== 'all') {
+        query = query.eq('customers.branch_id', branchFilter);
+      }
+      return query;
     }
 
-    const { data, error } = await query;
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    try {
+      setPayments(await selectAllRows<any>(buildQuery));
+    } catch (err: any) {
+      toast({ title: 'Error', description: err?.message ?? 'Could not load the report', variant: 'destructive' });
       setPayments([]);
-    } else {
-      setPayments(data ?? []);
     }
     setLoading(false);
   }
