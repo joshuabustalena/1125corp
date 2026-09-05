@@ -335,6 +335,23 @@ export default function AttendancePage() {
 
   async function confirmCapture() {
     if (!capturedBlob) return;
+    // Location is required for both check-in and check-out — a record with
+    // no GPS fix can't be trusted for attendance/payroll purposes, so block
+    // submission rather than silently store gps_lat/lng as null.
+    if (!location) {
+      toast({ title: 'Location required', description: 'Enable location access and wait for your GPS position before checking in/out.', variant: 'destructive' });
+      return;
+    }
+    // One check-in per employee per day — the Select dropdown/self-service
+    // panel already excludes anyone with a record for today, but that's a
+    // point-in-time filter; re-check here against the freshest `records`
+    // right before writing, in case two check-ins race. `records` only
+    // reflects `dateFilter`, and check-in always writes today's date (see
+    // below), so this only applies while actually viewing today.
+    if (cameraMode === 'checkin' && dateFilter === todayStr() && records.some(r => r.employee_id === selectedEmployee)) {
+      toast({ title: 'Already checked in', description: 'This employee already has an attendance record for today.', variant: 'destructive' });
+      return;
+    }
     setSubmitting(true);
 
     const fileName = `${cameraMode}-${Date.now()}.jpg`;
@@ -401,10 +418,34 @@ export default function AttendancePage() {
         toast({ title: 'Success', description: 'Checked in successfully' });
       }
     } else if (checkoutTargetId) {
+      const now = new Date();
+      const checkoutRecord = records.find(r => r.id === checkoutTargetId);
+
+      // Undertime deduction: pro-rated (daily rate / 8) per hour short of a
+      // full 8-hour day, capped at 8 hours (never more than one full day's
+      // pay). Computed from actual time_in → now, same "half a day's rate"
+      // style approximation used for late deduction above.
+      let undertimeMinutes = 0;
+      let undertimeDeduction = 0;
+      if (checkoutRecord?.time_in && checkoutRecord.employee_id) {
+        const hoursWorked = (now.getTime() - new Date(checkoutRecord.time_in).getTime()) / 3_600_000;
+        const undertimeHours = Math.min(8, Math.max(0, 8 - hoursWorked));
+        undertimeMinutes = Math.round(undertimeHours * 60);
+        if (undertimeHours > 0) {
+          const { data: emp } = await supabase.from('employees').select('salary, pay_type').eq('id', checkoutRecord.employee_id).maybeSingle();
+          if (emp) {
+            const dailyRate = emp.pay_type === 'monthly' ? Number(emp.salary) / 26 : Number(emp.salary);
+            undertimeDeduction = Math.round((dailyRate / 8) * undertimeHours * 100) / 100;
+          }
+        }
+      }
+
       const { error } = await supabase.from('attendance').update({
-        time_out: new Date().toISOString(),
+        time_out: now.toISOString(),
         photo_out_url: photoUrl,
         location_address: locationAddress,
+        undertime_minutes: undertimeMinutes,
+        undertime_deduction: undertimeDeduction,
       }).eq('id', checkoutTargetId);
       if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
       else toast({ title: 'Success', description: 'Checked out' });
@@ -456,6 +497,19 @@ export default function AttendancePage() {
     setRecords(prev => prev.map(r => r.id === record.id ? { ...r, late_deduction: amount, late_deduction_is_custom: true } : r));
   }
 
+  // Same override pattern as Late Deduction, for the automatically computed
+  // undertime figure.
+  async function handleUndertimeDeductionChange(record: any, value: string) {
+    const amount = Math.round((Number(value) || 0) * 100) / 100;
+    if (amount === Number(record.undertime_deduction ?? 0)) return;
+    const { error } = await supabase.from('attendance').update({ undertime_deduction: amount, undertime_deduction_is_custom: true }).eq('id', record.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      return;
+    }
+    setRecords(prev => prev.map(r => r.id === record.id ? { ...r, undertime_deduction: amount, undertime_deduction_is_custom: true } : r));
+  }
+
   const reviewVariant = (s: string | null | undefined) => s === 'accepted' ? 'default' : s === 'rejected' ? 'destructive' : 'outline';
 
   function handleExport() {
@@ -463,7 +517,8 @@ export default function AttendancePage() {
       Employee: `${r.employees?.first_name} ${r.employees?.last_name}`,
       Date: r.date, TimeIn: r.time_in ?? '', TimeOut: r.time_out ?? '',
       Hours: formatDuration(r.time_in, r.time_out),
-      Status: r.status, Late: r.late_minutes, Deduction: r.late_deduction ?? 0, Overtime: r.overtime_minutes,
+      Status: r.status, Late: r.late_minutes, Deduction: r.late_deduction ?? 0,
+      Undertime: r.undertime_minutes ?? 0, UndertimeDeduction: r.undertime_deduction ?? 0, Overtime: r.overtime_minutes,
       Location: r.location_address ?? '',
     })), 'attendance.csv');
   }
@@ -472,6 +527,11 @@ export default function AttendancePage() {
     if (!address) return null;
     return address.split(',').slice(0, parts).map(p => p.trim()).join(', ');
   }
+
+  // Self-service check-in target — only meaningful while viewing today,
+  // same caveat as the Admin dropdown filter above (`records` reflects
+  // `dateFilter`, not necessarily today).
+  const alreadyCheckedInToday = dateFilter === todayStr() && records.some(r => r.employee_id === employees[0]?.id);
 
   const statusVariant = (s: string) => {
     switch (s) {
@@ -498,16 +558,21 @@ export default function AttendancePage() {
                 <Label>Select Employee</Label>
                 <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
                   <SelectTrigger><SelectValue placeholder="Choose employee to check in" /></SelectTrigger>
-                  <SelectContent>{employees.filter(e => e.status === 'active').map(e => <SelectItem key={e.id} value={e.id}>{formatCustomerName(e.first_name, e.last_name)}</SelectItem>)}</SelectContent>
+                  <SelectContent>
+                    {/* One check-in per employee per day — hide anyone who
+                        already has a record for the date being viewed. */}
+                    {employees.filter(e => e.status === 'active' && !(dateFilter === todayStr() && records.some(r => r.employee_id === e.id))).map(e => <SelectItem key={e.id} value={e.id}>{formatCustomerName(e.first_name, e.last_name)}</SelectItem>)}
+                  </SelectContent>
                 </Select>
               </div>
             ) : (
               <div className="space-y-1 flex-1">
                 <Label>Checking in as</Label>
                 <p className="text-sm font-medium">{employees[0] ? `${employees[0].first_name} ${employees[0].last_name}` : 'No matching employee record'}</p>
+                {alreadyCheckedInToday && <p className="text-xs text-muted-foreground">Already checked in today.</p>}
               </div>
             )}
-            <Button onClick={() => openCamera('checkin')} disabled={!selectedEmployee} className="h-10">
+            <Button onClick={() => openCamera('checkin')} disabled={!selectedEmployee || (!isAdmin && alreadyCheckedInToday)} className="h-10">
               <Camera className="w-4 h-4 mr-2" />
               Camera Check-In
             </Button>
@@ -637,6 +702,21 @@ export default function AttendancePage() {
                         )}
                       </div>
                     )}
+                    {Number(r.undertime_minutes) > 0 && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Undertime ({r.undertime_minutes} min)</p>
+                        {isAdmin ? (
+                          <Input
+                            type="number"
+                            defaultValue={r.undertime_deduction ?? 0}
+                            onBlur={(e) => handleUndertimeDeductionChange(r, e.target.value)}
+                            className="h-8 mt-0.5"
+                          />
+                        ) : (
+                          <p className="text-destructive">{formatCurrency(r.undertime_deduction ?? 0)}</p>
+                        )}
+                      </div>
+                    )}
                     {r.gps_lat && r.gps_lng && (
                       <div className="col-span-2">
                         <p className="text-xs text-muted-foreground">Location</p>
@@ -695,6 +775,7 @@ export default function AttendancePage() {
                     <TableHead>Status</TableHead>
                     <TableHead>Late</TableHead>
                     <TableHead>Deduction</TableHead>
+                    <TableHead>Undertime</TableHead>
                     <TableHead>Location</TableHead>
                     <TableHead>Review</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -751,6 +832,20 @@ export default function AttendancePage() {
                             />
                           ) : (
                             <span className="text-destructive font-medium">{formatCurrency(r.late_deduction ?? 0)}</span>
+                          )
+                        ) : '—'}
+                      </TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {Number(r.undertime_minutes) > 0 ? (
+                          isAdmin ? (
+                            <Input
+                              type="number"
+                              defaultValue={r.undertime_deduction ?? 0}
+                              onBlur={(e) => handleUndertimeDeductionChange(r, e.target.value)}
+                              className="h-8 w-24"
+                            />
+                          ) : (
+                            <span className="text-destructive font-medium">{formatCurrency(r.undertime_deduction ?? 0)}</span>
                           )
                         ) : '—'}
                       </TableCell>

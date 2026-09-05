@@ -133,7 +133,10 @@ export default function UndertakingPage() {
     borrowerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),
     residenceAddress: addressParts.join(', '),
   };
-  const branding = getDocumentBranding(loan.branches?.name);
+  // Loan paperwork always reads as Balanga regardless of which branch
+  // actually released the loan (client's instruction, Sept 2026) — unlike
+  // Payroll/Gas Voucher/Cash Count, which stay branch-aware.
+  const branding = getDocumentBranding('Balanga');
 
   async function handlePrint() {
     const refs = [page1Ref].filter(r => r.current);

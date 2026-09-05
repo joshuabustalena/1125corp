@@ -138,7 +138,10 @@ export default function LoanAgreementPage() {
 
   const addressParts = [loan.customers?.address, loan.customers?.barangay, loan.customers?.city, loan.customers?.province].filter(Boolean);
   const fullAddress = addressParts.join(', ');
-  const branding = getDocumentBranding(loan.branches?.name);
+  // Loan paperwork always reads as Balanga regardless of which branch
+  // actually released the loan (client's instruction, Sept 2026) — unlike
+  // Payroll/Gas Voucher/Cash Count, which stay branch-aware.
+  const branding = getDocumentBranding('Balanga');
   const agreementData = {
     date: loan.approved_at ?? new Date().toISOString(),
     borrowerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),

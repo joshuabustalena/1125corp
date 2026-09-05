@@ -31,11 +31,10 @@ const BRANCH_BRANDING: Record<string, BranchBranding> = {
     // and Loan Agreement templates (Aug 2026).
     headerAddress: 'Cupang West, Balanga City, Bataan',
     fullAddress: '118 Maligaya Street, Cupang West, Balanga City, Bataan',
-    // Kept as-is at the client's instruction (Aug 2026). Worth knowing: the
-    // signed Loan Agreement and Borrower's Undertaking templates both print
-    // 0950-931-9848 instead, so printed documents will not match those two
-    // paper originals on this one field.
-    contact: '0950-431-9848',
+    // Updated Sept 2026 to match the signed Loan Agreement and Borrower's
+    // Undertaking templates, which both print 0950-931-9848 — every branch
+    // now shows this one number so printed documents stay consistent.
+    contact: '0950-931-9848',
   },
   Dinalupihan: {
     address: DINALUPIHAN_ADDRESS,
@@ -43,7 +42,8 @@ const BRANCH_BRANDING: Record<string, BranchBranding> = {
     // same address used everywhere else until one turns up.
     headerAddress: DINALUPIHAN_ADDRESS,
     fullAddress: DINALUPIHAN_ADDRESS,
-    contact: '0985-978-4404',
+    // Same company-wide number as Balanga (Sept 2026) — see comment above.
+    contact: '0950-931-9848',
   },
 };
 

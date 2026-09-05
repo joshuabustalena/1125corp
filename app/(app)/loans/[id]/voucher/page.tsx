@@ -90,7 +90,10 @@ export default function VoucherPage() {
     firstPayment,
     beginningBalance,
   };
-  const branding = getDocumentBranding(loan.branches?.name);
+  // Loan paperwork always reads as Balanga regardless of which branch
+  // actually released the loan (client's instruction, Sept 2026) — unlike
+  // Payroll/Gas Voucher/Cash Count, which stay branch-aware.
+  const branding = getDocumentBranding('Balanga');
 
   // Back down to 12px/6x10px. A later pass sized this up to 14-21px/9x14px
   // to fill out the page, but at that size the content ran taller than the

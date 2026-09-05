@@ -187,7 +187,12 @@ export default function LoanDetailPage() {
   }
 
   const offsetRequired = loan.total_payable * 0.40;
-  const canRenew = loan.remaining_balance <= offsetRequired && loan.status === 'active';
+  // A fully paid loan (status flips to 'paid' once remaining_balance hits 0
+  // — see apply_loan_payment/edit_loan_payment RPCs) is renewable exactly
+  // like an active one whose balance is already within the 40% offset
+  // threshold: 'paid' must stay eligible here, or Renew silently disables
+  // itself the moment the last payment clears.
+  const canRenew = loan.remaining_balance <= offsetRequired && (loan.status === 'active' || loan.status === 'paid');
   const dailyAmount = loan.daily_payment != null && Number(loan.daily_payment) > 0
     ? Number(loan.daily_payment)
     : (loan.term_days > 0 ? loan.total_payable / loan.term_days : 0);

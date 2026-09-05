@@ -72,7 +72,6 @@ export default function CashVouchersPage() {
   useEffect(() => {
     loadAccounts();
     loadBranches();
-    loadHistory();
     getNextVoucherNumber().then(setVoucherNumber);
   }, []);
 
@@ -85,6 +84,17 @@ export default function CashVouchersPage() {
     if (!branchId) return;
     loadStaffOptions();
   }, [branchId]);
+
+  // History is scoped to the logged-in Cashier's own branch, same as
+  // generation already is — wait for their branch_id to resolve before
+  // fetching so a branch Cashier never sees even a brief flash of every
+  // branch's vouchers. Admin's branchId (auto-picked in loadBranches, for
+  // the voucher FORM only) must NOT filter their history list — they still
+  // see every branch.
+  useEffect(() => {
+    if (!isAdmin && !branchId) return;
+    loadHistory();
+  }, [isAdmin, branchId]);
 
   // Approved By is chosen from whoever holds the Branch Manager role at the
   // selected branch — not freely typed — same pattern as Gas Voucher and
@@ -132,7 +142,9 @@ export default function CashVouchersPage() {
 
   async function loadHistory() {
     setLoading(true);
-    const { data } = await supabase.from('general_cash_vouchers').select('*').order('voucher_date', { ascending: false }).order('created_at', { ascending: false }).limit(30);
+    let query = supabase.from('general_cash_vouchers').select('*').order('voucher_date', { ascending: false }).order('created_at', { ascending: false }).limit(30);
+    if (!isAdmin && branchId) query = query.eq('branch_id', branchId);
+    const { data } = await query;
     setHistory(data ?? []);
     setLoading(false);
   }

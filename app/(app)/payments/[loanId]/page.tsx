@@ -327,7 +327,10 @@ export default function LoanPaymentHistoryPage() {
   }
 
   const customerName = loan.customers ? `${loan.customers.first_name} ${loan.customers.last_name}` : '—';
-  const branding = getDocumentBranding(loan.branches?.name);
+  // Loan paperwork always reads as Balanga regardless of which branch
+  // actually released the loan (client's instruction, Sept 2026) — unlike
+  // Payroll/Gas Voucher/Cash Count, which stay branch-aware.
+  const branding = getDocumentBranding('Balanga');
 
   return (
     <div className="space-y-6">

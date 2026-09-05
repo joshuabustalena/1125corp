@@ -66,6 +66,11 @@ export default function RemittancePage() {
     setLoading(true);
     let colQuery = supabase.from('collectors').select('id, branch_id, profile_id, profiles(full_name), branches(name)').eq('status', 'active');
     if (isFieldCollector && profile) colQuery = colQuery.eq('profile_id', profile.id);
+    // Collection is a per-branch process: a Cashier/Branch Manager/Accounting
+    // user at one branch must not see or collect another branch's collectors
+    // (e.g. Dinalupihan staff must only handle Dinalupihan customers).
+    // Administrator is unrestricted.
+    else if (!isAdmin && profile?.branch_id) colQuery = colQuery.eq('branch_id', profile.branch_id);
 
     // The two cumulative queries are paginated: they read EVERY payment and
     // remittance ever recorded up to this date, and PostgREST silently caps

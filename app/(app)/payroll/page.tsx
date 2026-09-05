@@ -37,7 +37,7 @@ const pvCellCenter: React.CSSProperties = { ...pvCell, textAlign: 'center' };
 
 function payrollDeductionsTotal(p: any): number {
   return Number(p.sss) + Number(p.philhealth) + Number(p.pag_ibig) + Number(p.incentive_retention)
-    + Number(p.loan_deduction || 0) + Number(p.late_deduction || 0) + Number(p.carry_over_deduction || 0)
+    + Number(p.loan_deduction || 0) + Number(p.late_deduction || 0) + Number(p.undertime_deduction || 0) + Number(p.carry_over_deduction || 0)
     + Number(p.sss_loan || 0) + Number(p.pag_ibig_loan || 0) + Number(p.service_vehicle || 0) + Number(p.uniform || 0) + Number(p.cash_shortage || 0)
     + Number(p.special_deduction || 0);
 }
@@ -98,6 +98,13 @@ export default function PayrollPage() {
   // discloses other people's pay stays hidden and their query is pinned to
   // their own employee record.
   const canManagePayroll = hasPermission(profile?.permissions, 'payroll');
+  // A Cashier without the 'payroll' permission gets a narrow carve-out:
+  // Payroll Voucher generation for their OWN branch only — no Records tab,
+  // no 13th Month tab, no approve/edit tooling. Same role-based (not
+  // permission-based) pattern already used for Cash Voucher / Gas Voucher
+  // access. If a Cashier is ever granted 'payroll' outright, canManagePayroll
+  // takes over and they get the full management view instead.
+  const voucherOnly = profile?.role_name === 'Cashier' && !canManagePayroll;
   const [selfEmployeeId, setSelfEmployeeId] = useState<string | null>(null);
   const [selfResolved, setSelfResolved] = useState(false);
   const [payroll, setPayroll] = useState<any[]>([]);
@@ -125,7 +132,7 @@ export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState<'records' | 'voucher' | 'thirteenth'>('records');
   const [thirteenthYear, setThirteenthYear] = useState(String(new Date().getFullYear()));
   const [thirteenthCycle, setThirteenthCycle] = useState<'partial' | 'full'>(new Date().getMonth() < 6 ? 'partial' : 'full');
-  const [thirteenthAdjustments, setThirteenthAdjustments] = useState<Record<string, { deductionFromEarnings: string; totalDeduction: string }>>({});
+  const [thirteenthAdjustments, setThirteenthAdjustments] = useState<Record<string, { deductionFromEarnings: string; totalDeduction: string; additionalBasicSalary: string }>>({});
   const [breakdownEmployeeId, setBreakdownEmployeeId] = useState<string | null>(null);
   const [thirteenthVouchers, setThirteenthVouchers] = useState<any[]>([]);
   const [thirteenthCashierName, setThirteenthCashierName] = useState('');
@@ -158,17 +165,35 @@ export default function PayrollPage() {
   useEffect(() => {
     // Everything below the payslip list is management tooling — a
     // self-service employee needs none of it, so don't fetch it for them.
+    // A voucher-only Cashier DOES need the branch list, voucher numbers, and
+    // their own branch's voucher History (to generate AND review/reprint
+    // their own vouchers) — just not the full employee roster/records
+    // tooling — loadEmployees/loadThirteenthVouchers stay gated to full
+    // managers only.
+    if (!canManagePayroll && !voucherOnly) return;
+    loadBranches(); loadPayrollVouchers(); getNextVoucherNumber().then(setVoucherNumber);
     if (!canManagePayroll) return;
-    loadEmployees(); loadBranches(); loadPayrollVouchers(); loadThirteenthVouchers();
-    getNextVoucherNumber().then(setVoucherNumber);
+    loadEmployees(); loadThirteenthVouchers();
     getNextVoucherNumber().then(setThirteenthVoucherNumber);
-  }, [canManagePayroll]);
+  }, [canManagePayroll, voucherOnly]);
 
   // load() bails out early until we know whose payslips to request, so it has
-  // to be re-run once that resolves rather than only firing on mount.
+  // to be re-run once that resolves rather than only firing on mount. A
+  // voucher-only Cashier doesn't need that self-employee resolution at all.
   useEffect(() => {
-    if (canManagePayroll || selfResolved) load();
-  }, [canManagePayroll, selfResolved, selfEmployeeId]);
+    if (canManagePayroll || voucherOnly || selfResolved) load();
+  }, [canManagePayroll, voucherOnly, selfResolved, selfEmployeeId]);
+
+  useEffect(() => {
+    // Only the voucher-only Cashier carve-out is locked to one branch —
+    // any other role that separately holds full 'payroll' management
+    // (e.g. an Administrator, or an override grant) keeps free branch choice.
+    if (voucherOnly && profile?.branch_id) setVoucherBranchId(profile.branch_id);
+  }, [voucherOnly, profile]);
+
+  useEffect(() => {
+    if (voucherOnly) setActiveTab('voucher');
+  }, [voucherOnly]);
 
   useEffect(() => {
     if (profile?.role_name === 'Cashier' && profile?.full_name) {
@@ -190,11 +215,23 @@ export default function PayrollPage() {
   async function loadBranches() {
     const { data } = await supabase.from('branches').select('id, name').eq('status', 'active').order('name');
     setBranches(data ?? []);
-    if (data && data.length > 0 && !voucherBranchId) setVoucherBranchId(data[0].id);
+    // Only auto-pick the first branch for a full manager — a voucher-only
+    // Cashier's branch is locked from their profile by a separate effect,
+    // and this async fetch resolving later must not stomp on it: the
+    // `voucherBranchId` this closure captured is whatever it was BEFORE that
+    // effect ran (this call was kicked off in the same render), so without
+    // this guard it would overwrite the correct lock with data[0].id the
+    // moment this promise resolves. Same race/fix as cash-vouchers/page.tsx.
+    if (data && data.length > 0 && !voucherBranchId && !voucherOnly) setVoucherBranchId(data[0].id);
   }
 
   async function loadPayrollVouchers() {
-    const { data } = await supabase.from('payroll_vouchers').select('*, branches(name)').order('pay_date', { ascending: false }).order('created_at', { ascending: false }).limit(30);
+    let query = supabase.from('payroll_vouchers').select('*, branches(name)').order('pay_date', { ascending: false }).order('created_at', { ascending: false }).limit(30);
+    // A voucher-only Cashier's History list is scoped to their own branch —
+    // same rule as the Cash Voucher history list. A full manager (Admin or
+    // anyone else holding 'payroll') still sees every branch.
+    if (voucherOnly && profile?.branch_id) query = query.eq('branch_id', profile.branch_id);
+    const { data } = await query;
     setPayrollVouchers(data ?? []);
   }
 
@@ -214,21 +251,36 @@ export default function PayrollPage() {
   async function load() {
     setLoading(true);
     // Gate the whole fetch until we know WHOSE payslips to ask for —
-    // otherwise a self-service user briefly pulls everyone's payroll.
-    if (!canManagePayroll) {
+    // otherwise a self-service user briefly pulls everyone's payroll. A
+    // voucher-only Cashier skips this entirely — they aren't reading their
+    // OWN payslips here, they're reading their BRANCH's paid rows to build
+    // a voucher, so selfEmployeeId (which may not even resolve — a Cashier
+    // isn't necessarily also an `employees` row) is irrelevant to them.
+    if (!canManagePayroll && !voucherOnly) {
       if (!selfResolved) return;
       if (!selfEmployeeId) { setPayroll([]); setLoading(false); return; }
     }
     let payrollQuery = supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, branches(name))').order('pay_date', { ascending: false });
-    if (!canManagePayroll && selfEmployeeId) {
+    if (!canManagePayroll && !voucherOnly && selfEmployeeId) {
       // Own records only, and only once an Administrator has actually
       // approved them — approvePayroll() is what flips a row to 'paid', so a
       // still-'pending' payslip is a draft whose deductions can still change.
       // Showing one would let an employee print a figure that isn't final.
       payrollQuery = payrollQuery.eq('employee_id', selfEmployeeId).eq('status', 'paid');
+    } else if (voucherOnly) {
+      // A voucher-only Cashier only ever needs already-approved rows to
+      // sweep into a voucher — same "only 'paid' counts" rule as above.
+      payrollQuery = payrollQuery.eq('status', 'paid');
     }
-    const { data } = await payrollQuery;
-    setPayroll(data ?? []);
+    const { data: fetched } = await payrollQuery;
+    // payroll has no branch_id column of its own (branch lives on the
+    // joined employees row) — narrow to the Cashier's own branch
+    // client-side, same idiom used elsewhere in the app for branch scoping
+    // through a joined table.
+    const data = voucherOnly && profile?.branch_id
+      ? (fetched ?? []).filter((p: any) => p.employees?.branch_id === profile.branch_id)
+      : (fetched ?? []);
+    setPayroll(data);
 
     const employeeIds = Array.from(new Set((data ?? []).map(p => p.employee_id)));
     if (employeeIds.length > 0) {
@@ -310,12 +362,19 @@ export default function PayrollPage() {
     }
     return Array.from(totals.entries())
       .map(([employee_id, v]) => {
-        const adj = thirteenthAdjustments[employee_id] ?? { deductionFromEarnings: '', totalDeduction: '' };
+        const adj = thirteenthAdjustments[employee_id] ?? { deductionFromEarnings: '', totalDeduction: '', additionalBasicSalary: '' };
         const deductionFromEarnings = Number(adj.deductionFromEarnings) || 0;
         const totalDeduction = Number(adj.totalDeduction) || 0;
-        const dividedBy12 = Math.round(((v.totalEarnings - deductionFromEarnings) / 12) * 100) / 100;
+        // Manual top-up for a cutoff whose basic salary never made it into
+        // `payroll` (e.g. a June/July payrun processed outside the normal
+        // Generate Payroll flow) — added to totalEarnings BEFORE ÷ 12, same
+        // stage as the actual per-cutoff basic_salary figures it's standing
+        // in for.
+        const additionalBasicSalary = Number(adj.additionalBasicSalary) || 0;
+        const totalEarnings = v.totalEarnings + additionalBasicSalary;
+        const dividedBy12 = Math.round(((totalEarnings - deductionFromEarnings) / 12) * 100) / 100;
         const netPay = Math.round((dividedBy12 - totalDeduction) * 100) / 100;
-        return { employee_id, employee: v.employee, totalEarnings: v.totalEarnings, deductionFromEarnings, totalDeduction, dividedBy12, netPay };
+        return { employee_id, employee: v.employee, totalEarnings, additionalBasicSalary, deductionFromEarnings, totalDeduction, dividedBy12, netPay };
       })
       .sort((a, b) => (a.employee?.first_name ?? '').localeCompare(b.employee?.first_name ?? ''));
   }
@@ -345,6 +404,7 @@ export default function PayrollPage() {
     const { present, total } = daysPresent(target);
     const loanDeduction = Number(target.loan_deduction) || 0;
     const lateDeduction = Number(target.late_deduction) || 0;
+    const undertimeDeduction = Number(target.undertime_deduction) || 0;
     const carryOverDeduction = Number(target.carry_over_deduction) || 0;
     const birthdayBonus = Number(target.birthday_bonus) || 0;
     const leavePay = Number(target.leave_pay) || 0;
@@ -446,6 +506,9 @@ export default function PayrollPage() {
             {lateDeduction > 0 && (
               <tr><td style={{ padding: '3px 0', color: '#666' }}>Late Deduction</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(lateDeduction)}</td></tr>
             )}
+            {undertimeDeduction > 0 && (
+              <tr><td style={{ padding: '3px 0', color: '#666' }}>Undertime Deduction</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(undertimeDeduction)}</td></tr>
+            )}
             {carryOverDeduction > 0 && (
               <tr><td style={{ padding: '3px 0', color: '#c0392b' }}>Carried Over Deficit (prior payroll)</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(carryOverDeduction)}</td></tr>
             )}
@@ -514,7 +577,7 @@ export default function PayrollPage() {
     // salary/2 split.
     const { start, end } = getPeriodRange(payDate, period);
     const employeeIds = employees.map(e => e.id);
-    const { data: att } = await supabase.from('attendance').select('employee_id, date, status, review_status, late_deduction').in('employee_id', employeeIds).gte('date', start).lte('date', end);
+    const { data: att } = await supabase.from('attendance').select('employee_id, date, status, review_status, late_deduction, undertime_deduction').in('employee_id', employeeIds).gte('date', start).lte('date', end);
     const { data: holidaysInPeriod } = await supabase.from('holidays').select('holiday_date, name, type').gte('holiday_date', start).lte('holiday_date', end);
 
     // Approved leave counts as a paid present day even with no attendance
@@ -655,6 +718,12 @@ export default function PayrollPage() {
       const lateDeduction = (att ?? [])
         .filter(a => a.employee_id === e.id && a.status === 'late' && a.review_status !== 'rejected')
         .reduce((sum, a) => sum + (Number(a.late_deduction) || 0), 0);
+      // Undertime is independent of the late/on-time status (it's about
+      // leaving early, computed at check-out) — sum it across every
+      // non-rejected attendance record in the period, not just 'late' ones.
+      const undertimeDeduction = (att ?? [])
+        .filter(a => a.employee_id === e.id && a.review_status !== 'rejected')
+        .reduce((sum, a) => sum + (Number(a.undertime_deduction) || 0), 0);
       const previousNetPay = previousNetPayByEmployee.get(e.id);
       const carryOverDeduction = previousNetPay !== undefined && previousNetPay < 0 ? -previousNetPay : 0;
 
@@ -684,7 +753,7 @@ export default function PayrollPage() {
 
       const { pay: holidayPay, days: holidayDays } = isMonthly ? { pay: 0, days: 0 } : holidayPayForPeriod(e.id, dailyRate, birthdayDate, leaveCreditedDates);
 
-      const totalDeductions = sss + philhealth + pagIbig + retention + loanDeduction + carryOverDeduction + lateDeduction;
+      const totalDeductions = sss + philhealth + pagIbig + retention + loanDeduction + carryOverDeduction + lateDeduction + undertimeDeduction;
       const netPay = basicSalary + incentive + birthdayBonus + leavePay + holidayPay - totalDeductions;
 
       return {
@@ -700,6 +769,7 @@ export default function PayrollPage() {
         incentive_retention: Math.round(retention * 100) / 100,
         loan_deduction: Math.round(loanDeduction * 100) / 100,
         late_deduction: Math.round(lateDeduction * 100) / 100,
+        undertime_deduction: Math.round(undertimeDeduction * 100) / 100,
         carry_over_deduction: Math.round(carryOverDeduction * 100) / 100,
         // SSS/Pag-IBIG loans and the three Special Loans (Service Vehicle,
         // Uniform, Cash Shortage) have no fixed formula or term — the
@@ -891,7 +961,7 @@ export default function PayrollPage() {
         Period: p.period, PayDate: p.pay_date, DaysPresent: `${present}/${total}`, Basic: p.basic_salary,
         Overtime: p.overtime_pay, Incentive: p.incentive, SSS: p.sss,
         PhilHealth: p.philhealth, PagIBIG: p.pag_ibig, Retention: p.incentive_retention,
-        LoanDeduction: p.loan_deduction ?? 0, LateDeduction: p.late_deduction ?? 0, CarryOverDeduction: p.carry_over_deduction ?? 0,
+        LoanDeduction: p.loan_deduction ?? 0, LateDeduction: p.late_deduction ?? 0, UndertimeDeduction: p.undertime_deduction ?? 0, CarryOverDeduction: p.carry_over_deduction ?? 0,
         SSSLoan: p.sss_loan ?? 0, PagIBIGLoan: p.pag_ibig_loan ?? 0, ServiceVehicle: p.service_vehicle ?? 0, Uniform: p.uniform ?? 0, CashShortage: p.cash_shortage ?? 0, SpecialDeduction: p.special_deduction ?? 0,
         NetPay: p.net_pay, Status: p.status,
       };
@@ -903,7 +973,7 @@ export default function PayrollPage() {
     exportToCSV(rows.map(r => ({
       Employee: `${r.employee?.first_name ?? ''} ${r.employee?.last_name ?? ''}`,
       Year: thirteenthYear, Cycle: thirteenthCycle,
-      TotalEarnings: r.totalEarnings, DeductionFromEarnings: r.deductionFromEarnings,
+      TotalEarnings: r.totalEarnings, AdditionalBasicSalary: r.additionalBasicSalary, DeductionFromEarnings: r.deductionFromEarnings,
       DividedBy12: r.dividedBy12, TotalDeduction: r.totalDeduction, NetPay: r.netPay,
     })), `13th-month-pay-${thirteenthYear}-${thirteenthCycle}.csv`);
   }
@@ -1255,7 +1325,7 @@ export default function PayrollPage() {
     if (!voucherBranchId || eligiblePayrollRows.length === 0) return;
     setGeneratingVoucher(true);
 
-    let sssPayable = 0, philPayable = 0, pagibigPayable = 0, svTotal = 0, uniformTotal = 0, cashShortageTotal = 0, employeeLoanTotal = 0, netPayTotal = 0;
+    let sssPayable = 0, philPayable = 0, pagibigPayable = 0, svTotal = 0, uniformTotal = 0, cashShortageTotal = 0, employeeLoanTotal = 0, netPayTotal = 0, incentiveTotal = 0, incentiveRetentionTotal = 0;
     const lines = eligiblePayrollRows.map(p => {
       // sss_loan/pag_ibig_loan are deliberately left out — the client
       // confirmed (reference journal entry) these should never appear on
@@ -1274,6 +1344,8 @@ export default function PayrollPage() {
       cashShortageTotal += Number(p.cash_shortage || 0);
       employeeLoanTotal += Number(p.loan_deduction || 0);
       netPayTotal += Number(p.net_pay) || 0;
+      incentiveTotal += Number(p.incentive || 0);
+      incentiveRetentionTotal += Number(p.incentive_retention || 0);
       return { payroll_id: p.id, employee_id: p.employee_id, name: `${p.employees?.first_name ?? ''} ${p.employees?.last_name ?? ''}`, net_pay: Number(p.net_pay) || 0 };
     });
     // Backed out from the credit side so the entry always balances by
@@ -1281,7 +1353,14 @@ export default function PayrollPage() {
     // dropping sss_loan/pag_ibig_loan from the credits above also shrinks
     // this figure by the same amount, exactly matching the client's
     // reference entry (Salaries Expense = sum of every credit line below).
-    const salariesExpense = netPayTotal + sssPayable + philPayable + pagibigPayable + svTotal + uniformTotal + cashShortageTotal + employeeLoanTotal;
+    //
+    // Incentive is then pulled back OUT of this plug and into its own two
+    // lines below (Incentives Expense / Withheld Funds Payable), since
+    // netPayTotal already nets "+ incentive - retention" into it — without
+    // this adjustment the incentive's net effect would double up: once
+    // buried inside Salaries Expense, once again as its own explicit lines.
+    const salariesExpense = netPayTotal + sssPayable + philPayable + pagibigPayable + svTotal + uniformTotal + cashShortageTotal + employeeLoanTotal
+      - incentiveTotal + incentiveRetentionTotal;
 
     const { data: voucher, error } = await supabase.from('payroll_vouchers').insert({
       voucher_number: voucherNumber,
@@ -1345,6 +1424,11 @@ export default function PayrollPage() {
         { accountCode: cashShortageCode ?? '', credit: cashShortageTotal, memo: 'Cash Shortage' },
         { accountCode: employeeLoanCode ?? '', credit: employeeLoanTotal, memo: 'Employee Loan' },
         { accountCode: cashVaultCode ?? '', credit: netPayTotal, memo: 'Cash in Vault' },
+        // Incentive gross-up, broken out of the Salaries Expense plug above
+        // (see the comment on salariesExpense) into its own dedicated pair —
+        // company-wide flat codes, same treatment as SSS/Phil/PagIBIG Payable.
+        { accountCode: '5040', debit: incentiveTotal, memo: 'Incentives Expense' },
+        { accountCode: '2040', credit: incentiveRetentionTotal, memo: 'Withheld Funds Payable' },
       ],
     });
 
@@ -1481,6 +1565,16 @@ export default function PayrollPage() {
           <TabsTrigger value="voucher"><FileSpreadsheet className="w-4 h-4 mr-1.5" />Payroll Voucher</TabsTrigger>
           <TabsTrigger value="thirteenth"><Gift className="w-4 h-4 mr-1.5" />13th Month Pay</TabsTrigger>
         </TabsList>
+        )}
+        {/* Voucher-only Cashier: no Records/13th Month access, so there's
+            nothing to switch between — just a label, not a functioning
+            TabsList (a single-item TabsList would look like a disabled
+            control for no reason). activeTab is pinned to 'voucher' by the
+            effect above and never changes for this user. */}
+        {voucherOnly && (
+          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <FileSpreadsheet className="w-4 h-4" />Payroll Voucher
+          </div>
         )}
 
       <TabsContent value="records" className="space-y-6 pt-4">
@@ -1688,7 +1782,9 @@ export default function PayrollPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label className="text-xs">Branch</Label>
-              <Select value={voucherBranchId} onValueChange={setVoucherBranchId}>
+              {/* Locked to the Cashier's own branch — voucherOnly can never
+                  pick another branch's payroll to voucher. */}
+              <Select value={voucherBranchId} onValueChange={setVoucherBranchId} disabled={voucherOnly}>
                 <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
                 <SelectContent>{branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
               </Select>
@@ -2105,7 +2201,7 @@ export default function PayrollPage() {
             if (!breakdownEmployeeId) return null;
             const row = thirteenthMonthRows.find(r => r.employee_id === breakdownEmployeeId);
             const cutoffs = getCutoffBreakdown(breakdownEmployeeId, thirteenthYear, thirteenthCycle);
-            const adj = thirteenthAdjustments[breakdownEmployeeId] ?? { deductionFromEarnings: '', totalDeduction: '' };
+            const adj = thirteenthAdjustments[breakdownEmployeeId] ?? { deductionFromEarnings: '', totalDeduction: '', additionalBasicSalary: '' };
             return (
               <>
                 <DialogHeader>
@@ -2126,6 +2222,12 @@ export default function PayrollPage() {
                         <TableCell className="text-sm text-right">{formatCurrency(c.amount)}</TableCell>
                       </TableRow>
                     ))}
+                    {Number(adj.additionalBasicSalary) > 0 && (
+                      <TableRow>
+                        <TableCell className="text-sm text-muted-foreground">Additional Basic Salary (manual)</TableCell>
+                        <TableCell className="text-sm text-right text-muted-foreground">{formatCurrency(Number(adj.additionalBasicSalary))}</TableCell>
+                      </TableRow>
+                    )}
                     <TableRow>
                       <TableCell className="text-sm font-bold">Total Earnings</TableCell>
                       <TableCell className="text-sm font-bold text-right">{formatCurrency(row?.totalEarnings ?? 0)}</TableCell>
@@ -2134,6 +2236,15 @@ export default function PayrollPage() {
                 </Table>
 
                 <div className="grid grid-cols-1 gap-3 pt-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Additional Basic Salary (manual payrun not captured above, e.g. June–July)</Label>
+                    <Input
+                      type="number"
+                      value={adj.additionalBasicSalary}
+                      onChange={(e) => setThirteenthAdjustments(prev => ({ ...prev, [breakdownEmployeeId!]: { ...adj, additionalBasicSalary: e.target.value } }))}
+                      placeholder="0.00"
+                    />
+                  </div>
                   <div className="space-y-1">
                     <Label className="text-xs">Deduction from Earnings (e.g. leave adjustment, before ÷ 12)</Label>
                     <Input
