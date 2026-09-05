@@ -23,6 +23,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import { notifyRoles } from '@/lib/notify';
+import { logAudit } from '@/lib/audit-log';
 import { TrendingUp, Plus, Loader2, CheckCircle, XCircle } from 'lucide-react';
 
 export default function CreditLimitRequestsPage() {
@@ -145,6 +146,7 @@ export default function CreditLimitRequestsPage() {
       url: '/credit-limit-requests',
     }, request.customers?.branch_id);
     toast({ title: 'Success', description: `Request ${status}` });
+    logAudit({ action: status === 'approved' ? 'approve' : 'reject', entityType: 'credit_limit_requests', entityId: request.id, details: reason ? { reason } : null });
     setConfirmTarget(null);
     load();
     setReviewing(null);

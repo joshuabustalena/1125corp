@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase/client';
+import { logAudit } from '@/lib/audit-log';
 
 export interface UserProfile {
   id: string;
@@ -101,12 +102,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [fetchProfile]);
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (!error && data.user) {
+      logAudit({ action: 'login', entityType: 'auth', entityId: data.user.id, userId: data.user.id, details: { email } });
+    }
     return { error: error?.message ?? null };
   };
 
   const signOut = async () => {
+    // Captured before signOut() clears the session — logAudit can't fall
+    // back to supabase.auth.getUser() once there's no session left to ask.
+    const uid = user?.id ?? null;
     await supabase.auth.signOut();
+    if (uid) logAudit({ action: 'logout', entityType: 'auth', entityId: uid, userId: uid });
     setProfile(null);
     setUser(null);
     setSession(null);

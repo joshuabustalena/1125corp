@@ -21,6 +21,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDate, formatTime, formatDuration, formatCurrency, exportToCSV, formatCustomerName } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
+import { logAudit } from '@/lib/audit-log';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
@@ -468,6 +469,7 @@ export default function AttendancePage() {
       return;
     }
     setRecords(prev => prev.map(r => r.id === id ? { ...r, review_status: reviewStatus } : r));
+    logAudit({ action: reviewStatus === 'accepted' ? 'approve' : 'reject', entityType: 'attendance', entityId: id });
     if (record) {
       notifyProfile(record.employees?.profile_id, {
         type: 'attendance_reviewed',
@@ -480,7 +482,14 @@ export default function AttendancePage() {
   }
 
   function canActOnRecord(r: any) {
-    return isAdmin || (isBranchManager && r.status !== 'late');
+    if (isAdmin) return true;
+    if (!isBranchManager) return false;
+    // A Branch Manager reviews everyone else in their branch, but never
+    // their own attendance — self-approval would let them accept/reject
+    // their own record (and the late/undertime deduction riding on it).
+    // Only an Administrator can act on a Branch Manager's own record.
+    if (myEmployeeId && r.employee_id === myEmployeeId) return false;
+    return r.status !== 'late';
   }
 
   // Deduction amount is only ever editable by an Administrator — saving it

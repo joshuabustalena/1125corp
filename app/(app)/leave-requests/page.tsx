@@ -23,6 +23,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatDate, formatCustomerName } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
+import { logAudit } from '@/lib/audit-log';
 import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search, Trash2, RotateCcw } from 'lucide-react';
 
 // 5 regular leave terms, plus a separate Special Leave category (solo
@@ -194,6 +195,7 @@ export default function LeaveRequestsPage() {
     });
 
     toast({ title: 'Success', description: `Leave request ${status}` });
+    logAudit({ action: status === 'approved' ? 'approve' : 'reject', entityType: 'leave_requests', entityId: request.id });
     load();
   }
 

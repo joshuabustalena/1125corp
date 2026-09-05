@@ -351,13 +351,40 @@ export default function PayrollPage() {
     return { start: `${y}-06-01`, end: `${y}-11-30` };
   }
 
+  // Monthly-salary employees (e.g. Branch Manager) get a FLAT basic_salary
+  // per cutoff (half their monthly salary) regardless of attendance — late,
+  // undertime, and full absences are deducted from net_pay elsewhere but
+  // never touch basic_salary itself, so a manager who was late/absent all
+  // cutoff still nominally "earns" the full half-month figure on the
+  // regular payslip. For 13th month purposes only, credit them for what
+  // they actually earned that cutoff instead: subtract late/undertime
+  // deductions already on the row, plus a daily-rate-equivalent charge for
+  // each working day with no attendance record and no approved
+  // leave/birthday credit (daysPresent already computes exactly that
+  // present/absent split for the payslip's own "Days Present" column,
+  // reused here rather than re-deriving it).
+  // Daily-rate employees are unaffected — their basic_salary already scales
+  // with presentDays, so this returns it unchanged for them.
+  function thirteenthMonthCutoffBasic(p: any): number {
+    const nominal = Number(p.basic_salary) || 0;
+    if (p.employees?.pay_type !== 'monthly') return nominal;
+    const { present, total } = daysPresent(p);
+    const absentDays = Math.max(0, total - present);
+    // Same monthly-salary/26-working-days approximation already used for
+    // late/undertime deduction elsewhere (attendance page, confirmCapture).
+    const dailyRateEquivalent = Number(p.employees?.salary || 0) / 26;
+    const lateDeduction = Number(p.late_deduction) || 0;
+    const undertimeDeduction = Number(p.undertime_deduction) || 0;
+    return Math.max(0, nominal - lateDeduction - undertimeDeduction - (dailyRateEquivalent * absentDays));
+  }
+
   function getThirteenthMonthRows(year: string, cycle: 'partial' | 'full') {
     const { start, end } = getThirteenthMonthRange(year, cycle);
     const totals = new Map<string, { employee: any; totalEarnings: number }>();
     for (const p of payroll) {
       if (p.pay_date < start || p.pay_date > end) continue;
       const existing = totals.get(p.employee_id) ?? { employee: p.employees, totalEarnings: 0 };
-      existing.totalEarnings += Number(p.basic_salary) || 0;
+      existing.totalEarnings += thirteenthMonthCutoffBasic(p);
       totals.set(p.employee_id, existing);
     }
     return Array.from(totals.entries())
@@ -390,7 +417,12 @@ export default function PayrollPage() {
         const { start: cStart, end: cEnd } = getPeriodRange(p.pay_date, p.period);
         const s = new Date(cStart), e = new Date(cEnd);
         const label = `${s.toLocaleDateString('en-US', { month: 'long' })} ${s.getDate()}-${e.getDate()}`;
-        return { label, payDate: p.pay_date, amount: Number(p.basic_salary) || 0 };
+        const nominal = Number(p.basic_salary) || 0;
+        const amount = thirteenthMonthCutoffBasic(p);
+        // Only a monthly-salary employee's row can ever differ from the
+        // nominal figure — flagged so it's obvious in the breakdown why a
+        // cutoff shows less than the usual half-month amount.
+        return { label, payDate: p.pay_date, amount, adjusted: amount !== nominal };
       })
       .sort((a, b) => a.payDate.localeCompare(b.payDate));
   }
@@ -2218,7 +2250,10 @@ export default function PayrollPage() {
                   <TableBody>
                     {cutoffs.map((c, i) => (
                       <TableRow key={i}>
-                        <TableCell className="text-sm">{c.label}</TableCell>
+                        <TableCell className="text-sm">
+                          {c.label}
+                          {c.adjusted && <span className="text-xs text-muted-foreground ml-1.5">(adjusted for late/undertime/absence)</span>}
+                        </TableCell>
                         <TableCell className="text-sm text-right">{formatCurrency(c.amount)}</TableCell>
                       </TableRow>
                     ))}

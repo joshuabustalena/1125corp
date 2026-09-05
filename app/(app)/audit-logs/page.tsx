@@ -12,15 +12,23 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from '@/components/ui/dialog';
 import { supabase } from '@/lib/supabase/client';
 import { formatDateTime, exportToCSV } from '@/lib/format';
-import { ShieldCheck, Search, Download, Loader2, LogIn, LogOut, Pencil, Trash2, Plus, Check, X } from 'lucide-react';
+import { ShieldCheck, Search, Download, Loader2, LogIn, LogOut, Pencil, Trash2, Plus, Check, X, Eye } from 'lucide-react';
 
 export default function AuditLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('all');
+  // The 'create'/'edit'/'delete' rows come from the database trigger and
+  // carry the full row (or before/after diff) in `details` — nothing in the
+  // table itself surfaces that, so this dialog is the only way to actually
+  // see what changed rather than just that something did.
+  const [detailsTarget, setDetailsTarget] = useState<any | null>(null);
 
   useEffect(() => { load(); }, [search, actionFilter]);
 
@@ -111,6 +119,13 @@ export default function AuditLogsPage() {
                     <span className="text-muted-foreground">{l.entity_type ?? '—'}</span>
                   </div>
                   {l.ip_address && <p className="mt-1 text-xs text-muted-foreground font-mono">{l.ip_address}</p>}
+                  {l.details && (
+                    <div className="mt-2 flex justify-end">
+                      <Button variant="outline" size="sm" onClick={() => setDetailsTarget(l)}>
+                        <Eye className="w-3.5 h-3.5 mr-1.5" />Details
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -123,6 +138,7 @@ export default function AuditLogsPage() {
                   <TableHead>Action</TableHead>
                   <TableHead>Entity</TableHead>
                   <TableHead>IP Address</TableHead>
+                  <TableHead className="text-right">Details</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -138,6 +154,13 @@ export default function AuditLogsPage() {
                     </TableCell>
                     <TableCell className="text-sm">{l.entity_type ?? '—'}</TableCell>
                     <TableCell className="text-sm font-mono">{l.ip_address ?? '—'}</TableCell>
+                    <TableCell className="text-right">
+                      {l.details && (
+                        <Button variant="ghost" size="icon" onClick={() => setDetailsTarget(l)} title="View details">
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -146,6 +169,27 @@ export default function AuditLogsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!detailsTarget} onOpenChange={(open) => !open && setDetailsTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="capitalize flex items-center gap-2">
+              {detailsTarget && actionIcon(detailsTarget.action)}
+              {detailsTarget?.action} — {detailsTarget?.entity_type ?? 'record'}
+            </DialogTitle>
+            <DialogDescription>
+              {detailsTarget && formatDateTime(detailsTarget.created_at)} · {detailsTarget?.profiles?.full_name ?? 'System'}
+            </DialogDescription>
+          </DialogHeader>
+          {/* Raw jsonb from the database trigger — the created/deleted row
+              for create/delete, or {before, after} for edit. Pretty-printed
+              rather than reformatted into a diff view: this is the forensic
+              record, not a display meant to look polished. */}
+          <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-96 whitespace-pre-wrap break-all">
+            {detailsTarget ? JSON.stringify(detailsTarget.details, null, 2) : ''}
+          </pre>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
