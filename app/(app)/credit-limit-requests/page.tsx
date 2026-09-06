@@ -146,7 +146,7 @@ export default function CreditLimitRequestsPage() {
       url: '/credit-limit-requests',
     }, request.customers?.branch_id);
     toast({ title: 'Success', description: `Request ${status}` });
-    logAudit({ action: status === 'approved' ? 'approve' : 'reject', entityType: 'credit_limit_requests', entityId: request.id, details: reason ? { reason } : null });
+    logAudit({ action: status === 'approved' ? 'approve' : 'reject', entityType: 'credit_limit_requests', entityId: request.id, details: reason ? { reason } : null, userId: profile?.id ?? null });
     setConfirmTarget(null);
     load();
     setReviewing(null);

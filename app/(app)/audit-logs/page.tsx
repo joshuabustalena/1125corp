@@ -17,24 +17,51 @@ import {
 } from '@/components/ui/dialog';
 import { supabase } from '@/lib/supabase/client';
 import { formatDateTime, exportToCSV } from '@/lib/format';
-import { ShieldCheck, Search, Download, Loader2, LogIn, LogOut, Pencil, Trash2, Plus, Check, X, Eye } from 'lucide-react';
+import { ShieldCheck, Search, Download, Loader2, LogIn, LogOut, Pencil, Trash2, Plus, Check, X, Eye, ChevronLeft, ChevronRight } from 'lucide-react';
+
+const PAGE_SIZE = 10;
+
+// snake_case column name -> "Column Name", with "id" upper-cased ("Account
+// ID" rather than "Account Id") since that's how every field ending in _id
+// reads in the rest of this app's own UI.
+function humanizeKey(key: string): string {
+  return key.split('_').map(w => (w === 'id' ? 'ID' : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+}
+
+// A single row's field value, formatted for display rather than dumped as
+// raw JSON — null/blank reads as "—" (matches how every other table on this
+// page already shows a missing value), booleans as Yes/No, and only a
+// nested object/array (e.g. a voucher's `lines` jsonb) falls back to inline
+// JSON, since there's no generic way to flatten arbitrary nested shapes
+// further than that.
+function formatDetailValue(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '—';
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
 
 export default function AuditLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('all');
+  const [page, setPage] = useState(0);
   // The 'create'/'edit'/'delete' rows come from the database trigger and
   // carry the full row (or before/after diff) in `details` — nothing in the
   // table itself surfaces that, so this dialog is the only way to actually
   // see what changed rather than just that something did.
   const [detailsTarget, setDetailsTarget] = useState<any | null>(null);
 
-  useEffect(() => { load(); }, [search, actionFilter]);
+  // Search/filter changing always jumps back to page 0 — passed explicitly
+  // to load() rather than relying on `page` state (which hasn't re-rendered
+  // yet at this point) so this never fires an extra, wrong-page fetch.
+  useEffect(() => { setPage(0); load(0); }, [search, actionFilter]);
 
-  async function load() {
+  async function load(pageArg?: number) {
+    const p = pageArg ?? page;
     setLoading(true);
-    let query = supabase.from('audit_logs').select('*, profiles(full_name, email)').order('created_at', { ascending: false }).limit(100);
+    let query = supabase.from('audit_logs').select('*, profiles(full_name, email)').order('created_at', { ascending: false }).range(p * PAGE_SIZE, p * PAGE_SIZE + PAGE_SIZE - 1);
     if (search) query = query.or(`action.ilike.%${search}%,entity_type.ilike.%${search}%`);
     if (actionFilter !== 'all') query = query.eq('action', actionFilter);
     const { data } = await query;
@@ -42,8 +69,29 @@ export default function AuditLogsPage() {
     setLoading(false);
   }
 
-  function handleExport() {
-    exportToCSV(logs.map(l => ({
+  function handleNext() {
+    const next = page + 1;
+    setPage(next);
+    load(next);
+  }
+
+  function handlePrev() {
+    const prev = Math.max(0, page - 1);
+    setPage(prev);
+    load(prev);
+  }
+
+  // Exports every row matching the current search/filter, not just the
+  // current 10-row page — a page-limited export would be a worse export
+  // than the old unpaginated one. Capped at 2000 rows as a sanity limit;
+  // the 6-day retention job (add_audit_log_retention.sql) keeps the table
+  // small enough that this is never actually reached in practice.
+  async function handleExport() {
+    let query = supabase.from('audit_logs').select('*, profiles(full_name, email)').order('created_at', { ascending: false }).limit(2000);
+    if (search) query = query.or(`action.ilike.%${search}%,entity_type.ilike.%${search}%`);
+    if (actionFilter !== 'all') query = query.eq('action', actionFilter);
+    const { data } = await query;
+    exportToCSV((data ?? []).map(l => ({
       Timestamp: l.created_at, User: l.profiles?.full_name ?? '', Action: l.action,
       Entity: l.entity_type ?? '', IP: l.ip_address ?? '',
     })), 'audit-logs.csv');
@@ -167,11 +215,22 @@ export default function AuditLogsPage() {
             </Table>
             </>
           )}
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+            <span className="text-xs text-muted-foreground">Page {page + 1}</span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handlePrev} disabled={loading || page === 0}>
+                <ChevronLeft className="w-4 h-4 mr-1" />Previous
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleNext} disabled={loading || logs.length < PAGE_SIZE}>
+                Next<ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
       <Dialog open={!!detailsTarget} onOpenChange={(open) => !open && setDetailsTarget(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="capitalize flex items-center gap-2">
               {detailsTarget && actionIcon(detailsTarget.action)}
@@ -181,13 +240,63 @@ export default function AuditLogsPage() {
               {detailsTarget && formatDateTime(detailsTarget.created_at)} · {detailsTarget?.profiles?.full_name ?? 'System'}
             </DialogDescription>
           </DialogHeader>
-          {/* Raw jsonb from the database trigger — the created/deleted row
-              for create/delete, or {before, after} for edit. Pretty-printed
-              rather than reformatted into a diff view: this is the forensic
-              record, not a display meant to look polished. */}
-          <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-96 whitespace-pre-wrap break-all">
-            {detailsTarget ? JSON.stringify(detailsTarget.details, null, 2) : ''}
-          </pre>
+          {detailsTarget && (() => {
+            const d = detailsTarget.details ?? {};
+            // The log_audit_trail() trigger shapes an 'edit' row as
+            // {before, after} and a 'create'/'delete' row as the plain
+            // record itself — this is the only thing distinguishing which
+            // view to render, not detailsTarget.action (a manually-logged
+            // 'approve'/'reject' carries no diff shape at all and falls
+            // through to the plain key/value view same as create/delete).
+            const isEdit = d && typeof d === 'object' && 'before' in d && 'after' in d;
+            if (isEdit) {
+              const before = (d as any).before ?? {};
+              const after = (d as any).after ?? {};
+              const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort();
+              return (
+                <div className="max-h-96 overflow-auto rounded-md border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-1/3">Field</TableHead>
+                        <TableHead>Before</TableHead>
+                        <TableHead>After</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {keys.map(k => {
+                        const bv = formatDetailValue(before[k]);
+                        const av = formatDetailValue(after[k]);
+                        const changed = bv !== av;
+                        return (
+                          <TableRow key={k} className={changed ? 'bg-warning/10' : undefined}>
+                            <TableCell className="text-xs text-muted-foreground align-top">{humanizeKey(k)}</TableCell>
+                            <TableCell className="text-xs align-top break-all">{bv}</TableCell>
+                            <TableCell className={`text-xs align-top break-all ${changed ? 'font-medium' : ''}`}>{av}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              );
+            }
+            const keys = Object.keys(d as Record<string, unknown>);
+            return (
+              <div className="max-h-96 overflow-auto rounded-md border border-border">
+                <Table>
+                  <TableBody>
+                    {keys.map(k => (
+                      <TableRow key={k}>
+                        <TableCell className="text-xs text-muted-foreground align-top w-1/3">{humanizeKey(k)}</TableCell>
+                        <TableCell className="text-xs align-top break-all">{formatDetailValue((d as any)[k])}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

@@ -469,7 +469,7 @@ export default function AttendancePage() {
       return;
     }
     setRecords(prev => prev.map(r => r.id === id ? { ...r, review_status: reviewStatus } : r));
-    logAudit({ action: reviewStatus === 'accepted' ? 'approve' : 'reject', entityType: 'attendance', entityId: id });
+    logAudit({ action: reviewStatus === 'accepted' ? 'approve' : 'reject', entityType: 'attendance', entityId: id, userId: profile?.id ?? null });
     if (record) {
       notifyProfile(record.employees?.profile_id, {
         type: 'attendance_reviewed',

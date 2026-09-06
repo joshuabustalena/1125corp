@@ -108,6 +108,11 @@ export default function PayrollPage() {
   const [selfEmployeeId, setSelfEmployeeId] = useState<string | null>(null);
   const [selfResolved, setSelfResolved] = useState(false);
   const [payroll, setPayroll] = useState<any[]>([]);
+  // Separate from `payroll` on purpose: for a voucherOnly Cashier, `payroll`
+  // holds their BRANCH's paid rows (to build a voucher from — see load()),
+  // which is everyone's net pay, not just theirs. "My Payslip" must never
+  // read from that — this holds only their own approved payslips instead.
+  const [myPayslipRows, setMyPayslipRows] = useState<any[]>([]);
   // Payroll Records is otherwise one flat list of every employee's every
   // cutoff — this narrows it down to one employee's own salary-slip
   // history without having to scroll/search the combined table.
@@ -282,6 +287,22 @@ export default function PayrollPage() {
       : (fetched ?? []);
     setPayroll(data);
 
+    // A voucher-only Cashier is usually also an employee drawing their own
+    // pay — fetched separately from the branch-wide `data` above (which is
+    // everyone's net pay, for building a voucher), never reused for this,
+    // so "My Payslip" can never leak a coworker's payroll.
+    if (voucherOnly && selfEmployeeId) {
+      const { data: mine } = await supabase
+        .from('payroll')
+        .select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, branches(name))')
+        .eq('employee_id', selfEmployeeId)
+        .eq('status', 'paid')
+        .order('pay_date', { ascending: false });
+      setMyPayslipRows(mine ?? []);
+    } else if (voucherOnly) {
+      setMyPayslipRows([]);
+    }
+
     const employeeIds = Array.from(new Set((data ?? []).map(p => p.employee_id)));
     if (employeeIds.length > 0) {
       const [{ data: att }, { data: loans }, { data: specialLoans }] = await Promise.all([
@@ -340,7 +361,9 @@ export default function PayrollPage() {
   // Only the raw `basic_salary` figure from each cutoff counts; incentives,
   // birthday bonus, leave pay, and other allowances are excluded.
   const payrollYears = Array.from(new Set(payroll.map(p => String(new Date(p.pay_date).getFullYear())))).sort((a, b) => Number(b) - Number(a));
-  const filteredPayroll = recordsEmployeeFilter === 'all' ? payroll : payroll.filter(p => p.employee_id === recordsEmployeeFilter);
+  const filteredPayroll = voucherOnly
+    ? myPayslipRows
+    : (recordsEmployeeFilter === 'all' ? payroll : payroll.filter(p => p.employee_id === recordsEmployeeFilter));
   const payrollEmployeeOptions = Array.from(
     new Map(payroll.map(p => [p.employee_id, formatCustomerName(p.employees?.first_name, p.employees?.last_name) || 'Unknown'])).entries()
   ).sort((a, b) => a[1].localeCompare(b[1]));
@@ -1598,15 +1621,17 @@ export default function PayrollPage() {
           <TabsTrigger value="thirteenth"><Gift className="w-4 h-4 mr-1.5" />13th Month Pay</TabsTrigger>
         </TabsList>
         )}
-        {/* Voucher-only Cashier: no Records/13th Month access, so there's
-            nothing to switch between — just a label, not a functioning
-            TabsList (a single-item TabsList would look like a disabled
-            control for no reason). activeTab is pinned to 'voucher' by the
-            effect above and never changes for this user. */}
+        {/* Voucher-only Cashier: no 13th Month access, but they're usually
+            also an employee drawing their own pay — "My Payslip" (their own
+            approved payslips, same self-service view any employee gets)
+            alongside the Voucher tab that's their actual reason to be here.
+            Defaults to Voucher (the effect above), but this must stay a real
+            switchable TabsList or their own payslip becomes unreachable. */}
         {voucherOnly && (
-          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-            <FileSpreadsheet className="w-4 h-4" />Payroll Voucher
-          </div>
+        <TabsList className="grid grid-cols-2 w-full sm:w-auto">
+          <TabsTrigger value="records">My Payslip</TabsTrigger>
+          <TabsTrigger value="voucher"><FileSpreadsheet className="w-4 h-4 mr-1.5" />Payroll Voucher</TabsTrigger>
+        </TabsList>
         )}
 
       <TabsContent value="records" className="space-y-6 pt-4">

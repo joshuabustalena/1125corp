@@ -59,7 +59,7 @@ export default function RemittancePage() {
 
   useEffect(() => {
     if (!canRecordRemittance) return;
-    supabase.from('chart_of_accounts').select('id, code, name').order('code').then(({ data }) => setAccounts(data ?? []));
+    supabase.from('chart_of_accounts').select('id, code, name, branch_id').order('code').then(({ data }) => setAccounts(data ?? []));
   }, [canRecordRemittance]);
 
   async function loadData() {
@@ -134,8 +134,15 @@ export default function RemittancePage() {
   // (per branch there can be a vault, a short/over, and several bank
   // accounts) — the only one excluded is Petty Cash Fund, which isn't
   // meant to receive collector remittances.
+  // Scoped to the collector's own branch (plus any company-wide account,
+  // branch_id NULL — e.g. a shared Cash Reserve Fund) — same pattern
+  // cash-vouchers/page.tsx already uses, so a Balanga collector's
+  // remittance can't accidentally get credited to a Dinalupihan-only
+  // account, and vice versa.
+  const selectedCollectorBranchId = collectors.find(c => c.id === form.collector_id)?.branch_id ?? null;
   const visibleAccounts = accounts.filter(a =>
-    a.name.toLowerCase().includes('cash') && !a.name.toLowerCase().includes('petty cash')
+    a.name.toLowerCase().includes('cash') && !a.name.toLowerCase().includes('petty cash') &&
+    (!a.branch_id || a.branch_id === selectedCollectorBranchId)
   );
 
   // Same bug class as Journal Entries: a line with an amount typed but no

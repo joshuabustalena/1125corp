@@ -25,14 +25,20 @@ export async function logAudit(params: {
   entityType?: string | null;
   entityId?: string | null;
   details?: Record<string, unknown> | null;
-  // Only needed for logout, where the session is already gone by the time
-  // this is called — pass the id captured just before signOut() clears it.
+  // Every caller should pass this explicitly (profile?.id from useAuth() is
+  // always in scope wherever this is called) — NOT left to fall back to a
+  // network call here. supabase.auth.getUser() re-validates the token
+  // against the Auth server on every call (unlike getSession(), which just
+  // reads local storage), and doing that on every single approve/reject
+  // click turned out to be exactly what was intermittently signing users
+  // out mid-action and bouncing them back to the login page. A missing
+  // user_id is a cosmetic gap in one log row; a surprise logout mid-approval
+  // is not an acceptable price for it.
   userId?: string | null;
 }): Promise<void> {
   try {
-    const userId = params.userId ?? (await supabase.auth.getUser()).data.user?.id ?? null;
     await supabase.from('audit_logs').insert({
-      user_id: userId,
+      user_id: params.userId ?? null,
       action: params.action,
       entity_type: params.entityType ?? null,
       entity_id: params.entityId ?? null,

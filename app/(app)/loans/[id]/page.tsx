@@ -624,7 +624,7 @@ export default function LoanDetailPage() {
         url: `/loans/${loan.id}`,
       }, loan.branch_id);
       toast({ title: 'Loan approved', description: `${loan.loan_number} is awaiting disbursement by a Cashier.` });
-      logAudit({ action: 'approve', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number } });
+      logAudit({ action: 'approve', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number }, userId: profile?.id ?? null });
       setApproveOpen(false);
       router.push(`/loans/${loan.id}/agreement`);
     }
@@ -723,7 +723,7 @@ export default function LoanDetailPage() {
     });
 
     toast({ title: 'Loan disbursed', description: `${loan.loan_number} is now active.` });
-    logAudit({ action: 'approve', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number, stage: 'disbursed' } });
+    logAudit({ action: 'approve', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number, stage: 'disbursed' }, userId: profile?.id ?? null });
     // Disbursement had no notification at all before this — Approve/Decline
     // both already announce themselves, this was the missing third leg.
     notifyRoles(['branch_manager', 'administrator'], {
@@ -764,7 +764,7 @@ export default function LoanDetailPage() {
         url: `/loans/${loan.id}`,
       }, loan.branch_id);
       toast({ title: 'Loan declined', description: `${loan.loan_number} has been declined.` });
-      logAudit({ action: 'reject', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number, reason: declineReason.trim() } });
+      logAudit({ action: 'reject', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number, reason: declineReason.trim() }, userId: profile?.id ?? null });
       setDeclineOpen(false);
       setDeclineReason('');
       loadLoan();

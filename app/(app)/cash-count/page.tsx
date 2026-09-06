@@ -174,6 +174,14 @@ export default function CashCountPage() {
   const [cashierName, setCashierName] = useState('');
   const [branchManagerName, setBranchManagerName] = useState('');
   const [notes, setNotes] = useState('');
+  // Set when the branch has no "Cash in Vault" account of its own and the
+  // Beginning/Ending/Collections/Expenses figures below fell back to the
+  // legacy, being-retired "Cash on Hand" account instead — which has no real
+  // activity posted to it anymore, so those figures would otherwise read as
+  // a silent, confident-looking ₱0.00 instead of an obvious "this branch
+  // isn't wired up yet." Surfaced instead of hidden.
+  const [lockedFieldsBranchName, setLockedFieldsBranchName] = useState<string | null>(null);
+  const [usedLegacyCashAccount, setUsedLegacyCashAccount] = useState(false);
 
   useEffect(() => {
     if (isAdmin) {
@@ -220,12 +228,13 @@ export default function CashCountPage() {
     loadStaffNames();
   }
 
-  // Beginning/Ending Cash Balance and Cash Release should not be manually
-  // typed — they're pulled straight from real records so the sheet can't
-  // drift from what actually happened. Note: the general ledger
-  // (journal_entries) has no branch_id column, so these Cash-on-Hand
-  // balances are company-wide, matching the same figure shown on the
-  // Accounting dashboard — not split per branch.
+  // Beginning/Ending Cash Balance, Total Cash Collections, Total Expenses,
+  // Release, and Cash Release should not be manually typed — they're pulled
+  // straight from real records so the sheet can't drift from what actually
+  // happened. journal_entries now carries its own branch_id (see
+  // add_branch_id_to_journal_entries.sql), so this is genuinely scoped per
+  // branch, not the company-wide figure it used to be before that column
+  // existed.
   async function loadLockedFields() {
     // Resolved by NAME, not by the flat code '1000'. Only one account
     // actually carries that exact code — "Cash on Hand" — and the client is
@@ -240,35 +249,73 @@ export default function CashCountPage() {
       const { data } = await supabase.from('chart_of_accounts').select('id').eq('code', vaultCode).maybeSingle();
       cashAccount = data;
     }
+    let usedLegacy = false;
     if (!cashAccount) {
-      // Legacy fallback while "Cash on Hand" still exists.
+      // Legacy fallback while "Cash on Hand" still exists — this account has
+      // no real activity posted to it anymore for a branch that's actually
+      // been split off with its own "Cash in Vault", so landing here means
+      // this branch doesn't have one configured in the Chart of Accounts yet
+      // and everything below will read as ₱0.00, not because that's true,
+      // but because this is the wrong account. Surfaced via
+      // usedLegacyCashAccount instead of silently shown as fact.
+      usedLegacy = true;
       const { data } = await supabase.from('chart_of_accounts').select('id').eq('code', '1000').maybeSingle();
       cashAccount = data;
     }
-    if (cashAccount) {
-      const { data: lines } = await supabase.from('journal_entry_lines').select('debit, credit, journal_entries(entry_date)').eq('account_id', cashAccount.id);
-      const prevDay = prevDateStr(date);
-      let beginning = 0, ending = 0;
-      for (const l of (lines ?? []) as any[]) {
-        const net = (Number(l.debit) || 0) - (Number(l.credit) || 0);
-        const entryDate = l.journal_entries?.entry_date;
-        if (entryDate <= prevDay) beginning += net;
-        if (entryDate <= date) ending += net;
-      }
-      setBeginningBalance(String(beginning));
-      setEndingBalance(String(ending));
-    }
+    setUsedLegacyCashAccount(usedLegacy);
+    setLockedFieldsBranchName(branchName ?? null);
 
-    // Cash Release = total of this branch's loan release cash vouchers for
-    // the day (client's own words: "total ng cash voucher ng loan for the
-    // day"), joined through loans for the branch scope since cash_vouchers
-    // itself has no branch_id.
+    // Release = total of this branch's loan release cash vouchers for the
+    // day — the client's own words for both this and "Cash Release" below:
+    // "total ng cash voucher ng loan for the day" / "total net proceeds na
+    // nailabas na cash". Computed first so the ledger pass below can
+    // subtract it out of today's total disbursements to get "Total
+    // Expenses" (everything else that left the vault today).
     const { data: vouchers } = await supabase
       .from('cash_vouchers')
       .select('amount, loans!inner(branch_id)')
       .eq('voucher_date', date)
       .eq('loans.branch_id', branchId);
-    setCashRelease(String((vouchers ?? []).reduce((s: number, v: any) => s + Number(v.amount), 0)));
+    const releaseTotal = (vouchers ?? []).reduce((s: number, v: any) => s + Number(v.amount), 0);
+    setCashRelease(String(releaseTotal));
+    setReleaseAmount(String(releaseTotal));
+
+    if (cashAccount) {
+      const { data: lines } = await supabase
+        .from('journal_entry_lines')
+        .select('debit, credit, journal_entries(entry_date, branch_id)')
+        .eq('account_id', cashAccount.id);
+      const prevDay = prevDateStr(date);
+      let beginning = 0, ending = 0, todayDebits = 0, todayCredits = 0;
+      for (const l of (lines ?? []) as any[]) {
+        // Defense-in-depth: the account itself should already be this
+        // branch's own, but if it fell back to the shared legacy code above
+        // (or the resolved account is somehow shared, branch_id NULL, and
+        // used by more than one branch), this stops another branch's
+        // postings from being summed in here too — only this branch's own
+        // entries (or genuinely shared ones with no branch tag) count.
+        const entryBranchId = l.journal_entries?.branch_id;
+        if (entryBranchId && entryBranchId !== branchId) continue;
+        const debit = Number(l.debit) || 0;
+        const credit = Number(l.credit) || 0;
+        const entryDate = l.journal_entries?.entry_date;
+        if (entryDate <= prevDay) beginning += debit - credit;
+        if (entryDate <= date) ending += debit - credit;
+        if (entryDate === date) { todayDebits += debit; todayCredits += credit; }
+      }
+      setBeginningBalance(String(beginning));
+      setEndingBalance(String(ending));
+      // Total Cash Collections for the Day = today's debits to Cash in
+      // Vault. Total Expenses for the Day = everything else that left the
+      // vault today — today's credits minus the Release portion already
+      // captured above, per the client's own split ("all other cash
+      // disbursements except sa cash na nilabas para sa release").
+      setTotalCollections(String(todayDebits));
+      setTotalExpenses(String(Math.max(0, todayCredits - releaseTotal)));
+    } else {
+      setTotalCollections('0');
+      setTotalExpenses('0');
+    }
   }
 
   // Cashier/Branch Manager names are chosen from whoever holds that role at
@@ -464,12 +511,28 @@ export default function CashCountPage() {
                 </div>
               </div>
 
+              {usedLegacyCashAccount && (
+                <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  {lockedFieldsBranchName ?? 'This branch'} has no &quot;Cash in Vault&quot; account of its own in the
+                  Chart of Accounts yet, so Beginning/Ending Balance, Total Collections, and Total Expenses below
+                  fell back to the old shared &quot;Cash on Hand&quot; account and will read ₱0.00 — not because
+                  that&apos;s accurate, but because the real activity isn&apos;t posted there. Add a &quot;Cash in
+                  Vault&quot; account for this branch in the Chart of Accounts to fix this.
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="space-y-2"><Label className="text-xs">Total Cash Collections for the Day (₱)</Label><Input type="number" value={totalCollections} onChange={(e) => setTotalCollections(e.target.value)} placeholder="0.00" /></div>
                 {/* Locked/auto-computed from real records, not typed — see
-                    loadLockedFields(). Beginning/Ending are the ledger's
-                    Cash-on-Hand balance as of end of the previous day / this
-                    day; Cash Release is the day's loan cash vouchers total. */}
+                    loadLockedFields(). Beginning/Ending are the ledger's Cash
+                    in Vault balance as of end of the previous day / this day;
+                    Total Collections is today's debits to that same account;
+                    Release/Cash Release is the day's loan cash vouchers
+                    total ("total net proceeds na nailabas na cash"); Total
+                    Expenses is everything else that left the vault today
+                    (today's credits minus Release). */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Total Cash Collections for the Day (₱)</Label>
+                  <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(totalCollections) || 0)}</p>
+                </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Beginning Cash Balance (₱)</Label>
                   <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(beginningBalance) || 0)}</p>
@@ -478,8 +541,14 @@ export default function CashCountPage() {
                   <Label className="text-xs">Ending Cash Balance (₱)</Label>
                   <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(endingBalance) || 0)}</p>
                 </div>
-                <div className="space-y-2"><Label className="text-xs">Release (₱)</Label><Input type="number" value={releaseAmount} onChange={(e) => setReleaseAmount(e.target.value)} placeholder="0.00" /></div>
-                <div className="space-y-2"><Label className="text-xs">Total Expenses for the Day (₱)</Label><Input type="number" value={totalExpenses} onChange={(e) => setTotalExpenses(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Release (₱)</Label>
+                  <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(releaseAmount) || 0)}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Total Expenses for the Day (₱)</Label>
+                  <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(totalExpenses) || 0)}</p>
+                </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Cash Release (₱)</Label>
                   <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(cashRelease) || 0)}</p>

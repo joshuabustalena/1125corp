@@ -195,7 +195,7 @@ export default function LeaveRequestsPage() {
     });
 
     toast({ title: 'Success', description: `Leave request ${status}` });
-    logAudit({ action: status === 'approved' ? 'approve' : 'reject', entityType: 'leave_requests', entityId: request.id });
+    logAudit({ action: status === 'approved' ? 'approve' : 'reject', entityType: 'leave_requests', entityId: request.id, userId: profile?.id ?? null });
     load();
   }
 
