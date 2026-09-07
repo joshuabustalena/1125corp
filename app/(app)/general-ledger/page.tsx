@@ -13,6 +13,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { supabase } from '@/lib/supabase/client';
+import { selectAllRows } from '@/lib/db-chunk';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { Loader2, TrendingUp, TrendingDown, Scale } from 'lucide-react';
 
@@ -57,15 +58,39 @@ export default function GeneralLedgerPage() {
 
   async function generateTrialBalance() {
     setStatementLoading(true);
-    const { data } = await scopeToBranch(supabase
+    // PostgREST caps a plain .select() at 1000 rows and truncates silently
+    // — no error, just a short array. This query sums EVERY line ever
+    // posted up to a date, exactly the "aggregated/reconciled" case
+    // selectAllRows exists for (same fix already applied on the Collector
+    // Remittance page after 1,077 payments rows broke Balance Owed the
+    // same way — see lib/db-chunk.ts). Left unbounded here, a company with
+    // enough history would see the Trial Balance itself silently drop
+    // whichever side of an entry didn't make it into the first 1000 rows,
+    // showing "Debits do not equal credits" even though every entry in the
+    // database is genuinely balanced.
+    const data = await selectAllRows<any>(() => scopeToBranch(supabase
       .from('journal_entry_lines')
       .select('debit, credit, chart_of_accounts(code, name, account_type), journal_entries!inner(entry_date)')
-      .lte('journal_entries.entry_date', trialBalanceDate));
+      .lte('journal_entries.entry_date', trialBalanceDate)));
 
     const byAccount: Record<string, { code: string; name: string; type: string; debit: number; credit: number }> = {};
+    // A line whose account_id no longer resolves to a live Chart of
+    // Accounts row (the account was deleted after entries were posted
+    // against it) used to be silently skipped here entirely — meaning one
+    // side of an otherwise-perfectly-balanced entry vanished from the
+    // Trial Balance's own total while its other side (on a still-existing
+    // account) stayed in, making debits and credits disagree even though
+    // every individual entry in the database is genuinely balanced.
+    // Bucketed into its own row instead, so the grand total always
+    // reconciles with the real data and the gap is visible, not silent.
+    let unknownDebit = 0, unknownCredit = 0;
     (data ?? []).forEach((l: any) => {
       const acc = l.chart_of_accounts;
-      if (!acc) return;
+      if (!acc) {
+        unknownDebit += Number(l.debit);
+        unknownCredit += Number(l.credit);
+        return;
+      }
       if (!byAccount[acc.code]) byAccount[acc.code] = { code: acc.code, name: acc.name, type: acc.account_type, debit: 0, credit: 0 };
       byAccount[acc.code].debit += Number(l.debit);
       byAccount[acc.code].credit += Number(l.credit);
@@ -89,6 +114,17 @@ export default function GeneralLedgerPage() {
       .filter(r => r.debitBalance !== 0 || r.creditBalance !== 0)
       .sort((a, b) => a.code.localeCompare(b.code));
 
+    // Shown as its raw debit/credit, not netted to one side like a real
+    // account above — there's no known "normal side" for an account that
+    // no longer exists, and netting it could hide which side actually has
+    // the orphaned activity.
+    if (unknownDebit !== 0 || unknownCredit !== 0) {
+      rows.push({
+        code: '—', name: '⚠ Deleted/unknown account (see journal_entry_lines with an orphaned account_id)', type: '',
+        debit: unknownDebit, credit: unknownCredit, debitBalance: unknownDebit, creditBalance: unknownCredit,
+      });
+    }
+
     const totalDebit = rows.reduce((s, r) => s + r.debitBalance, 0);
     const totalCredit = rows.reduce((s, r) => s + r.creditBalance, 0);
     setTrialBalance({ rows, totalDebit, totalCredit });
@@ -97,11 +133,14 @@ export default function GeneralLedgerPage() {
 
   async function generateIncomeStatement() {
     setStatementLoading(true);
-    const { data } = await scopeToBranch(supabase
+    // Same 1000-row PostgREST cap risk as Trial Balance above — Net Income
+    // is a sum over every revenue/expense line in the range, so this needs
+    // the same paginated fetch.
+    const data = await selectAllRows<any>(() => scopeToBranch(supabase
       .from('journal_entry_lines')
       .select('debit, credit, chart_of_accounts(name, account_type), journal_entries!inner(entry_date)')
       .gte('journal_entries.entry_date', startDate)
-      .lte('journal_entries.entry_date', endDate));
+      .lte('journal_entries.entry_date', endDate)));
 
     const revenue: Record<string, number> = {};
     const expense: Record<string, number> = {};
@@ -119,10 +158,12 @@ export default function GeneralLedgerPage() {
 
   async function generateBalanceSheet() {
     setStatementLoading(true);
-    const { data } = await scopeToBranch(supabase
+    // Same 1000-row PostgREST cap risk as Trial Balance above — Total
+    // Assets/Liabilities is a sum over every line up to a date.
+    const data = await selectAllRows<any>(() => scopeToBranch(supabase
       .from('journal_entry_lines')
       .select('debit, credit, chart_of_accounts(name, account_type), journal_entries!inner(entry_date)')
-      .lte('journal_entries.entry_date', asOfDate));
+      .lte('journal_entries.entry_date', asOfDate)));
 
     const byAccount: Record<string, { type: string; balance: number }> = {};
     (data ?? []).forEach((l: any) => {

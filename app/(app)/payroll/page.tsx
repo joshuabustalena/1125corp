@@ -1452,13 +1452,22 @@ export default function PayrollPage() {
     // was charging Balanga's expense. "Service Vehicle" rather than "Service
     // Vehicle Loan": the cleaned-up Chart names it the former on both
     // branches, and the prefix match covers either spelling.
-    const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode, salariesCode] = await Promise.all([
+    const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode, salariesCode, incentivesExpenseCode, withheldFundsPayableCode] = await Promise.all([
       resolveBranchAccountCode('Service Vehicle', voucherBranchId, branchName),
       resolveBranchAccountCode('Receivable from Uniform', voucherBranchId, branchName),
       resolveBranchAccountCode('Cash Short/Over', voucherBranchId, branchName),
       resolveBranchAccountCode('Employee Loan', voucherBranchId, branchName),
       resolveBranchAccountCode('Cash in Vault', voucherBranchId, branchName),
       resolveBranchAccountCode('Salaries Expense', voucherBranchId, branchName),
+      // Resolved by NAME, never hardcoded — a hardcoded '5040' here used to
+      // silently collide with the pre-existing "Repairs Expense" account at
+      // that exact code (from add_general_cash_vouchers.sql), so every
+      // incentive got posted to Repairs Expense instead, while the client's
+      // own manually-created "Incentives Expense" account (a different code)
+      // never received anything. Company-wide, not branch-specific — same
+      // as SSS/Phil/PagIBIG Payable above — so branchId/branchName are null.
+      resolveBranchAccountCode('Incentives Expense', null, null),
+      resolveBranchAccountCode('Withheld Funds Payable', null, null),
     ]);
 
     const payrollVoucherLedger = await postJournalEntry({
@@ -1481,9 +1490,9 @@ export default function PayrollPage() {
         { accountCode: cashVaultCode ?? '', credit: netPayTotal, memo: 'Cash in Vault' },
         // Incentive gross-up, broken out of the Salaries Expense plug above
         // (see the comment on salariesExpense) into its own dedicated pair —
-        // company-wide flat codes, same treatment as SSS/Phil/PagIBIG Payable.
-        { accountCode: '5040', debit: incentiveTotal, memo: 'Incentives Expense' },
-        { accountCode: '2040', credit: incentiveRetentionTotal, memo: 'Withheld Funds Payable' },
+        // company-wide, resolved by name (see the comment above this call).
+        { accountCode: incentivesExpenseCode ?? '', debit: incentiveTotal, memo: 'Incentives Expense' },
+        { accountCode: withheldFundsPayableCode ?? '', credit: incentiveRetentionTotal, memo: 'Withheld Funds Payable' },
       ],
     });
 

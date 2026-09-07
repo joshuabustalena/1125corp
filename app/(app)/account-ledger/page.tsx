@@ -15,6 +15,7 @@ import {
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
+import { selectAllRows } from '@/lib/db-chunk';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
@@ -52,17 +53,27 @@ export default function AccountLedgerPage() {
     // Scoped to the viewer's branch: a SHARED account (e.g. SSS Payable) is
     // touched by entries from both branches, so without this a Balanga
     // cashier would see Dinalupihan's postings inside it.
-    let linesQuery = supabase
-      .from('journal_entry_lines')
-      .select('debit, credit, memo, journal_entries!inner(entry_number, entry_date, description, reference, created_at, branch_id)')
-      .eq('account_id', ledgerAccountId)
-      .lte('journal_entries.entry_date', ledgerEndDate);
-    if (!isAdmin) {
-      linesQuery = profile?.branch_id
-        ? linesQuery.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`, { foreignTable: 'journal_entries' })
-        : linesQuery.is('journal_entries.branch_id', null);
+    // PostgREST caps a plain .select() at 1000 rows and truncates silently
+    // — no error, just a short array. A running-balance ledger for a
+    // high-traffic account (e.g. Cash in Vault, touched by every
+    // disbursement/remittance/voucher) can plausibly cross that over the
+    // company's full history, so this needs the same paginated fetch as
+    // Trial Balance (lib/db-chunk.ts — same fix already applied once
+    // before, on the Collector Remittance page).
+    function buildLinesQuery() {
+      let q = supabase
+        .from('journal_entry_lines')
+        .select('debit, credit, memo, journal_entries!inner(entry_number, entry_date, description, reference, created_at, branch_id)')
+        .eq('account_id', ledgerAccountId)
+        .lte('journal_entries.entry_date', ledgerEndDate);
+      if (!isAdmin) {
+        q = profile?.branch_id
+          ? q.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`, { foreignTable: 'journal_entries' })
+          : q.is('journal_entries.branch_id', null);
+      }
+      return q;
     }
-    const { data } = await linesQuery;
+    const data = await selectAllRows<any>(buildLinesQuery);
 
     const sorted = (data ?? []).slice().sort((a: any, b: any) => {
       const da = a.journal_entries?.entry_date ?? '';

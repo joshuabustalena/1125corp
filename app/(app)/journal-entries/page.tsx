@@ -20,10 +20,11 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, generateEntryNumber } from '@/lib/format';
-import { Plus, Loader2, Trash2 } from 'lucide-react';
+import { Plus, Loader2, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type Line = { account_id: string; debit: string; credit: string; memo: string };
 const SHARED_VALUE = 'shared';
+const PAGE_SIZE = 20;
 
 export default function JournalEntriesPage() {
   const { toast } = useToast();
@@ -45,17 +46,30 @@ export default function JournalEntriesPage() {
   // Defaults to "All Branches" — every entry across every branch, same as
   // before this filter existed — and narrows down from there.
   const [branchFilter, setBranchFilter] = useState('all');
+  // "Last 50 entries, newest first" with no way to see anything older and
+  // no way to jump straight to a specific one — a manually-entered fix
+  // (or any entry more than 50 postings back) became unreachable once
+  // enough automated postings pushed it off the list. Search + pagination
+  // fix both.
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
 
   useEffect(() => {
     supabase.from('branches').select('id, name').eq('status', 'active').order('name').then(({ data }) => setBranches(data ?? []));
   }, []);
 
+  // Search/branch changing always jumps back to page 0 — passed explicitly
+  // to load() rather than relying on `page` state (which hasn't re-rendered
+  // yet at this point), same reasoning as the Audit Logs page's pager.
   useEffect(() => {
     if (!profile) return;
-    load();
-  }, [profile, branchFilter]);
+    setPage(0);
+    load(0);
+  }, [profile, branchFilter, search]);
 
-  async function load() {
+  async function load(pageArg?: number) {
+    const p = pageArg ?? page;
     setLoading(true);
     // Every branch now keeps its own Chart of Accounts — a non-admin only
     // gets their own branch's accounts plus shared/company-wide ones (no
@@ -66,7 +80,10 @@ export default function JournalEntriesPage() {
     if (!isAdmin && profile?.branch_id) {
       acctsQuery = acctsQuery.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`);
     }
-    let entriesQuery = supabase.from('journal_entries').select('*, branches(name), journal_entry_lines(*, chart_of_accounts(code, name, account_type))').order('entry_date', { ascending: false }).order('created_at', { ascending: false }).limit(50);
+    // Fetches one row past the page size — if that extra row comes back,
+    // there's a next page. Cheaper than an exact count on every page turn.
+    let entriesQuery = supabase.from('journal_entries').select('*, branches(name), journal_entry_lines(*, chart_of_accounts(code, name, account_type))').order('entry_date', { ascending: false }).order('created_at', { ascending: false }).range(p * PAGE_SIZE, p * PAGE_SIZE + PAGE_SIZE);
+    if (search) entriesQuery = entriesQuery.or(`entry_number.ilike.%${search}%,description.ilike.%${search}%,reference.ilike.%${search}%`);
     if (!isAdmin) {
       // A non-admin sees only their own branch plus shared/company-wide
       // entries, with no way to switch — the same lock the Dashboard and
@@ -84,8 +101,22 @@ export default function JournalEntriesPage() {
       entriesQuery,
     ]);
     setAccounts(accts ?? []);
-    setEntries(ents ?? []);
+    const rows = ents ?? [];
+    setHasMore(rows.length > PAGE_SIZE);
+    setEntries(rows.slice(0, PAGE_SIZE));
     setLoading(false);
+  }
+
+  function handleNext() {
+    const next = page + 1;
+    setPage(next);
+    load(next);
+  }
+
+  function handlePrev() {
+    const prev = Math.max(0, page - 1);
+    setPage(prev);
+    load(prev);
   }
 
   function openNewEntry() {
@@ -218,15 +249,29 @@ export default function JournalEntriesPage() {
       </PageHeader>
 
       <Card className="glass-card border-border">
+        <CardContent className="p-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by entry #, description, or reference..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card border-border">
         <CardHeader>
-          <CardTitle>Recent Journal Entries</CardTitle>
-          <CardDescription>Last 50 entries, newest first</CardDescription>
+          <CardTitle>Journal Entries</CardTitle>
+          <CardDescription>Page {page + 1} · newest first</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
           ) : entries.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">No journal entries yet</p>
+            <p className="text-sm text-muted-foreground text-center py-8">No journal entries {search ? 'match your search' : 'yet'}</p>
           ) : (
             <div className="divide-y divide-border">
               {entries.map(entry => (
@@ -267,6 +312,17 @@ export default function JournalEntriesPage() {
               ))}
             </div>
           )}
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+            <span className="text-xs text-muted-foreground">Page {page + 1}</span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handlePrev} disabled={loading || page === 0}>
+                <ChevronLeft className="w-4 h-4 mr-1" />Previous
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleNext} disabled={loading || !hasMore}>
+                Next<ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
