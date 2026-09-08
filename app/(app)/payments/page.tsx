@@ -72,6 +72,13 @@ export default function PaymentsPage() {
   const [total, setTotal] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Synchronous double-submit guard for handleSubmit — see the comment
+  // there. A plain useState wouldn't work for this: setSaving(true) is
+  // real, but reactive, so a second rapid tap can still reach the handler
+  // before the button's own disabled state has actually repainted. A ref
+  // is checked/set in the very same tick as the click, with no render
+  // in between, so it closes that gap where the state flag can't.
+  const submittingRef = useRef(false);
   const [receiptData, setReceiptData] = useState<any>(null);
   // Reads straight from this device's local cache — no network call, so it
   // still works with zero signal. Only ever populated from receipts this
@@ -507,6 +514,18 @@ export default function PaymentsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Blocks a rapid double-tap from posting the same payment twice — the
+    // idempotency key below protects against a RETRY of one attempt (a
+    // lost RPC response getting requeued), but does nothing for two
+    // genuinely separate handleSubmit calls, each minting its own fresh
+    // key, which is exactly what a second tap landing before the button
+    // visually disables produces. Checked/set synchronously (a plain
+    // saving-state disabled button reacts a render too late for that),
+    // and always released in the finally below regardless of which of the
+    // several return points this call exits through.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    try {
     if (!form.loan_id || !form.amount_paid || !location) return;
 
     // A REAL post (one that actually updates the balance) can't happen
@@ -699,6 +718,9 @@ export default function PaymentsPage() {
     // authoritative), but this also refreshes the local `loans` list so
     // the next payment's live preview isn't showing a stale figure either.
     loadLoans();
+    } finally {
+      submittingRef.current = false;
+    }
   }
 
   // Applies every still-queued offline payment for real, oldest first —
