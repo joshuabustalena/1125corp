@@ -19,6 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
+import { selectAllRows } from '@/lib/db-chunk';
 import { formatCurrency } from '@/lib/format';
 import { BookOpen, Plus, Pencil, Trash2, Loader2 } from 'lucide-react';
 
@@ -78,12 +79,24 @@ export default function ChartOfAccountsPage() {
   // Live "as of today" balance per account. Sign follows each account's
   // normal balance side (debit for asset/expense, credit for
   // liability/equity/revenue).
+  //
+  // PostgREST caps a plain .select() at 1000 rows and truncates silently —
+  // this pulls every journal_entry_line ever posted, company-wide, so it
+  // crossed that cap long ago and was quietly summing an arbitrary partial
+  // slice of the ledger. Exactly the bug already fixed on Trial Balance /
+  // Income Statement / Balance Sheet / Account Ledger / Remittance
+  // (lib/db-chunk.ts) — just missed here, which is why Chart of Accounts
+  // and Trial Balance stopped agreeing (Kat's Sep 9 report: Trial Balance
+  // right, Chart of Accounts wrong — exactly this asymmetry, since Trial
+  // Balance already had the fix and this page didn't).
   async function loadAccountBalances(accts: any[]) {
     const today = new Date().toISOString().split('T')[0];
-    const { data } = await supabase
-      .from('journal_entry_lines')
-      .select('debit, credit, account_id, journal_entries!inner(entry_date)')
-      .lte('journal_entries.entry_date', today);
+    const data = await selectAllRows<any>(() =>
+      supabase
+        .from('journal_entry_lines')
+        .select('debit, credit, account_id, journal_entries!inner(entry_date)')
+        .lte('journal_entries.entry_date', today)
+    );
 
     const typeByAccount = new Map(accts.map(a => [a.id, a.account_type]));
     const totals: Record<string, number> = {};
