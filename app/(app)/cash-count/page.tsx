@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -22,7 +22,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
-import { Banknote, Loader2, TrendingUp, Scale, Download } from 'lucide-react';
+import { Banknote, Loader2, TrendingUp, Scale, Download, Printer } from 'lucide-react';
 
 // Bill and coin denominations exactly as counted on the paper Cash Count
 // Sheet. 20 appears in both lists (a ₱20 bill and a ₱20 coin both exist),
@@ -142,6 +142,108 @@ function DenominationTable({ counts, onChange, readOnly, shortOver, shortOverLab
   );
 }
 
+// Everything the printable Cash Count Sheet needs, independent of where it
+// came from — the live in-progress form, or a past submitted row pulled
+// back out of history. Keeping this as one plain shape (rather than the
+// sheet reaching into component state directly) is what lets the exact same
+// markup render either one.
+type CashCountSheetData = {
+  date: string;
+  vaultCounts: DenomCounts;
+  pcfCounts: DenomCounts;
+  shortOverVault: number;
+  shortOverPcf: number;
+  totalCollections: number;
+  beginningBalance: number;
+  endingBalance: number;
+  releaseAmount: number;
+  totalExpenses: number;
+  cashRelease: number;
+  collectionRelease: number;
+  cashierName: string;
+  branchManagerName: string;
+};
+
+// The printable sheet itself, matching the company's paper form. Used both
+// for the live form being filled out and, per-row from History, a past
+// submission — see handleHistoryAction. Module-scope for the same reason as
+// DenominationTable above (a fresh identity every render would remount it).
+const CashCountSheet = forwardRef<HTMLDivElement, { data: CashCountSheetData; branding: { headerAddress: string; contact: string } }>(
+  function CashCountSheet({ data, branding }, ref) {
+  return (
+    <div ref={ref} style={{ width: 950, background: '#fff', color: '#111', padding: 36, fontFamily: '"Times New Roman", Calibri, serif' }}>
+      <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 20, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
+        <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.headerAddress.toUpperCase()}</div>
+        <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CELL PHONE NUMBER: {branding.contact}</div>
+        <div style={{ fontWeight: 700, fontSize: 22, marginTop: 12 }}>Cash Count Sheet</div>
+      </div>
+      <div style={{ textAlign: 'right', fontSize: 15, marginBottom: 10 }}>Date: {formatDate(data.date)}</div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+        <div>
+          <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Cash in Vault</p>
+          <DenominationTable counts={data.vaultCounts} readOnly shortOver={data.shortOverVault} />
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15, marginTop: 8 }}>
+            <tbody>
+              <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Cash Collections for the day</td></tr>
+              <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(data.totalCollections)}</td></tr>
+              <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Beginning Cash Balance</td></tr>
+              <tr><td colSpan={2} style={dCellRight}>{formatCurrency(data.beginningBalance)}</td></tr>
+              <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Ending Cash Balance</td></tr>
+              <tr><td colSpan={2} style={{ ...dCellRight, fontWeight: 700, color: '#C00000' }}>{formatCurrency(data.endingBalance)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Petty Cash Fund</p>
+          <DenominationTable counts={data.pcfCounts} readOnly shortOver={data.shortOverPcf} shortOverLabel="Short/over PCF" />
+          <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 26, color: '#C00000', margin: '10px 0' }}>
+            RELEASE&nbsp;&nbsp;{formatCurrency(data.releaseAmount)}
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
+            <tbody>
+              <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Expenses for the day</td></tr>
+              <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(data.totalExpenses)}</td></tr>
+              <tr><td style={{ ...dCell, fontWeight: 700 }}>Cash Release</td><td style={dCellRight}>{formatCurrency(data.cashRelease)}</td></tr>
+              <tr><td style={{ ...dCell, fontWeight: 700 }}>Collection Release</td><td style={dCellRight}>{formatCurrency(data.collectionRelease)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p style={{ fontSize: 14, marginTop: 20, borderTop: '1px solid #000', paddingTop: 10 }}>
+        The amounts above are true and correct to the best of my knowledge.
+      </p>
+
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginTop: 10 }}>
+        <tbody>
+          <tr>
+            <td style={{ ...dCell, fontWeight: 700, width: '20%' }}>Date</td>
+            <td style={{ ...dCell, fontWeight: 700, width: '35%' }}>Cashier</td>
+            <td style={{ ...dCell, fontWeight: 700 }}>Signature</td>
+          </tr>
+          <tr>
+            <td style={dCell}>{formatDate(data.date)}</td>
+            <td style={dCell}>{data.cashierName || '—'}</td>
+            <td style={{ ...dCell, height: 36 }}>&nbsp;</td>
+          </tr>
+          <tr>
+            <td style={{ ...dCell, fontWeight: 700 }}>Date</td>
+            <td style={{ ...dCell, fontWeight: 700 }}>Branch Manager</td>
+            <td style={{ ...dCell, fontWeight: 700 }}>Signature</td>
+          </tr>
+          <tr>
+            <td style={dCell}>{formatDate(data.date)}</td>
+            <td style={dCell}>{data.branchManagerName || '—'}</td>
+            <td style={{ ...dCell, height: 36 }}>&nbsp;</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+});
+
 export default function CashCountPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -157,6 +259,23 @@ export default function CashCountPage() {
   const [history, setHistory] = useState<any[]>([]);
   const [pendingRemittanceIds, setPendingRemittanceIds] = useState<string[]>([]);
   const printRef = useRef<HTMLDivElement>(null);
+  // History row being viewed/downloaded/printed — see handleHistoryAction.
+  // Rendered into its own hidden portal (historyPrintRef) rather than
+  // reusing the live form's printRef, so pulling up an old count can never
+  // clobber whatever the Cashier currently has half-typed into today's form.
+  const [viewingRecord, setViewingRecord] = useState<any>(null);
+  const [historyAction, setHistoryAction] = useState<'pdf' | 'print' | null>(null);
+  const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
+  const historyPrintRef = useRef<HTMLDivElement>(null);
+  // Synchronous guard, same reasoning as payments/page.tsx's submittingRef:
+  // historyBusyId is real but reactive, so a click on a SECOND row before
+  // the first row's buttons have actually repainted as disabled could still
+  // get through. That would be worse here than a duplicate submit — both
+  // captures share the one historyPrintRef node, so a second row's data
+  // could get rendered into it while the first row's html2canvas call is
+  // still mid-capture, and the first row's PDF/print would show the wrong
+  // day entirely.
+  const historyBusyRef = useRef(false);
 
   const [vaultCounts, setVaultCounts] = useState<DenomCounts>(emptyDenomCounts());
   const [pcfCounts, setPcfCounts] = useState<DenomCounts>(emptyDenomCounts());
@@ -265,12 +384,14 @@ export default function CashCountPage() {
     setUsedLegacyCashAccount(usedLegacy);
     setLockedFieldsBranchName(branchName ?? null);
 
-    // Release = total of this branch's loan release cash vouchers for the
-    // day — the client's own words for both this and "Cash Release" below:
-    // "total ng cash voucher ng loan for the day" / "total net proceeds na
-    // nailabas na cash". Computed first so the ledger pass below can
-    // subtract it out of today's total disbursements to get "Total
-    // Expenses" (everything else that left the vault today).
+    // Cash Release = total of this branch's loan release cash vouchers for
+    // the day — the client's own words: "total net proceeds na nailabas na
+    // cash". Computed first so the ledger pass below can subtract it out of
+    // today's total disbursements to get "Total Expenses" (everything else
+    // that left the vault today). "Release" (total APPROVED loan releases,
+    // for tomorrow's expected cash-out) is a different number this app
+    // doesn't compute yet — left as a manual field instead of prefilling it
+    // with this same total, which is what was confusing Kat.
     const { data: vouchers } = await supabase
       .from('cash_vouchers')
       .select('amount, loans!inner(branch_id)')
@@ -278,7 +399,6 @@ export default function CashCountPage() {
       .eq('loans.branch_id', branchId);
     const releaseTotal = (vouchers ?? []).reduce((s: number, v: any) => s + Number(v.amount), 0);
     setCashRelease(String(releaseTotal));
-    setReleaseAmount(String(releaseTotal));
 
     if (cashAccount) {
       const { data: lines } = await supabase
@@ -412,41 +532,111 @@ export default function CashCountPage() {
     setSaving(false);
   }
 
+  // Shared by the live form's "Download PDF" button and History's per-row
+  // download action (handleHistoryAction) — same canvas-to-PDF pipeline,
+  // just pointed at whichever hidden sheet node is currently rendered.
+  async function capturePdfFromNode(node: HTMLDivElement, filename: string) {
+    const html2canvas = (await import('html2canvas')).default;
+    const { jsPDF } = await import('jspdf');
+    const canvas = await html2canvas(node, { backgroundColor: '#ffffff', scale: 2, width: 950, windowWidth: 950 });
+    const imgData = canvas.toDataURL('image/png');
+    const pxToPt = 0.75;
+    const contentWidthPt = canvas.width / 2 * pxToPt;
+    const contentHeightPt = canvas.height / 2 * pxToPt;
+    // 8.5" x 13" (Philippine "folio"/long bond paper), in points (72pt/in).
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
+    const margin = 24;
+    const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
+      // Clamped to the page, not just scaled to its width — a bare
+      // width-only scale let content taller than the page (in proportion)
+      // print past the bottom edge with nothing to stop it, since jsPDF
+      // draws the image at whatever height it's given regardless of
+      // whether that fits. Shrinking (never cropping) on whichever
+      // dimension is tighter, and centering horizontally if that ends up
+      // narrower than the page, is the same fix already applied to the
+      // Payslip download.
+    const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+    const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
+    const imgWidth = contentWidthPt * scaleToFit;
+    const imgHeight = contentHeightPt * scaleToFit;
+    const xOffset = margin + (usableWidth - imgWidth) / 2;
+    pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
+    pdf.save(filename);
+  }
+
+  // Same popup-window-plus-image approach already used by the Payment
+  // Receipt's print button — hands the actual printing off to the browser's
+  // own print dialog instead of trying to reproduce it.
+  async function capturePrintFromNode(node: HTMLDivElement, title: string) {
+    const html2canvas = (await import('html2canvas')).default;
+    const canvas = await html2canvas(node, { backgroundColor: '#ffffff', scale: 2, width: 950, windowWidth: 950 });
+    const dataUrl = canvas.toDataURL('image/png');
+    const printWindow = window.open('', '_blank', 'width=800,height=1000');
+    if (!printWindow) {
+      toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print', variant: 'destructive' });
+      return;
+    }
+    printWindow.document.write(`
+      <html>
+        <head><title>${title}</title><style>@page { size: auto; margin: 0; }</style></head>
+        <body style="margin:0;display:flex;justify-content:center;padding:24px;background:#fff;">
+          <img src="${dataUrl}" style="max-width:100%;" onload="window.print()" />
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.onafterprint = () => printWindow.close();
+  }
+
   async function handleDownloadPdf() {
     if (!printRef.current) return;
     setDownloading(true);
     try {
-      const html2canvas = (await import('html2canvas')).default;
-      const { jsPDF } = await import('jspdf');
-      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, width: 950, windowWidth: 950 });
-      const imgData = canvas.toDataURL('image/png');
-      const pxToPt = 0.75;
-      const contentWidthPt = canvas.width / 2 * pxToPt;
-      const contentHeightPt = canvas.height / 2 * pxToPt;
-      // 8.5" x 13" (Philippine "folio"/long bond paper), in points (72pt/in).
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [612, 936] });
-      const margin = 24;
-      const usableWidth = pdf.internal.pageSize.getWidth() - margin * 2;
-        // Clamped to the page, not just scaled to its width — a bare
-        // width-only scale let content taller than the page (in proportion)
-        // print past the bottom edge with nothing to stop it, since jsPDF
-        // draws the image at whatever height it's given regardless of
-        // whether that fits. Shrinking (never cropping) on whichever
-        // dimension is tighter, and centering horizontally if that ends up
-        // narrower than the page, is the same fix already applied to the
-        // Payslip download.
-      const usableHeight = pdf.internal.pageSize.getHeight() - margin * 2;
-      const scaleToFit = Math.min(usableWidth / contentWidthPt, usableHeight / contentHeightPt, 1);
-      const imgWidth = contentWidthPt * scaleToFit;
-      const imgHeight = contentHeightPt * scaleToFit;
-      const xOffset = margin + (usableWidth - imgWidth) / 2;
-      pdf.addImage(imgData, 'PNG', xOffset, margin, imgWidth, imgHeight);
-      pdf.save(`cash-count-${date}.pdf`);
+      await capturePdfFromNode(printRef.current, `cash-count-${date}.pdf`);
     } catch (err: any) {
       toast({ title: 'Download failed', description: err?.message ?? 'Could not generate the cash count PDF', variant: 'destructive' });
     }
     setDownloading(false);
   }
+
+  // History row → PDF / Print. Renders that row's saved data into the
+  // hidden historyPrintRef sheet (via viewingRecord) and waits for the
+  // effect below to fire once it's actually on the page before capturing —
+  // html2canvas can only see what's already painted, and setState doesn't
+  // update the DOM synchronously.
+  function handleHistoryAction(record: any, action: 'pdf' | 'print') {
+    if (historyBusyRef.current) return;
+    historyBusyRef.current = true;
+    setHistoryBusyId(record.id);
+    setHistoryAction(action);
+    setViewingRecord(record);
+  }
+
+  useEffect(() => {
+    if (!viewingRecord || !historyAction || !historyPrintRef.current) return;
+    const record = viewingRecord;
+    const action = historyAction;
+    const node = historyPrintRef.current;
+    (async () => {
+      try {
+        if (action === 'pdf') {
+          await capturePdfFromNode(node, `cash-count-${record.count_date}.pdf`);
+        } else {
+          await capturePrintFromNode(node, `Cash Count ${record.count_date}`);
+        }
+      } catch (err: any) {
+        toast({ title: 'Failed', description: err?.message ?? 'Could not generate the cash count sheet', variant: 'destructive' });
+      }
+      setHistoryAction(null);
+      setViewingRecord(null);
+      setHistoryBusyId(null);
+      historyBusyRef.current = false;
+    })();
+    // Deliberately keyed off viewingRecord/historyAction only — capturePdfFromNode
+    // /capturePrintFromNode/toast are stable enough across renders that
+    // re-running this for their sake would just re-fire the same capture.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewingRecord, historyAction]);
 
   const branding = getDocumentBranding(branches.find(b => b.id === branchId)?.name);
 
@@ -525,10 +715,11 @@ export default function CashCountPage() {
                     loadLockedFields(). Beginning/Ending are the ledger's Cash
                     in Vault balance as of end of the previous day / this day;
                     Total Collections is today's debits to that same account;
-                    Release/Cash Release is the day's loan cash vouchers
-                    total ("total net proceeds na nailabas na cash"); Total
-                    Expenses is everything else that left the vault today
-                    (today's credits minus Release). */}
+                    Cash Release is the day's loan cash vouchers total
+                    ("total net proceeds na nailabas na cash"); Total Expenses
+                    is everything else that left the vault today (today's
+                    credits minus that release total). Release itself is
+                    deliberately NOT one of these — see the field below. */}
                 <div className="space-y-2">
                   <Label className="text-xs">Total Cash Collections for the Day (₱)</Label>
                   <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(totalCollections) || 0)}</p>
@@ -541,9 +732,16 @@ export default function CashCountPage() {
                   <Label className="text-xs">Ending Cash Balance (₱)</Label>
                   <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(endingBalance) || 0)}</p>
                 </div>
+                {/* Manually entered, not prefilled — Kat's report: this used
+                    to auto-fill with the same "cash vouchers today" total as
+                    Cash Release below, but it's meant to answer a different
+                    question (total APPROVED loan releases, i.e. cash that
+                    will need to go out tomorrow), which the app has no
+                    single source for yet. Left blank/manual until that's
+                    wired up for real. */}
                 <div className="space-y-2">
                   <Label className="text-xs">Release (₱)</Label>
-                  <p className="h-10 flex items-center px-3 rounded-md border border-border bg-secondary/30 text-sm">{formatCurrency(Number(releaseAmount) || 0)}</p>
+                  <Input type="number" value={releaseAmount} onChange={(e) => setReleaseAmount(e.target.value)} placeholder="0.00" />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Total Expenses for the Day (₱)</Label>
@@ -626,6 +824,16 @@ export default function CashCountPage() {
                     <div><p className="text-xs text-muted-foreground">Short/Over (Vault)</p><p>{formatCurrency(h.short_over_vault ?? 0)}</p></div>
                     <div><p className="text-xs text-muted-foreground">Ending Balance</p><p>{formatCurrency(h.ending_balance ?? 0)}</p></div>
                   </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => handleHistoryAction(h, 'pdf')} disabled={historyBusyId !== null}>
+                      {historyBusyId === h.id && historyAction === 'pdf' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      PDF
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => handleHistoryAction(h, 'print')} disabled={historyBusyId !== null}>
+                      {historyBusyId === h.id && historyAction === 'print' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Printer className="w-4 h-4 mr-2" />}
+                      Print
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -639,6 +847,7 @@ export default function CashCountPage() {
                   <TableHead>Short/Over (Vault)</TableHead>
                   <TableHead>Ending Balance</TableHead>
                   <TableHead>Variance</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -654,6 +863,16 @@ export default function CashCountPage() {
                         {Number(h.variance) === 0 ? 'Balanced' : formatCurrency(h.variance)}
                       </Badge>
                     </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button variant="ghost" size="icon" title="Download PDF" onClick={() => handleHistoryAction(h, 'pdf')} disabled={historyBusyId !== null}>
+                          {historyBusyId === h.id && historyAction === 'pdf' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                        </Button>
+                        <Button variant="ghost" size="icon" title="Print" onClick={() => handleHistoryAction(h, 'print')} disabled={historyBusyId !== null}>
+                          {historyBusyId === h.id && historyAction === 'print' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -663,80 +882,60 @@ export default function CashCountPage() {
         </CardContent>
       </Card>
 
-      {/* Hidden printable Cash Count Sheet, matching the company's paper form.
-          Portaled onto <body> so no ancestor layout affects the capture. */}
+      {/* Hidden printable Cash Count Sheet for the live form, matching the
+          company's paper form. Portaled onto <body> so no ancestor layout
+          affects the capture. */}
       {typeof document !== 'undefined' && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
-          <div ref={printRef} style={{ width: 950, background: '#fff', color: '#111', padding: 36, fontFamily: '"Times New Roman", Calibri, serif' }}>
-            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 20, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{branding.headerAddress.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>CELL PHONE NUMBER: {branding.contact}</div>
-              <div style={{ fontWeight: 700, fontSize: 22, marginTop: 12 }}>Cash Count Sheet</div>
-            </div>
-            <div style={{ textAlign: 'right', fontSize: 15, marginBottom: 10 }}>Date: {formatDate(date)}</div>
+          <CashCountSheet
+            ref={printRef}
+            data={{
+              date,
+              vaultCounts,
+              pcfCounts,
+              shortOverVault: Number(shortOverVault) || 0,
+              shortOverPcf: Number(shortOverPcf) || 0,
+              totalCollections: Number(totalCollections) || 0,
+              beginningBalance: Number(beginningBalance) || 0,
+              endingBalance: Number(endingBalance) || 0,
+              releaseAmount: Number(releaseAmount) || 0,
+              totalExpenses: Number(totalExpenses) || 0,
+              cashRelease: Number(cashRelease) || 0,
+              collectionRelease: Number(collectionRelease) || 0,
+              cashierName,
+              branchManagerName,
+            }}
+            branding={branding}
+          />
+        </div>,
+        document.body
+      )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-              <div>
-                <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Cash in Vault</p>
-                <DenominationTable counts={vaultCounts} readOnly shortOver={Number(shortOverVault) || 0} />
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15, marginTop: 8 }}>
-                  <tbody>
-                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Cash Collections for the day</td></tr>
-                    <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(totalCollections) || 0)}</td></tr>
-                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Beginning Cash Balance</td></tr>
-                    <tr><td colSpan={2} style={dCellRight}>{formatCurrency(Number(beginningBalance) || 0)}</td></tr>
-                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Ending Cash Balance</td></tr>
-                    <tr><td colSpan={2} style={{ ...dCellRight, fontWeight: 700, color: '#C00000' }}>{formatCurrency(Number(endingBalance) || 0)}</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <div>
-                <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Petty Cash Fund</p>
-                <DenominationTable counts={pcfCounts} readOnly shortOver={Number(shortOverPcf) || 0} shortOverLabel="Short/over PCF" />
-                <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 26, color: '#C00000', margin: '10px 0' }}>
-                  RELEASE&nbsp;&nbsp;{formatCurrency(Number(releaseAmount) || 0)}
-                </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
-                  <tbody>
-                    <tr><td colSpan={2} style={{ ...dCell, textAlign: 'center', fontWeight: 700 }}>Total Expenses for the day</td></tr>
-                    <tr><td style={dCell}>PHP</td><td style={dCellRight}>{formatCurrency(Number(totalExpenses) || 0)}</td></tr>
-                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Cash Release</td><td style={dCellRight}>{formatCurrency(Number(cashRelease) || 0)}</td></tr>
-                    <tr><td style={{ ...dCell, fontWeight: 700 }}>Collection Release</td><td style={dCellRight}>{formatCurrency(Number(collectionRelease) || 0)}</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <p style={{ fontSize: 14, marginTop: 20, borderTop: '1px solid #000', paddingTop: 10 }}>
-              The amounts above are true and correct to the best of my knowledge.
-            </p>
-
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginTop: 10 }}>
-              <tbody>
-                <tr>
-                  <td style={{ ...dCell, fontWeight: 700, width: '20%' }}>Date</td>
-                  <td style={{ ...dCell, fontWeight: 700, width: '35%' }}>Cashier</td>
-                  <td style={{ ...dCell, fontWeight: 700 }}>Signature</td>
-                </tr>
-                <tr>
-                  <td style={dCell}>{formatDate(date)}</td>
-                  <td style={dCell}>{cashierName || '—'}</td>
-                  <td style={{ ...dCell, height: 36 }}>&nbsp;</td>
-                </tr>
-                <tr>
-                  <td style={{ ...dCell, fontWeight: 700 }}>Date</td>
-                  <td style={{ ...dCell, fontWeight: 700 }}>Branch Manager</td>
-                  <td style={{ ...dCell, fontWeight: 700 }}>Signature</td>
-                </tr>
-                <tr>
-                  <td style={dCell}>{formatDate(date)}</td>
-                  <td style={dCell}>{branchManagerName || '—'}</td>
-                  <td style={{ ...dCell, height: 36 }}>&nbsp;</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+      {/* Same sheet, but for a past History row — see handleHistoryAction.
+          Only rendered while a row's PDF/print is actually in flight, using
+          that row's own saved denominations/totals instead of live state. */}
+      {typeof document !== 'undefined' && viewingRecord && createPortal(
+        <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
+          <CashCountSheet
+            ref={historyPrintRef}
+            data={{
+              date: viewingRecord.count_date,
+              vaultCounts: viewingRecord.vault_denominations ?? emptyDenomCounts(),
+              pcfCounts: viewingRecord.pcf_denominations ?? emptyDenomCounts(),
+              shortOverVault: Number(viewingRecord.short_over_vault) || 0,
+              shortOverPcf: Number(viewingRecord.short_over_pcf) || 0,
+              totalCollections: Number(viewingRecord.total_collections) || 0,
+              beginningBalance: Number(viewingRecord.beginning_balance) || 0,
+              endingBalance: Number(viewingRecord.ending_balance) || 0,
+              releaseAmount: Number(viewingRecord.release_amount) || 0,
+              totalExpenses: Number(viewingRecord.total_expenses) || 0,
+              cashRelease: Number(viewingRecord.cash_release) || 0,
+              collectionRelease: Number(viewingRecord.collection_release) || 0,
+              cashierName: viewingRecord.cashier_name ?? '',
+              branchManagerName: viewingRecord.branch_manager_name ?? '',
+            }}
+            branding={branding}
+          />
         </div>,
         document.body
       )}

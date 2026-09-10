@@ -45,7 +45,13 @@ interface DashboardStats {
   // Real ledger cash position, split per cash location (Vault, BPI,
   // Producers, …) — see lib/cash-buckets.
   cashByBucket: Record<string, number>;
-  netCashFlowMonth: number;
+  // Today's loan-release cash vouchers, this branch (or all, for Admin) —
+  // replaces the Cash Flow stat card per Kat's Sep 8 request: that card
+  // read as confusing/unnecessary ("Net negative" every month by nature,
+  // since disbursements + expenses routinely exceed collections), and what
+  // she actually wanted visible here was the same "how much cash went out
+  // the door today for releases" figure as Cash Count's Cash Release field.
+  todayRelease: number;
   paidLoans: number;
   pendingLoans: number;
   collectorsPresentToday: number;
@@ -69,7 +75,7 @@ const emptyStats: DashboardStats = {
   lastMonthCollections: 0,
   outstandingBalance: 0,
   cashByBucket: {},
-  netCashFlowMonth: 0,
+  todayRelease: 0,
   paidLoans: 0,
   pendingLoans: 0,
   collectorsPresentToday: 0,
@@ -98,22 +104,39 @@ function daysAgo(n: number): Date {
 export default function DashboardPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  // Overdue by Area (below) is deliberately narrower than the rest of this
+  // dashboard — Kat's Sep 8 request named exactly these three: each
+  // collector (their own area only), the branch manager, and admin. Cashier
+  // and Accounting, who otherwise see this whole page, do not get this card.
+  const isBranchManager = profile?.role_name === 'Branch Manager';
+  const isFieldCollector = profile?.role_name === 'Branch Field Collector';
+  const canSeeAreaOverdue = isAdmin || isBranchManager || isFieldCollector;
   const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [recentPayments, setRecentPayments] = useState<any[]>([]);
   const [upcomingDues, setUpcomingDues] = useState<any[]>([]);
   const [dailyData, setDailyData] = useState<{ name: string; collections: number; revenue: number }[]>([]);
   const [loanStatusData, setLoanStatusData] = useState<{ name: string; value: number; color: string }[]>([]);
   const [areaData, setAreaData] = useState<{ name: string; customers: number }[]>([]);
+  const [areaOverdueData, setAreaOverdueData] = useState<{ areaId: string; name: string; overdueAmount: number; overdueRate: number }[]>([]);
   const [cashFlowData, setCashFlowData] = useState<{ name: string; inflow: number; outflow: number }[]>([]);
   const [attendanceData, setAttendanceData] = useState<{ name: string; value: number; color: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [branches, setBranches] = useState<any[]>([]);
   const [branchFilter, setBranchFilter] = useState('all');
   const [branchResolved, setBranchResolved] = useState(false);
+  // A Field Collector only ever sees their own assigned area's row below —
+  // same lookup/lock already used on /reports.
+  const [myAreaId, setMyAreaId] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.from('branches').select('id, name').eq('status', 'active').order('name').then(({ data }) => setBranches(data ?? []));
   }, []);
+
+  useEffect(() => {
+    if (!profile || !isFieldCollector) return;
+    supabase.from('collectors').select('area_id').eq('profile_id', profile.id).maybeSingle()
+      .then(({ data }) => setMyAreaId(data?.area_id ?? null));
+  }, [profile, isFieldCollector]);
 
   // Administrator keeps the free Branch filter dropdown (defaults to "All
   // Branches"); everyone else is locked to their own branch, same pattern
@@ -161,6 +184,10 @@ export default function DashboardPage() {
       // every payment figure here came back empty for a non-admin there.
       const scopeByCustomerIds = (q: any) => branchFilter === 'all' ? q : q.eq('customers.branch_id', branchFilter);
       const scopeByEmployeeIds = (q: any) => branchEmployeeIds === null ? q : q.in('employee_id', branchEmployeeIds.length > 0 ? branchEmployeeIds : NO_MATCH);
+      // cash_vouchers has no branch_id of its own (only via the loan it
+      // released against) — same join cash-count/page.tsx uses for the
+      // identical "today's loan-release vouchers" total.
+      const scopeByLoanBranch = (q: any) => branchFilter === 'all' ? q : q.eq('loans.branch_id', branchFilter);
 
       // Real cash position per location, straight from the ledger — the old
       // "Total Cash" card reused monthlyCollections, which isn't cash on
@@ -182,11 +209,11 @@ export default function DashboardPage() {
         paymentsToday, paymentsYesterday, paymentsMonth, paymentsLastMonth,
         recentPays, upcoming, paymentsWeek, journalWeek,
         customersByArea, paymentsFourWeeks, disbursedFourWeeks, gasVouchersFourWeeks, cashVouchersFourWeeks,
-        attendanceMonth, employees, attendanceToday, payrollMonth, cashLines,
+        attendanceMonth, employees, attendanceToday, payrollMonth, cashLines, releaseVouchersToday,
       ] = await Promise.all([
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true })),
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
-        scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date').eq('status', 'active')),
+        scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date, area_id, areas(name)').eq('status', 'active')),
         scopeByBranch(supabase.from('loans').select('status')),
         scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', today)),
         scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', yesterday)),
@@ -210,6 +237,7 @@ export default function DashboardPage() {
             ? supabase.from('journal_entry_lines').select('account_id, debit, credit').in('account_id', cashAccountIds)
             : supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries!inner(branch_id)').in('account_id', cashAccountIds).or(`branch_id.eq.${branchFilter},branch_id.is.null`, { foreignTable: 'journal_entries' }))
           : Promise.resolve({ data: [] as any[] }),
+        scopeByLoanBranch(supabase.from('cash_vouchers').select('amount, loans!inner(branch_id)').eq('voucher_date', today)),
       ]);
 
       const cashByBucket: Record<string, number> = {};
@@ -221,6 +249,27 @@ export default function DashboardPage() {
       const activeLoans: any[] = loans.data ?? [];
       const overdue = activeLoans.filter((l: any) => l.due_date && new Date(l.due_date) < new Date());
       const outstandingBalance = activeLoans.reduce((s: number, l: any) => s + Number(l.remaining_balance), 0);
+
+      // Same overdue-amount/overdue-rate math as above, broken out per area
+      // instead of one branch-wide figure — Kat's Sep 8 request. Grouped
+      // straight off activeLoans (already scoped to the selected branch),
+      // not a separate query.
+      const areaTotals = new Map<string, { name: string; receivable: number; overdue: number }>();
+      for (const l of activeLoans) {
+        const areaId = l.area_id ?? 'unassigned';
+        const entry = areaTotals.get(areaId) ?? { name: l.areas?.name ?? 'Unassigned', receivable: 0, overdue: 0 };
+        entry.receivable += Number(l.remaining_balance);
+        if (l.due_date && new Date(l.due_date) < new Date()) entry.overdue += Number(l.remaining_balance);
+        areaTotals.set(areaId, entry);
+      }
+      const areaOverdueRows = Array.from(areaTotals.entries())
+        .map(([areaId, v]) => ({
+          areaId,
+          name: v.name,
+          overdueAmount: v.overdue,
+          overdueRate: v.receivable > 0 ? (v.overdue / v.receivable) * 100 : 0,
+        }))
+        .sort((a, b) => b.overdueAmount - a.overdueAmount);
       // Overdue Rate = portfolio at risk — the share of the whole
       // receivable that's currently overdue, not just a share of loan
       // count (which "Overdue Loans" already shows).
@@ -237,15 +286,6 @@ export default function DashboardPage() {
       const monthlyCollections = (paymentsMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
       const lastMonthCollections = (paymentsLastMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
 
-      const disbursedTotal = (disbursedFourWeeks.data ?? []).reduce((s: number, l: any) => s + Number(l.release_amount), 0);
-      const expensesTotal = [...(gasVouchersFourWeeks.data ?? []), ...(cashVouchersFourWeeks.data ?? [])]
-        .reduce((s: number, v: any) => s + Number(v.total_amount), 0);
-      const collectionsFourWeeksTotal = (paymentsFourWeeks.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
-      // "This month" net cash flow, for the Cash Flow stat card — reuses
-      // the same four-week collections figure since that window
-      // approximates a month; disbursements/expenses are the outflow side.
-      const netCashFlowMonth = collectionsFourWeeksTotal - disbursedTotal - expensesTotal;
-
       const employeeRows = employees.data ?? [];
       const collectorsTotal = employeeRows.filter((e: any) => e.position === 'Branch Field Collector').length;
       const employeesTotal = employeeRows.length;
@@ -254,6 +294,8 @@ export default function DashboardPage() {
       const employeesPresentToday = presentTodayRows.length;
 
       const payrollThisMonth = (payrollMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.net_pay), 0);
+
+      const todayRelease = (releaseVouchersToday.data ?? []).reduce((s: number, v: any) => s + Number(v.amount), 0);
 
       setStats({
         totalCustomers: customers.count ?? 0,
@@ -269,7 +311,7 @@ export default function DashboardPage() {
         lastMonthCollections,
         outstandingBalance,
         cashByBucket,
-        netCashFlowMonth,
+        todayRelease,
         paidLoans,
         pendingLoans,
         collectorsPresentToday,
@@ -327,6 +369,7 @@ export default function DashboardPage() {
           .sort((a, b) => b.customers - a.customers)
           .slice(0, 6)
       );
+      setAreaOverdueData(areaOverdueRows);
 
       // Cash Flow — last 4 calendar weeks, oldest first. Inflow = collections;
       // outflow = loan disbursements + gas/cash voucher expenses.
@@ -486,12 +529,11 @@ export default function DashboardPage() {
           />
         ))}
         <StatCard
-          title="Cash Flow"
-          value={`${stats.netCashFlowMonth >= 0 ? '+' : '-'}${formatCurrency(Math.abs(stats.netCashFlowMonth))}`}
+          title="Total Release"
+          value={formatCurrency(stats.todayRelease)}
           icon={<Activity className="w-5 h-5" />}
-          variant={stats.netCashFlowMonth >= 0 ? 'success' : 'danger'}
-          trend={{ value: stats.netCashFlowMonth >= 0 ? 'Net positive' : 'Net negative', positive: stats.netCashFlowMonth >= 0 }}
-          subtitle="Collections less disbursements/expenses, this month"
+          variant="default"
+          subtitle="Loan releases today"
         />
       </div>
 
@@ -638,7 +680,7 @@ export default function DashboardPage() {
         <Card className="glass-card border-border animate-slide-up">
           <CardHeader>
             <CardTitle>Employee Attendance</CardTitle>
-            <CardDescription>This month's breakdown</CardDescription>
+            <CardDescription>This month&apos;s breakdown</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={250}>
@@ -662,6 +704,43 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Overdue by Area — Kat's Sep 8 request. Visible only to each
+          collector (their own area, filtered below), the branch manager,
+          and admin; Cashier/Accounting don't get this card even though they
+          see the rest of this page. */}
+      {canSeeAreaOverdue && (() => {
+        const rows = isFieldCollector
+          ? areaOverdueData.filter(a => a.areaId === myAreaId)
+          : areaOverdueData;
+        return (
+          <Card className="glass-card border-border animate-slide-up">
+            <CardHeader>
+              <CardTitle>Overdue by Area</CardTitle>
+              <CardDescription>Overdue amount and rate for each area{isFieldCollector ? ' (your area)' : ''}</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {rows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center">
+                  <p className="text-sm text-muted-foreground">No active loans to report on yet</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-border">
+                  {rows.map(a => (
+                    <div key={a.areaId} className="flex items-center justify-between px-4 py-3">
+                      <p className="text-sm font-medium">{a.name}</p>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold">{formatCurrency(a.overdueAmount)}</p>
+                        <p className="text-xs text-muted-foreground">{a.overdueRate.toFixed(1)}% overdue</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Recent payments & upcoming dues */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
