@@ -57,7 +57,14 @@ export async function checkDueDateAlerts(): Promise<void> {
     }
 
     if (toInsert.length > 0) {
-      await supabase.from('notifications').insert(toInsert);
+      // upsert + ignoreDuplicates, not a plain insert — the alreadyNotified
+      // check above only protects against one caller running twice; it
+      // does nothing when many sessions call this function back to back,
+      // each reading "no alert yet" before any of the others' insert has
+      // landed (see fix_duplicate_notifications.sql). The unique index
+      // that migration adds is what actually closes that race; this just
+      // makes hitting it a silent no-op instead of a console error.
+      await supabase.from('notifications').upsert(toInsert, { onConflict: 'loan_id,type', ignoreDuplicates: true });
       for (const n of toInsert) {
         sendPushNotification({ recipientType: n.recipient_type, branchId: n.branch_id ?? undefined, title: n.type === 'overdue' ? 'Loan Overdue' : 'Loan Due Soon', body: n.message, url: `/loans/${n.loan_id}` });
       }

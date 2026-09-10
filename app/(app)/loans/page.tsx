@@ -191,7 +191,12 @@ export default function LoansPage() {
     setLoading(true);
     let query = supabase
       .from('loans')
-      .select('*, customers(first_name, last_name), collectors(profiles(full_name)), branches(name), areas(name), loan_types(name)', { count: 'exact' });
+      .select('*, customers(first_name, last_name), collectors(profiles(full_name)), branches(name), areas(name), loan_types(name)', { count: 'exact' })
+      // A written-off loan's home is the dedicated /write-off tab, not
+      // here — excluded unconditionally, regardless of which Status filter
+      // is picked (there's no "Written Off" option in that dropdown at
+      // all, on purpose).
+      .neq('status', 'written_off');
 
     if (search) {
       // PostgREST's .or() can't filter on an embedded/joined table's

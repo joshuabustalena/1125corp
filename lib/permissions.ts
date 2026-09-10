@@ -39,6 +39,10 @@ export const PAGE_PERMISSIONS: Record<string, string | null> = {
   '/cash-vouchers': 'cash_vouchers',
   '/remittance': 'remittance',
   '/reports': 'reports',
+  // Not granted to any role in the seed data, so Administrator ('*') is the
+  // only one with access by default — deliberately narrower than the other
+  // Finance pages, matching how Kat asked for this specifically.
+  '/write-off': 'write_off',
   '/notifications': 'notifications',
   '/audit-logs': 'audit_logs',
   '/settings': 'settings',
@@ -98,6 +102,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   cash_vouchers: 'Cash Vouchers',
   remittance: 'Remittance',
   reports: 'Reports',
+  write_off: 'Write-Off',
   notifications: 'Notifications',
   audit_logs: 'Audit Logs',
   settings: 'Settings',

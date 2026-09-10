@@ -32,6 +32,36 @@ import {
   Wallet, Plus, Search, Download, Loader2, MapPin, Receipt, Calculator, Pencil, Trash2, WifiOff, CloudUpload, X,
 } from 'lucide-react';
 
+// Retries apply_loan_payment a couple of times with the SAME idempotency
+// key before giving up — added after the Sep 10, 2026 double-deduction
+// reports (Mustre, Senolos, Mandocdoc), root-caused to the notifications
+// table's missing index/RLS bug overloading the database that same day.
+// Under that load, apply_loan_payment's own balance UPDATE could commit
+// successfully on the server while the client still got back a genuine
+// Postgres error (a statement timeout, a dropped connection) rather than a
+// clean response — which the code below used to treat as a hard failure,
+// discarding the idempotency key and leaving the collector to tap Submit
+// again. A second tap mints a FRESH key, which the RPC's idempotency check
+// can't recognize as the same attempt, so it applies again — the exact
+// phantom double deduction this key exists to prevent, just reached by a
+// deliberate retry instead of a double-tap race.
+// Retrying automatically with the SAME key first closes that gap: whether
+// the earlier attempt silently landed or not, replaying its own key is
+// provably safe either way (already applied -> no-op, never applied ->
+// applies once) — see supabase/add_payment_idempotency_key.sql.
+async function callApplyLoanPaymentWithRetry(loanId: string, amount: number, idempotencyKey: string, maxAttempts = 3) {
+  let last: Awaited<ReturnType<typeof supabase.rpc>> | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const result = await supabase
+      .rpc('apply_loan_payment', { p_loan_id: loanId, p_amount: amount, p_idempotency_key: idempotencyKey })
+      .single();
+    if (!result.error && result.data) return result;
+    last = result;
+    if (attempt < maxAttempts) await new Promise(r => setTimeout(r, attempt * 500));
+  }
+  return last!;
+}
+
 // Collection days = every day in [releaseDate, dueDate] except Sunday —
 // matches the same convention used for the loan's own payment calendar.
 function countCollectionDays(releaseDate: string | null, dueDate: string | null): number {
@@ -567,9 +597,7 @@ export default function PaymentsPage() {
     // against this loan since then, that local number is stale). The RPC
     // reads-and-writes as one row-locked operation, so the balance it
     // returns is always correct regardless of how old the local state is.
-    const { data: rpcResult, error: rpcError } = await supabase
-      .rpc('apply_loan_payment', { p_loan_id: form.loan_id, p_amount: Number(form.amount_paid), p_idempotency_key: idempotencyKey })
-      .single();
+    const { data: rpcResult, error: rpcError } = await callApplyLoanPaymentWithRetry(form.loan_id, Number(form.amount_paid), idempotencyKey);
     if (rpcError || !rpcResult) {
       // A network-level failure (no signal, timed out mid-request, etc.)
       // doesn't come back as a normal Postgres error — it has no `code`.

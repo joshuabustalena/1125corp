@@ -11,6 +11,9 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
@@ -32,7 +35,7 @@ import { PaymentReceiptDialog, type PaymentReceiptData } from '@/components/paym
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
-  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown, Trash2,
+  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown, Trash2, Ban,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -84,6 +87,10 @@ export default function LoanDetailPage() {
   const [receiptData, setReceiptData] = useState<PaymentReceiptData | null>(null);
   const [deletePaymentTarget, setDeletePaymentTarget] = useState<any>(null);
   const [deletingPayment, setDeletingPayment] = useState(false);
+  const [writeOffOpen, setWriteOffOpen] = useState(false);
+  const [writeOffReason, setWriteOffReason] = useState('deceased');
+  const [writeOffNotes, setWriteOffNotes] = useState('');
+  const [writingOff, setWritingOff] = useState(false);
 
   async function loadLoan() {
     const id = params.id as string;
@@ -772,6 +779,51 @@ export default function LoanDetailPage() {
     setDeclining(false);
   }
 
+  const writeOffReasonLabels: Record<string, string> = {
+    deceased: 'Customer deceased',
+    missing: 'Customer missing',
+    sued: 'Sent to legal / sued',
+    other: 'Other',
+  };
+
+  // Sets status to 'written_off' — that alone drops this loan out of every
+  // "active loans" query across the app (Dashboard, Overdue by Area, the
+  // Payments loan picker, Reports all filter on status). Its home from here
+  // on is /write-off/[id] — full details, payment history, and its own
+  // Record Payment flow (postJournalEntry there Debits cash and Credits
+  // Miscellaneous Income, not Loans Receivable, since it's no longer
+  // counted as a receivable). See supabase/add_loan_write_off.sql.
+  async function handleWriteOff() {
+    setWritingOff(true);
+    const reasonText = writeOffReason === 'other'
+      ? (writeOffNotes.trim() || 'Other')
+      : `${writeOffReasonLabels[writeOffReason]}${writeOffNotes.trim() ? ` — ${writeOffNotes.trim()}` : ''}`;
+    const { error } = await supabase
+      .from('loans')
+      .update({
+        status: 'written_off',
+        written_off_at: new Date().toISOString(),
+        written_off_by: profile?.id ?? null,
+        written_off_reason: reasonText,
+      })
+      .eq('id', loan.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Loan written off', description: `${loan.loan_number} has been moved to Write-Off.` });
+      // No explicit logAudit() call here — this UPDATE is already captured
+      // automatically by the log_audit_trail() DB trigger (full before/after
+      // diff, including the status/reason change), same as every other plain
+      // table mutation. logAudit() is reserved for the handful of things a
+      // trigger can't see (login/logout, approve/reject labels) — see its
+      // own comment in lib/audit-log.ts.
+      setWriteOffOpen(false);
+      setWriteOffNotes('');
+      router.push(`/write-off/${loan.id}`);
+    }
+    setWritingOff(false);
+  }
+
   async function handleAddCollateral(e: React.FormEvent) {
     e.preventDefault();
     setSavingCollateral(true);
@@ -843,7 +895,7 @@ export default function LoanDetailPage() {
             </Button>
           </Link>
         )}
-        {!isCashier && loan.status !== 'renewed' && (
+        {!isCashier && loan.status !== 'renewed' && loan.status !== 'written_off' && (
           <Button size="sm" variant="outline" onClick={openRenew} disabled={!canRenew}>
             <RefreshCw className="w-4 h-4 mr-2" />
             Renew Loan
@@ -914,6 +966,20 @@ export default function LoanDetailPage() {
             <CalendarDays className="w-4 h-4 mr-2" />
             Calendar
           </Button>
+        )}
+        {isAdmin && (loan.status === 'active' || loan.status === 'overdue') && (
+          <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => { setWriteOffOpen(true); setWriteOffReason('deceased'); setWriteOffNotes(''); }}>
+            <Ban className="w-4 h-4 mr-2" />
+            Write Off
+          </Button>
+        )}
+        {loan.status === 'written_off' && (
+          <Link href={`/write-off/${loan.id}`}>
+            <Button size="sm" variant="outline">
+              <Ban className="w-4 h-4 mr-2" />
+              View in Write-Off
+            </Button>
+          </Link>
         )}
       </PageHeader>
 
@@ -1518,6 +1584,54 @@ export default function LoanDetailPage() {
             <Button variant="destructive" disabled={!declineReason.trim() || declining} onClick={handleDecline}>
               {declining && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Decline Loan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Write off confirmation */}
+      <Dialog open={writeOffOpen} onOpenChange={setWriteOffOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Write Off {loan.loan_number}</DialogTitle>
+            <DialogDescription>
+              This moves {loan.customers?.first_name} {loan.customers?.last_name}&apos;s loan out of the normal
+              receivable/overdue totals into its own Write-Off record — it stays fully visible and payable there,
+              just no longer counted here. This cannot be undone from this page.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Reason *</Label>
+              <Select value={writeOffReason} onValueChange={setWriteOffReason}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="deceased">Customer deceased</SelectItem>
+                  <SelectItem value="missing">Customer missing</SelectItem>
+                  <SelectItem value="sued">Sent to legal / sued</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes {writeOffReason === 'other' ? '*' : '(optional)'}</Label>
+              <Textarea
+                value={writeOffNotes}
+                onChange={(e) => setWriteOffNotes(e.target.value)}
+                placeholder="Any extra detail worth keeping on record"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWriteOffOpen(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={writingOff || (writeOffReason === 'other' && !writeOffNotes.trim())}
+              onClick={handleWriteOff}
+            >
+              {writingOff && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Write Off Loan
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -27,6 +27,7 @@ import {
   Wallet2,
   ClipboardList,
   MessageSquare,
+  Ban,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -93,6 +94,7 @@ export const navSections: NavSection[] = [
       { label: 'Cash Vouchers', href: '/cash-vouchers', icon: Wallet2 },
       { label: 'Remittance', href: '/remittance', icon: ArrowRightLeft },
       { label: 'Reports', href: '/reports', icon: FileBarChart },
+      { label: 'Write-Off', href: '/write-off', icon: Ban },
     ],
   },
   {
