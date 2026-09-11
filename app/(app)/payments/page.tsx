@@ -599,20 +599,27 @@ export default function PaymentsPage() {
     // returns is always correct regardless of how old the local state is.
     const { data: rpcResult, error: rpcError } = await callApplyLoanPaymentWithRetry(form.loan_id, Number(form.amount_paid), idempotencyKey);
     if (rpcError || !rpcResult) {
-      // A network-level failure (no signal, timed out mid-request, etc.)
-      // doesn't come back as a normal Postgres error — it has no `code`.
-      // Treat that case as "actually offline" and queue it instead of just
-      // failing — navigator.onLine can say "online" while there's no real
-      // signal, so this is the second line of defense the check at the top
-      // of this function can't always catch.
-      const looksLikeNetworkFailure = !!rpcError && !(rpcError as any).code;
-      if (looksLikeNetworkFailure) {
-        setSaving(false);
-        queueOfflinePayment(idempotencyKey);
-        return;
-      }
-      toast({ title: 'Error', description: rpcError?.message ?? 'Could not update the loan balance', variant: 'destructive' });
+      // Every failure here — network-looking (no navigator signal, timed
+      // out mid-request — has no Postgres `.code`) OR a genuine Postgres
+      // error (a statement timeout under DB load, a dropped connection
+      // mid-RPC) — queues with the SAME idempotency key instead of just
+      // failing. That second case used to be treated as "a real failure,
+      // safe to just report" and fall through to the plain error toast
+      // below, discarding the key — but callApplyLoanPaymentWithRetry
+      // already spent 3 attempts confirming this isn't a one-off blip, and
+      // a Postgres error here still doesn't prove the balance UPDATE never
+      // committed server-side (see the Sep 10/11 double-deduction reports:
+      // exactly this path, on a Postgres-coded error, is how Carmen
+      // Valenzuela's payment doubled even with the retry already in place).
+      // Queuing is safe either way regardless of which actually happened —
+      // already applied -> no-op on sync, never applied -> applies once —
+      // where discarding the key and waiting for the collector to tap
+      // Submit again (a fresh key) is not.
+      // queueOfflinePayment shows its own toast either way (a "Saved
+      // offline" success one, or its own error if no OR number is
+      // reserved on this device) — nothing more to show here.
       setSaving(false);
+      queueOfflinePayment(idempotencyKey);
       return;
     }
     const balanceBeforePayment = Number((rpcResult as any).previous_balance);
@@ -651,8 +658,21 @@ export default function PaymentsPage() {
     }).select().single();
 
     if (receiptError) {
-      toast({ title: 'Error', description: receiptError.message, variant: 'destructive' });
+      // The RPC above already succeeded — the balance is genuinely
+      // decremented in the database at this point, confirmed, not a maybe.
+      // Failing here used to just show an error and return, discarding
+      // idempotencyKey exactly like the RPC-failure gap this same file's
+      // callApplyLoanPaymentWithRetry section was fixed for — leaving the
+      // collector to tap Submit again with a fresh key, which would
+      // decrement the balance a SECOND time since apply_loan_payment has
+      // no way to know this fresh key represents the same real-world
+      // payment. Queuing instead is safe regardless of what synced later
+      // does: it re-calls the RPC with the same key (gets back
+      // already_applied and the correct balance, no second decrement),
+      // then writes the receipt/payment this attempt never got to.
+      // queueOfflinePayment shows its own toast — nothing more to add here.
       setSaving(false);
+      queueOfflinePayment(idempotencyKey);
       return;
     }
 
@@ -677,8 +697,16 @@ export default function PaymentsPage() {
     });
 
     if (payError) {
-      toast({ title: 'Error', description: payError.message, variant: 'destructive' });
+      // Same reasoning as the receiptError branch above — the balance is
+      // already decremented (the RPC succeeded), so this can't be treated
+      // as a plain failure without risking a second decrement on retry.
+      // queueOfflinePayment mints its own fresh OR number for the queued
+      // attempt rather than reusing the one already stamped on `receipt`
+      // above, so that row is left orphaned (no matching payment) — a
+      // harmless leftover receipt/OR gap, not a financial double-count,
+      // and the far smaller risk to accept here.
       setSaving(false);
+      queueOfflinePayment(idempotencyKey);
       return;
     }
 
