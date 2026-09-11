@@ -279,6 +279,13 @@ export default function CashCountPage() {
 
   const [vaultCounts, setVaultCounts] = useState<DenomCounts>(emptyDenomCounts());
   const [pcfCounts, setPcfCounts] = useState<DenomCounts>(emptyDenomCounts());
+  // Petty Cash Fund's own ledger running balance — a separate Chart of
+  // Accounts entry from Cash in Vault (e.g. code 10011 vs 1000), walked the
+  // same way. Without this, Variance only ever compared the counted
+  // Vault+PCF total against the Vault account's balance alone, so any
+  // branch with real PCF activity always showed a leftover "variance"
+  // exactly equal to its PCF total, balanced or not.
+  const [pcfEndingBalance, setPcfEndingBalance] = useState('');
   const [shortOverVault, setShortOverVault] = useState('');
   const [shortOverPcf, setShortOverPcf] = useState('');
   const [totalCollections, setTotalCollections] = useState('');
@@ -436,6 +443,33 @@ export default function CashCountPage() {
       setTotalCollections('0');
       setTotalExpenses('0');
     }
+
+    // Petty Cash Fund is its own Chart of Accounts entry (e.g. code 10011),
+    // separate from Cash in Vault — same resolve-then-walk pattern as
+    // above, just for that account, feeding into Variance below rather
+    // than any field shown directly on the sheet.
+    const pcfCode = await resolveBranchAccountCode('Petty Cash Fund', branchId, branchName);
+    let pcfAccount: { id: string } | null = null;
+    if (pcfCode) {
+      const { data } = await supabase.from('chart_of_accounts').select('id').eq('code', pcfCode).maybeSingle();
+      pcfAccount = data;
+    }
+    if (pcfAccount) {
+      const { data: pcfLines } = await supabase
+        .from('journal_entry_lines')
+        .select('debit, credit, journal_entries(entry_date, branch_id)')
+        .eq('account_id', pcfAccount.id);
+      let pcfEnding = 0;
+      for (const l of (pcfLines ?? []) as any[]) {
+        const entryBranchId = l.journal_entries?.branch_id;
+        if (entryBranchId && entryBranchId !== branchId) continue;
+        const entryDate = l.journal_entries?.entry_date;
+        if (entryDate <= date) pcfEnding += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+      }
+      setPcfEndingBalance(String(pcfEnding));
+    } else {
+      setPcfEndingBalance('0');
+    }
   }
 
   // Cashier/Branch Manager names are chosen from whoever holds that role at
@@ -463,7 +497,22 @@ export default function CashCountPage() {
   const vaultTotal = denomTotal(vaultCounts);
   const pcfTotal = denomTotal(pcfCounts);
   const countedTotal = vaultTotal + pcfTotal;
-  const variancePreview = countedTotal > 0 ? countedTotal - expected : null;
+  // Variance checks the physical count against what the LEDGER says should
+  // be there — Cash in Vault's running balance (endingBalance, same figure
+  // printed as "Ending Cash Balance" on the sheet) PLUS Petty Cash Fund's
+  // own running balance (pcfEndingBalance, a separate Chart of Accounts
+  // entry — see loadLockedFields) — not against "Expected Cash" (pending
+  // remittances not yet reconciled), a different, usually much smaller
+  // number that made Variance read as roughly the entire counted total on
+  // days with nothing pending, "balanced" or not (Kat's Sep 11 report:
+  // Vault Total already equalled the Vault ledger balance on most days,
+  // meaning those counts WERE balanced, but Variance was still showing the
+  // full counted amount because it was being compared to ~0 — and PCF's
+  // own balance wasn't part of the comparison at all until now, so any
+  // branch with real PCF activity kept showing a leftover variance exactly
+  // equal to its PCF total even after that first fix).
+  const expectedTotal = (Number(endingBalance) || 0) + (Number(pcfEndingBalance) || 0);
+  const variancePreview = countedTotal > 0 ? countedTotal - expectedTotal : null;
 
   function resetForm() {
     setVaultCounts(emptyDenomCounts());
@@ -473,6 +522,7 @@ export default function CashCountPage() {
     setTotalCollections('');
     setBeginningBalance('');
     setEndingBalance('');
+    setPcfEndingBalance('');
     setReleaseAmount('');
     setTotalExpenses('');
     setCashRelease('');
@@ -485,7 +535,9 @@ export default function CashCountPage() {
     e.preventDefault();
     if (!branchId || countedTotal <= 0) return;
     setSaving(true);
-    const variance = countedTotal - expected;
+    // See variancePreview above — checked against the ledger's Vault +
+    // PCF ending balances combined, not pending remittances.
+    const variance = countedTotal - expectedTotal;
     const { error } = await supabase.from('cash_counts').insert({
       branch_id: branchId,
       count_date: date,
