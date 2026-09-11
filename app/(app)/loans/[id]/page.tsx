@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { PageHeader } from '@/components/layout/page-header';
@@ -32,10 +33,11 @@ import { notifyRoles } from '@/lib/notify';
 import { logAudit } from '@/lib/audit-log';
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/document-preview-dialog';
 import { PaymentReceiptDialog, type PaymentReceiptData } from '@/components/payment-receipt-dialog';
+import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
-  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown, Trash2, Ban,
+  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown, Trash2, Ban, Printer,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -91,6 +93,8 @@ export default function LoanDetailPage() {
   const [writeOffReason, setWriteOffReason] = useState('deceased');
   const [writeOffNotes, setWriteOffNotes] = useState('');
   const [writingOff, setWritingOff] = useState(false);
+  const [printingHistory, setPrintingHistory] = useState(false);
+  const historyPrintRef = useRef<HTMLDivElement>(null);
 
   async function loadLoan() {
     const id = params.id as string;
@@ -810,18 +814,96 @@ export default function LoanDetailPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Loan written off', description: `${loan.loan_number} has been moved to Write-Off.` });
       // No explicit logAudit() call here — this UPDATE is already captured
       // automatically by the log_audit_trail() DB trigger (full before/after
       // diff, including the status/reason change), same as every other plain
       // table mutation. logAudit() is reserved for the handful of things a
       // trigger can't see (login/logout, approve/reject labels) — see its
       // own comment in lib/audit-log.ts.
+
+      // Standard bad-debt write-off entry, posted immediately (not
+      // deferred to a recovery payment like write-off/[id]/page.tsx's
+      // Miscellaneous Income entries) — Kat's Sep 11 follow-up, confirmed
+      // against Filomina Valdoz's write-off (₱19,650.00 remaining balance,
+      // same amount both sides):
+      //   Debit  Doubtful Accounts Expense
+      //   Credit Loans Receivable
+      // for whatever the loan's remaining balance is at this exact moment
+      // — not the original principal, just what's actually still
+      // outstanding. Resolved by NAME (see supabase/add_doubtful_accounts_expense.sql)
+      // never a hardcoded code — the same '5040' collision lesson as
+      // Incentives Expense elsewhere this session.
+      const branchName = loan.branches?.name ?? null;
+      const [receivableCode, doubtfulCode] = await Promise.all([
+        resolveBranchAccountCode('Loans Receivable', loan.branch_id, branchName),
+        resolveBranchAccountCode('Doubtful Accounts Expense', loan.branch_id, branchName),
+      ]);
+      if (!receivableCode || !doubtfulCode) {
+        toast({
+          title: 'Loan written off, but ledger entry not posted',
+          description: `Could not find ${!doubtfulCode ? 'a Doubtful Accounts Expense' : 'the Loans Receivable'} account in the Chart of Accounts${branchName ? ` for ${branchName}` : ''}. Post the entry manually in Journal Entries.`,
+          variant: 'destructive',
+        });
+      } else {
+        const ledgerResult = await postJournalEntry({
+          entryDate: new Date().toISOString().split('T')[0],
+          description: `Loan write-off — ${loan.loan_number}`,
+          source: 'write_off',
+          sourceId: loan.id,
+          createdBy: profile?.id ?? null,
+          branchId: loan.branch_id ?? null,
+          lines: [
+            { accountCode: doubtfulCode, debit: Number(loan.remaining_balance), memo: reasonText },
+            { accountCode: receivableCode, credit: Number(loan.remaining_balance), memo: `Write-off — ${loan.loan_number}` },
+          ],
+        });
+        if (!ledgerResult.ok) {
+          toast({
+            title: 'Loan written off, but ledger entry not posted',
+            description: `Missing account: ${ledgerResult.missingCodes.join(', ') || 'unknown'}. Post the entry manually in Journal Entries.`,
+            variant: 'destructive',
+          });
+        } else {
+          toast({ title: 'Loan written off', description: `${loan.loan_number} has been moved to Write-Off.` });
+        }
+      }
+
       setWriteOffOpen(false);
       setWriteOffNotes('');
       router.push(`/write-off/${loan.id}`);
     }
     setWritingOff(false);
+  }
+
+  // Print the Payment History list, Interest(16%)/Principal(84%) breakdown
+  // included — Kat's Sep 11 request. Same popup-window-plus-image approach
+  // already used by the Payment Receipt's own print button.
+  async function handlePrintHistory() {
+    if (!historyPrintRef.current) return;
+    setPrintingHistory(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(historyPrintRef.current, { backgroundColor: '#ffffff', scale: 2 });
+      const dataUrl = canvas.toDataURL('image/png');
+      const printWindow = window.open('', '_blank', 'width=900,height=1000');
+      if (!printWindow) {
+        toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print', variant: 'destructive' });
+        return;
+      }
+      printWindow.document.write(`
+        <html>
+          <head><title>Payment History ${loan.loan_number}</title><style>@page { size: auto; margin: 0; }</style></head>
+          <body style="margin:0;display:flex;justify-content:center;padding:24px;background:#fff;">
+            <img src="${dataUrl}" style="max-width:100%;" onload="window.print()" />
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      printWindow.onafterprint = () => printWindow.close();
+    } catch (err: any) {
+      toast({ title: 'Print failed', description: err?.message ?? 'Could not generate the payment history for printing', variant: 'destructive' });
+    }
+    setPrintingHistory(false);
   }
 
   async function handleAddCollateral(e: React.FormEvent) {
@@ -1092,12 +1174,20 @@ export default function LoanDetailPage() {
 
         {/* Payment history */}
         <Card className="glass-card border-border lg:col-span-1">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Wallet className="w-5 h-5" />
-              Payment History
-            </CardTitle>
-            <CardDescription>{payments.length} payments</CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Wallet className="w-5 h-5" />
+                Payment History
+              </CardTitle>
+              <CardDescription>{payments.length} payments</CardDescription>
+            </div>
+            {payments.length > 0 && (
+              <Button variant="outline" size="sm" onClick={handlePrintHistory} disabled={printingHistory}>
+                {printingHistory ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Printer className="w-4 h-4 mr-2" />}
+                Print
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             {payments.length === 0 ? (
@@ -1109,6 +1199,14 @@ export default function LoanDetailPage() {
                     <div className="min-w-0">
                       <p className="text-sm font-medium">{formatCurrency(p.amount_paid)}</p>
                       <p className="text-xs text-muted-foreground truncate">{formatDate(p.payment_date)} {p.receipts?.or_number ? `• ${p.receipts.or_number}` : ''}</p>
+                      {/* Flat 16% interest / 84% principal split of THIS
+                          payment — informational, Kat's Sep 11 request.
+                          Deliberately not tied to the loan's own
+                          interest_rate/total_payable, just a fixed
+                          percentage of whatever this one payment was. */}
+                      <p className="text-xs text-muted-foreground truncate">
+                        Interest: {formatCurrency(Number(p.amount_paid) * 0.16)} · Principal: {formatCurrency(Number(p.amount_paid) * 0.84)}
+                      </p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <Badge variant="secondary" className="text-success">{formatCurrency(p.remaining_balance)}</Badge>
@@ -1724,6 +1822,63 @@ export default function LoanDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Hidden printable Payment History, Interest(16%)/Principal(84%)
+          breakdown included — see handlePrintHistory. Portaled onto <body>
+          so no ancestor layout affects the capture. Oldest first, like a
+          running ledger — the on-screen list above is newest-first. */}
+      {typeof document !== 'undefined' && loan && createPortal(
+        <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
+          <div ref={historyPrintRef} style={{ width: 850, background: '#fff', color: '#111', padding: 36, fontFamily: '"Times New Roman", Calibri, serif' }}>
+            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 20, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#1F4E79' }}>{getDocumentBranding(loan.branches?.name).headerAddress.toUpperCase()}</div>
+              <div style={{ fontWeight: 700, fontSize: 22, marginTop: 12 }}>Payment History</div>
+            </div>
+            <table style={{ width: '100%', fontSize: 13, marginBottom: 16 }}>
+              <tbody>
+                <tr>
+                  <td style={{ padding: '2px 0' }}><strong>Loan #:</strong> {loan.loan_number}</td>
+                  <td style={{ padding: '2px 0', textAlign: 'right' }}><strong>Customer:</strong> {loan.customers?.first_name} {loan.customers?.last_name}</td>
+                </tr>
+                <tr>
+                  <td style={{ padding: '2px 0' }}><strong>Branch:</strong> {loan.branches?.name ?? '—'}</td>
+                  <td style={{ padding: '2px 0', textAlign: 'right' }}><strong>Printed:</strong> {formatDate(new Date().toISOString().split('T')[0])}</td>
+                </tr>
+              </tbody>
+            </table>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr>
+                  {['Date', 'OR #', 'Amount Paid', 'Interest (16%)', 'Principal (84%)', 'Balance'].map(h => (
+                    <th key={h} style={{ border: '1px solid #000', padding: '6px 8px', background: '#F3F4F6', textAlign: h === 'Date' || h === 'OR #' ? 'left' : 'right' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {payments.slice().sort((a, b) => (a.payment_date ?? '').localeCompare(b.payment_date ?? '') || (a.created_at ?? '').localeCompare(b.created_at ?? '')).map(p => (
+                  <tr key={p.id}>
+                    <td style={{ border: '1px solid #000', padding: '5px 8px' }}>{formatDate(p.payment_date)}</td>
+                    <td style={{ border: '1px solid #000', padding: '5px 8px', fontFamily: 'monospace' }}>{p.receipts?.or_number ?? '—'}</td>
+                    <td style={{ border: '1px solid #000', padding: '5px 8px', textAlign: 'right' }}>{formatCurrency(Number(p.amount_paid))}</td>
+                    <td style={{ border: '1px solid #000', padding: '5px 8px', textAlign: 'right' }}>{formatCurrency(Number(p.amount_paid) * 0.16)}</td>
+                    <td style={{ border: '1px solid #000', padding: '5px 8px', textAlign: 'right' }}>{formatCurrency(Number(p.amount_paid) * 0.84)}</td>
+                    <td style={{ border: '1px solid #000', padding: '5px 8px', textAlign: 'right' }}>{formatCurrency(Number(p.remaining_balance))}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td colSpan={2} style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700 }}>Total</td>
+                  <td style={{ border: '1px solid #000', padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(payments.reduce((s, p) => s + Number(p.amount_paid), 0))}</td>
+                  <td style={{ border: '1px solid #000', padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(payments.reduce((s, p) => s + Number(p.amount_paid), 0) * 0.16)}</td>
+                  <td style={{ border: '1px solid #000', padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{formatCurrency(payments.reduce((s, p) => s + Number(p.amount_paid), 0) * 0.84)}</td>
+                  <td style={{ border: '1px solid #000', padding: '6px 8px' }}></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

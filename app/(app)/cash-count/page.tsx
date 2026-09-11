@@ -276,6 +276,14 @@ export default function CashCountPage() {
   // still mid-capture, and the first row's PDF/print would show the wrong
   // day entirely.
   const historyBusyRef = useRef(false);
+  // Synchronous double-submit guard for handleSubmit — same reasoning and
+  // pattern as payments/page.tsx's submittingRef (see the comment there):
+  // a plain `saving` state disables the button a render too late for a
+  // rapid double-tap, which is how the Sep 11 History ended up with two
+  // identical-totals rows for the same branch/date, one with each value
+  // Variance happened to compute to at the moment each of the two
+  // near-simultaneous inserts actually landed.
+  const submittingRef = useRef(false);
 
   const [vaultCounts, setVaultCounts] = useState<DenomCounts>(emptyDenomCounts());
   const [pcfCounts, setPcfCounts] = useState<DenomCounts>(emptyDenomCounts());
@@ -511,8 +519,16 @@ export default function CashCountPage() {
   // own balance wasn't part of the comparison at all until now, so any
   // branch with real PCF activity kept showing a leftover variance exactly
   // equal to its PCF total even after that first fix).
+  //
+  // Shown split (vaultVariance / pcfVariance) rather than as one combined
+  // number — Kat's Sep 11 follow-up: a single figure can't tell you which
+  // of the two actually has a discrepancy, since Vault can be exactly
+  // right while PCF alone is off (or vice versa). expectedTotal (their
+  // sum) is what actually gets stored as `variance` on submit, for
+  // whatever still reads that one column.
+  const vaultVariance = vaultTotal - (Number(endingBalance) || 0);
+  const pcfVariance = pcfTotal - (Number(pcfEndingBalance) || 0);
   const expectedTotal = (Number(endingBalance) || 0) + (Number(pcfEndingBalance) || 0);
-  const variancePreview = countedTotal > 0 ? countedTotal - expectedTotal : null;
 
   function resetForm() {
     setVaultCounts(emptyDenomCounts());
@@ -533,10 +549,18 @@ export default function CashCountPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Blocks a rapid double-tap from recording the same count twice —
+    // checked/set synchronously, released in the finally below regardless
+    // of which return point this call exits through. See submittingRef
+    // above.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    try {
     if (!branchId || countedTotal <= 0) return;
     setSaving(true);
-    // See variancePreview above — checked against the ledger's Vault +
-    // PCF ending balances combined, not pending remittances.
+    // See vaultVariance/pcfVariance above — this combined figure is
+    // checked against the ledger's Vault + PCF ending balances together,
+    // not pending remittances.
     const variance = countedTotal - expectedTotal;
     const { error } = await supabase.from('cash_counts').insert({
       branch_id: branchId,
@@ -560,6 +584,11 @@ export default function CashCountPage() {
       total_collections: Number(totalCollections) || 0,
       beginning_balance: Number(beginningBalance) || 0,
       ending_balance: Number(endingBalance) || 0,
+      // Petty Cash Fund's own ledger balance — feeds into the combined
+      // Variance figure above (see supabase/add_cash_count_pcf_ending_balance.sql).
+      // Kept as its own stored column (not just folded into `variance`)
+      // in case a future split display needs it again.
+      pcf_ending_balance: Number(pcfEndingBalance) || 0,
       release_amount: Number(releaseAmount) || 0,
       total_expenses: Number(totalExpenses) || 0,
       cash_release: Number(cashRelease) || 0,
@@ -582,6 +611,9 @@ export default function CashCountPage() {
       loadData();
     }
     setSaving(false);
+    } finally {
+      submittingRef.current = false;
+    }
   }
 
   // Shared by the live form's "Download PDF" button and History's per-row
@@ -710,9 +742,9 @@ export default function CashCountPage() {
         <StatCard title="Expected Cash" value={formatCurrency(expected)} icon={<TrendingUp className="w-5 h-5" />} subtitle="Total pending remittances not yet reconciled" />
         <StatCard
           title="Variance"
-          value={variancePreview !== null ? formatCurrency(variancePreview) : '—'}
+          value={countedTotal > 0 ? formatCurrency(vaultVariance + pcfVariance) : '—'}
           icon={<Scale className="w-5 h-5" />}
-          variant={variancePreview === null ? 'default' : variancePreview === 0 ? 'success' : variancePreview > 0 ? 'warning' : 'danger'}
+          variant={countedTotal === 0 ? 'default' : (vaultVariance + pcfVariance) === 0 ? 'success' : (vaultVariance + pcfVariance) > 0 ? 'warning' : 'danger'}
         />
       </div>
 

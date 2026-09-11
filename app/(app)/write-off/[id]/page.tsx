@@ -34,9 +34,11 @@ import {
 // supabase/add_loan_write_off.sql.
 //
 // Journal Entries here are everything postJournalEntry ever tagged with
-// source_id = this loan (the original disbursement, and any write-off
-// recovery payments below) — that's the full set the app can cleanly
-// attribute to ONE loan. Ongoing COLLECTION entries before the write-off
+// source_id = this loan (the original disbursement, the write-off entry
+// itself — Debit Doubtful Accounts Expense / Credit Loans Receivable, see
+// handleWriteOff in /loans/[id]/page.tsx — and any write-off recovery
+// payments below) — that's the full set the app can cleanly attribute to
+// ONE loan. Ongoing COLLECTION entries before the write-off
 // are deliberately not reproduced here: those post as one lump sum per
 // collector remittance batch, covering many loans at once, so there is no
 // single entry to point at for "this loan's share" of one. The Payment
@@ -76,7 +78,7 @@ export default function WriteOffDetailPage() {
         .from('journal_entries')
         .select('*, journal_entry_lines(debit, credit, memo, chart_of_accounts(code, name))')
         .eq('source_id', id)
-        .in('source', ['disbursement', 'write_off_payment'])
+        .in('source', ['disbursement', 'write_off', 'write_off_payment'])
         .order('entry_date', { ascending: false }),
     ]);
     setLoan(l.data);

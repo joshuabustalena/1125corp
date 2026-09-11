@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -38,7 +39,8 @@ function countCollectionDaysBetween(start: Date, end: Date): number {
 export default function CollectionListPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
-  const canAccess = isAdmin || profile?.role_name === 'Cashier';
+  const isFieldCollector = profile?.role_name === 'Branch Field Collector';
+  const canAccess = isAdmin || profile?.role_name === 'Cashier' || isFieldCollector;
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
@@ -56,15 +58,26 @@ export default function CollectionListPage() {
   // and column headings on top of each page.
   const ROWS_PER_PRINT_PAGE = 34;
 
+  // A Field Collector only ever sees their own area's worksheet — locked
+  // to their own collectors row, same "resolve by profile_id" pattern
+  // already used on /reports. Set once profile is known; loadCollectors
+  // below (branchId effect) reads it to lock the picker instead of
+  // auto-selecting whichever collector happens to sort first.
+  const [myCollectorId, setMyCollectorId] = useState<string | null>(null);
+
   useEffect(() => {
     loadBranches();
     if (!isAdmin && profile?.branch_id) setBranchId(profile.branch_id);
-  }, [profile]);
+    if (isFieldCollector && profile) {
+      supabase.from('collectors').select('id').eq('profile_id', profile.id).maybeSingle()
+        .then(({ data }) => setMyCollectorId(data?.id ?? null));
+    }
+  }, [profile, isFieldCollector]);
 
   useEffect(() => {
     if (!branchId) return;
     loadCollectors();
-  }, [branchId]);
+  }, [branchId, myCollectorId]);
 
   useEffect(() => {
     if (!collectorId) { setLoans([]); setLoading(false); return; }
@@ -79,11 +92,18 @@ export default function CollectionListPage() {
 
   async function loadCollectors() {
     setLoading(true);
-    const { data } = await supabase
+    let query = supabase
       .from('collectors')
       .select('id, area_id, profile_id, profiles(full_name), areas(name)')
       .eq('branch_id', branchId)
       .eq('status', 'active');
+    // Field Collector: only their own row, ever — not just the initial
+    // pick, the whole list this page has to choose from, so the picker
+    // below can't be used to browse into another collector's area either.
+    if (isFieldCollector) {
+      query = query.eq('id', myCollectorId ?? '00000000-0000-0000-0000-000000000000');
+    }
+    const { data } = await query;
     const sorted = (data ?? []).slice().sort((a: any, b: any) => (a.areas?.name ?? '').localeCompare(b.areas?.name ?? ''));
     setCollectors(sorted);
     if (sorted.length > 0 && !sorted.some((c: any) => c.id === collectorId)) {
@@ -258,12 +278,18 @@ export default function CollectionListPage() {
             </SelectContent>
           </Select>
         )}
-        <Select value={collectorId} onValueChange={setCollectorId}>
-          <SelectTrigger className="w-56"><SelectValue placeholder="Select collector" /></SelectTrigger>
-          <SelectContent>
-            {collectors.map(c => <SelectItem key={c.id} value={c.id}>{c.areas?.name ?? '—'} — {c.profiles?.full_name ?? '—'}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        {isFieldCollector ? (
+          <Badge variant="outline" className="h-9 px-3 flex items-center">
+            {collector ? `${collector.areas?.name ?? '—'} — ${collector.profiles?.full_name ?? '—'}` : 'Loading…'}
+          </Badge>
+        ) : (
+          <Select value={collectorId} onValueChange={setCollectorId}>
+            <SelectTrigger className="w-56"><SelectValue placeholder="Select collector" /></SelectTrigger>
+            <SelectContent>
+              {collectors.map(c => <SelectItem key={c.id} value={c.id}>{c.areas?.name ?? '—'} — {c.profiles?.full_name ?? '—'}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
         <Button type="button" variant="outline" size="sm" onClick={handlePrint} disabled={printing || rows.length === 0}>
           {printing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Printer className="w-4 h-4 mr-2" />}
           Print
