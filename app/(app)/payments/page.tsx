@@ -261,7 +261,14 @@ export default function PaymentsPage() {
     let query = supabase
       .from('loans')
       .select('id, loan_number, remaining_balance, status, total_payable, term_days, daily_payment, release_date, due_date, customer_id, collector_id, customers(first_name, last_name, phone), branches(name), areas(name), collectors(profiles(full_name))')
-      .in('status', ['active', 'overdue']);
+      // 'written_off' included alongside the normal active/overdue loans —
+      // Kat's Sep 2026 request: a collector recovering money on an
+      // already-written-off loan posts it through this exact same dialog,
+      // same as any other collection. See
+      // supabase/add_write_off_recovery_collection.sql for how the
+      // accounting stays separate (Miscellaneous Income, never Loans
+      // Receivable) despite sharing this one picker.
+      .in('status', ['active', 'overdue', 'written_off']);
     if (isCollector) {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
     } else if (!isAdmin) {
@@ -290,6 +297,14 @@ export default function PaymentsPage() {
 
   function handleLoanSelect(loanId: string) {
     const loan = loans.find(l => l.id === loanId);
+    // A written-off loan has no schedule left to default from — a recovery
+    // payment is whatever the customer actually hands over, not a fixed
+    // daily installment. Left blank, same as the write-off/[id] page's own
+    // Record Payment dialog.
+    if (loan?.status === 'written_off') {
+      setForm({ ...form, loan_id: loanId, amount_paid: '' });
+      return;
+    }
     const dailyAmount = loan
       ? (loan.daily_payment != null && Number(loan.daily_payment) > 0
           ? Number(loan.daily_payment)
@@ -465,6 +480,9 @@ export default function PaymentsPage() {
   ).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
 
   const selectedLoan = loans.find(l => l.id === form.loan_id);
+  // Drives the write-off-specific copy below and the receipt's schedule
+  // fields — see handleSubmit for why those are skipped for this case.
+  const isWrittenOffLoan = selectedLoan?.status === 'written_off';
   // Always the collector assigned to the customer, whoever posts it — an
   // Admin or Cashier taking a walk-in at the office included. Client
   // confirmed (Aug 2026): the money belongs to that collector's area, so it
@@ -693,7 +711,7 @@ export default function PaymentsPage() {
       gps_lat: location?.lat ?? null,
       gps_lng: location?.lng ?? null,
       location_address: locationAddress ?? null,
-      notes: form.notes || null,
+      notes: form.notes || (isWrittenOffLoan ? 'Write-off recovery payment' : null),
     });
 
     if (payError) {
@@ -716,32 +734,51 @@ export default function PaymentsPage() {
     // (Debit the real cash account, Credit Loans Receivable happens there).
     // Posting it again here would double-count it.
 
-    toast({ title: 'Success', description: `Payment posted. OR: ${orNumber}` });
+    toast({
+      title: 'Success',
+      description: isWrittenOffLoan
+        ? `Payment posted. OR: ${orNumber} — write-off recovery, will post to Miscellaneous Income once remitted.`
+        : `Payment posted. OR: ${orNumber}`,
+    });
 
-    const dailyDue = selectedLoan
-      ? (selectedLoan.daily_payment != null && Number(selectedLoan.daily_payment) > 0
-          ? Number(selectedLoan.daily_payment)
-          : (selectedLoan.term_days > 0 ? selectedLoan.total_payable / selectedLoan.term_days : 0))
-      : 0;
     const amountPaidNum = Number(form.amount_paid);
-    // "Days covered" only makes sense up to what was actually still owed —
-    // dividing the raw amount paid by the daily rate could claim far more
-    // days than the loan's own term once the loan is at or near payoff
-    // (e.g. a final lump-sum payment reads as "98 days" on a 30-day loan).
-    // Cap the days/credit math at the balance that existed before this
-    // payment (from the RPC above, so it's the real figure, not a stale
-    // local one), and treat anything beyond that as the loan being settled.
-    const appliedTowardSchedule = Math.min(amountPaidNum, balanceBeforePayment);
-    const rawDaysCovered = dailyDue > 0 ? Math.floor((appliedTowardSchedule + 0.001) / dailyDue) : 0;
-    // A lump-sum payment can be large enough that amount/dailyRate works out
-    // to more days than the loan's own term even has — dividing pesos by
-    // the daily rate alone doesn't know the term has an upper bound (e.g. a
-    // 30-day loan showing "covers 98 days"). Cap it at however many actual
-    // collection days (every day except Sunday) exist in the term.
-    const totalCollectionDays = selectedLoan ? countCollectionDays(selectedLoan.release_date, selectedLoan.due_date) : 0;
-    const daysCovered = totalCollectionDays > 0 ? Math.min(rawDaysCovered, totalCollectionDays) : rawDaysCovered;
-    const advanceCredit = dailyDue > 0 ? Math.max(0, Math.round((appliedTowardSchedule - daysCovered * dailyDue) * 100) / 100) : 0;
     const isFullyPaid = authoritativeNewBalance <= 0.009;
+    // A written-off loan has no daily schedule left to measure "days
+    // covered" against — a recovery payment isn't catching up on a
+    // schedule, it's just money back on a debt already off the books.
+    // Left undefined rather than 0/false so the receipt simply omits that
+    // line instead of showing a misleading "0 days" — see
+    // PaymentReceiptDialog's isPending/daysCovered handling.
+    const dailyDue = isWrittenOffLoan
+      ? undefined
+      : (selectedLoan
+        ? (selectedLoan.daily_payment != null && Number(selectedLoan.daily_payment) > 0
+            ? Number(selectedLoan.daily_payment)
+            : (selectedLoan.term_days > 0 ? selectedLoan.total_payable / selectedLoan.term_days : 0))
+        : 0);
+    let daysCovered: number | undefined;
+    let advanceCredit: number | undefined;
+    if (!isWrittenOffLoan) {
+      // "Days covered" only makes sense up to what was actually still
+      // owed — dividing the raw amount paid by the daily rate could claim
+      // far more days than the loan's own term once the loan is at or
+      // near payoff (e.g. a final lump-sum payment reads as "98 days" on
+      // a 30-day loan). Cap the days/credit math at the balance that
+      // existed before this payment (from the RPC above, so it's the
+      // real figure, not a stale local one), and treat anything beyond
+      // that as the loan being settled.
+      const appliedTowardSchedule = Math.min(amountPaidNum, balanceBeforePayment);
+      const rawDaysCovered = dailyDue! > 0 ? Math.floor((appliedTowardSchedule + 0.001) / dailyDue!) : 0;
+      // A lump-sum payment can be large enough that amount/dailyRate works
+      // out to more days than the loan's own term even has — dividing
+      // pesos by the daily rate alone doesn't know the term has an upper
+      // bound (e.g. a 30-day loan showing "covers 98 days"). Cap it at
+      // however many actual collection days (every day except Sunday)
+      // exist in the term.
+      const totalCollectionDays = selectedLoan ? countCollectionDays(selectedLoan.release_date, selectedLoan.due_date) : 0;
+      daysCovered = totalCollectionDays > 0 ? Math.min(rawDaysCovered, totalCollectionDays) : rawDaysCovered;
+      advanceCredit = dailyDue! > 0 ? Math.max(0, Math.round((appliedTowardSchedule - daysCovered * dailyDue!) * 100) / 100) : 0;
+    }
 
     setReceiptData({
       orNumber,
@@ -1123,7 +1160,7 @@ export default function PaymentsPage() {
                 <SelectContent>
                   {loans.map(l => (
                     <SelectItem key={l.id} value={l.id}>
-                      {l.loan_number} — {formatCustomerName(l.customers?.first_name, l.customers?.last_name)} (Bal: {formatCurrency(l.remaining_balance)})
+                      {l.loan_number} — {formatCustomerName(l.customers?.first_name, l.customers?.last_name)} (Bal: {formatCurrency(l.remaining_balance)}){l.status === 'written_off' ? ' — Written Off' : ''}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1133,6 +1170,11 @@ export default function PaymentsPage() {
             {selectedLoan && (
               <div className="p-3 rounded-lg bg-secondary/50 text-sm space-y-1">
                 <div className="flex justify-between"><span className="text-muted-foreground">Current Balance:</span><span className="font-medium">{formatCurrency(selectedLoan.remaining_balance)}</span></div>
+                {isWrittenOffLoan && (
+                  <p className="text-xs text-muted-foreground pt-1">
+                    This loan was written off — this payment is a recovery, tracked separately and never counted as a receivable. It posts to Miscellaneous Income, not Loans Receivable, once the Cashier records it as remitted.
+                  </p>
+                )}
               </div>
             )}
 

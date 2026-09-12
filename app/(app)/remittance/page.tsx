@@ -46,10 +46,22 @@ export default function RemittancePage() {
   // Collected/Remitted columns still show just that day's activity.
   const [cumulativeCollected, setCumulativeCollected] = useState<Record<string, number>>({});
   const [cumulativeRemitted, setCumulativeRemitted] = useState<Record<string, number>>({});
+  // Same four figures, but for payments collected against an already
+  // written-off loan (Kat's Sep 2026 request — see
+  // supabase/add_write_off_recovery_collection.sql). Kept in a completely
+  // separate pool from collected/remitted/cumulative* above: this money was
+  // never a receivable, so it must never share a remittance with, or get
+  // counted toward, the normal Loans-Receivable-credited figures.
+  const [collectedRecovery, setCollectedRecovery] = useState<Record<string, number>>({});
+  const [remittedRecovery, setRemittedRecovery] = useState<Record<string, number>>({});
+  const [cumulativeCollectedRecovery, setCumulativeCollectedRecovery] = useState<Record<string, number>>({});
+  const [cumulativeRemittedRecovery, setCumulativeRemittedRecovery] = useState<Record<string, number>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [accounts, setAccounts] = useState<any[]>([]);
-  const [form, setForm] = useState({ collector_id: '', collector_name: '', amount: 0, notes: '' });
+  // category 'recovery' is a write-off recovery settlement — auto-credits
+  // Miscellaneous Income instead of Loans Receivable. See openRecord.
+  const [form, setForm] = useState({ collector_id: '', collector_name: '', amount: 0, notes: '', category: 'collection' as 'collection' | 'recovery' });
   const [lines, setLines] = useState<Line[]>([{ account_id: '', amount: '' }]);
 
   useEffect(() => {
@@ -80,35 +92,50 @@ export default function RemittancePage() {
     // 1000 — collected came back short while remitted, only 54 rows, stayed
     // complete. The two same-day queries above them are one date each and
     // stay far under the cap.
+    // payments carries no status of its own — loans(status) is embedded so
+    // a write-off recovery payment (loan status = 'written_off', which
+    // never reverts — see add_write_off_recovery_collection.sql) can be
+    // split into its own pool below instead of inflating what's "owed"
+    // against real receivables.
     const [{ data: cols }, { data: pays }, { data: rems }, cumPays, cumRems] = await Promise.all([
       colQuery,
-      supabase.from('payments').select('collector_id, amount_paid').eq('payment_date', date),
-      supabase.from('remittances').select('collector_id, amount').eq('remittance_date', date),
-      selectAllRows<any>(() => supabase.from('payments').select('collector_id, amount_paid').lte('payment_date', date)),
-      selectAllRows<any>(() => supabase.from('remittances').select('collector_id, amount').lte('remittance_date', date)),
+      supabase.from('payments').select('collector_id, amount_paid, loans(status)').eq('payment_date', date),
+      supabase.from('remittances').select('collector_id, amount, is_write_off_recovery').eq('remittance_date', date),
+      selectAllRows<any>(() => supabase.from('payments').select('collector_id, amount_paid, loans(status)').lte('payment_date', date)),
+      selectAllRows<any>(() => supabase.from('remittances').select('collector_id, amount, is_write_off_recovery').lte('remittance_date', date)),
     ]);
 
     setCollectors(cols ?? []);
 
-    function sumByCollector(rows: any[], amountKey: string): Record<string, number> {
+    function sumByCollector(rows: any[], amountKey: string, filter?: (r: any) => boolean): Record<string, number> {
       const map: Record<string, number> = {};
       for (const r of rows) {
         if (!r.collector_id) continue;
+        if (filter && !filter(r)) continue;
         map[r.collector_id] = (map[r.collector_id] ?? 0) + Number(r[amountKey]);
       }
       return map;
     }
 
-    setCollected(sumByCollector(pays ?? [], 'amount_paid'));
-    setRemitted(sumByCollector(rems ?? [], 'amount'));
-    setCumulativeCollected(sumByCollector(cumPays, 'amount_paid'));
-    setCumulativeRemitted(sumByCollector(cumRems, 'amount'));
+    const isRecoveryPayment = (r: any) => r.loans?.status === 'written_off';
+    const isRecoveryRemittance = (r: any) => !!r.is_write_off_recovery;
+
+    setCollected(sumByCollector(pays ?? [], 'amount_paid', (r) => !isRecoveryPayment(r)));
+    setCollectedRecovery(sumByCollector(pays ?? [], 'amount_paid', isRecoveryPayment));
+    setRemitted(sumByCollector(rems ?? [], 'amount', (r) => !isRecoveryRemittance(r)));
+    setRemittedRecovery(sumByCollector(rems ?? [], 'amount', isRecoveryRemittance));
+    setCumulativeCollected(sumByCollector(cumPays, 'amount_paid', (r) => !isRecoveryPayment(r)));
+    setCumulativeCollectedRecovery(sumByCollector(cumPays, 'amount_paid', isRecoveryPayment));
+    setCumulativeRemitted(sumByCollector(cumRems, 'amount', (r) => !isRecoveryRemittance(r)));
+    setCumulativeRemittedRecovery(sumByCollector(cumRems, 'amount', isRecoveryRemittance));
     setLoading(false);
   }
 
-  function openRecord(collectorId: string, collectorName: string) {
-    const owed = (cumulativeCollected[collectorId] ?? 0) - (cumulativeRemitted[collectorId] ?? 0);
-    setForm({ collector_id: collectorId, collector_name: collectorName, amount: owed > 0 ? owed : 0, notes: '' });
+  function openRecord(collectorId: string, collectorName: string, category: 'collection' | 'recovery' = 'collection') {
+    const owed = category === 'recovery'
+      ? (cumulativeCollectedRecovery[collectorId] ?? 0) - (cumulativeRemittedRecovery[collectorId] ?? 0)
+      : (cumulativeCollected[collectorId] ?? 0) - (cumulativeRemitted[collectorId] ?? 0);
+    setForm({ collector_id: collectorId, collector_name: collectorName, amount: owed > 0 ? owed : 0, notes: '', category });
     setLines([{ account_id: '', amount: '' }]);
     setDialogOpen(true);
   }
@@ -171,11 +198,19 @@ export default function RemittancePage() {
     // voucher — the live Chart of Accounts has a separate Loans Receivable
     // per branch (e.g. 1100 for Balanga, 1200 for Dinalupihan), so this
     // collector's own branch determines which one gets credited.
+    //
+    // A write-off recovery settlement credits Miscellaneous Income instead
+    // — that money was never a receivable, so crediting Loans Receivable
+    // here would quietly reintroduce it into that total exactly like a
+    // recovery payment posting straight to it would. See
+    // supabase/add_write_off_recovery_collection.sql.
+    const isRecovery = form.category === 'recovery';
+    const targetAccountName = isRecovery ? 'Miscellaneous Income' : 'Loans Receivable';
     const collector = collectors.find(c => c.id === form.collector_id);
-    const loansReceivableCode = (await resolveBranchAccountCode('Loans Receivable', (collector as any)?.branch_id, (collector as any)?.branches?.name)) ?? '';
-    const loansReceivableAccount = accounts.find(a => a.code === loansReceivableCode);
-    if (!loansReceivableAccount) {
-      toast({ title: 'Error', description: `Loans Receivable account (${loansReceivableCode}) not found in the Chart of Accounts`, variant: 'destructive' });
+    const targetCode = (await resolveBranchAccountCode(targetAccountName, (collector as any)?.branch_id, (collector as any)?.branches?.name)) ?? '';
+    const targetAccount = accounts.find(a => a.code === targetCode);
+    if (!targetAccount) {
+      toast({ title: 'Error', description: `${targetAccountName} account (${targetCode}) not found in the Chart of Accounts`, variant: 'destructive' });
       setSaving(false);
       return;
     }
@@ -186,6 +221,7 @@ export default function RemittancePage() {
       remittance_date: date,
       received_by: profile?.id ?? null,
       notes: form.notes || null,
+      is_write_off_recovery: isRecovery,
     }).select('id').single();
 
     if (error || !remittance) {
@@ -198,7 +234,9 @@ export default function RemittancePage() {
       entry_number: generateEntryNumber(),
       entry_date: date,
       reference: null,
-      description: `Collector remittance — ${form.collector_name}`,
+      description: isRecovery
+        ? `Collector remittance (write-off recovery) — ${form.collector_name}`
+        : `Collector remittance — ${form.collector_name}`,
       source: 'remittance',
       source_id: remittance.id,
       created_by: profile?.id ?? null,
@@ -215,8 +253,9 @@ export default function RemittancePage() {
 
     // Debit whichever cash account(s) the user picked (validLines only —
     // already known to all have an account); the credit side (Loans
-    // Receivable) is always automatic — a remittance is collections coming
-    // in, which pays down what customers owe, never a manual choice.
+    // Receivable, or Miscellaneous Income for a write-off recovery) is
+    // always automatic — a remittance is money coming in, never a manual
+    // choice on that side.
     const linesPayload = [
       ...validLines.map(l => ({
         journal_entry_id: entry.id,
@@ -226,7 +265,7 @@ export default function RemittancePage() {
       })),
       {
         journal_entry_id: entry.id,
-        account_id: loansReceivableAccount.id,
+        account_id: targetAccount.id,
         debit: 0,
         credit: totalDebit,
       },
@@ -256,14 +295,21 @@ export default function RemittancePage() {
     // today's collected minus today's remitted — so an unremitted amount
     // from an earlier day carries over instead of resetting.
     const owed = (cumulativeCollected[c.id] ?? 0) - (cumulativeRemitted[c.id] ?? 0);
+    // Same running-balance shape, but for write-off recovery payments —
+    // kept entirely separate so it never mixes into the receivable figure
+    // above. See supabase/add_write_off_recovery_collection.sql.
+    const owedRecovery = (cumulativeCollectedRecovery[c.id] ?? 0) - (cumulativeRemittedRecovery[c.id] ?? 0);
     return {
       id: c.id,
       name: c.profiles?.full_name ?? 'Unassigned',
       collected: collectedAmt,
       remitted: remittedAmt,
       owed,
+      collectedRecovery: collectedRecovery[c.id] ?? 0,
+      remittedRecovery: remittedRecovery[c.id] ?? 0,
+      owedRecovery,
     };
-  }).filter(r => r.collected > 0 || r.remitted > 0 || r.owed > 0);
+  }).filter(r => r.collected > 0 || r.remitted > 0 || r.owed > 0 || r.collectedRecovery > 0 || r.remittedRecovery > 0 || r.owedRecovery > 0);
 
   const totalOwed = rows.reduce((s, r) => s + Math.max(0, r.owed), 0);
 
@@ -320,6 +366,24 @@ export default function RemittancePage() {
                       </Button>
                     </div>
                   )}
+                  {/* Write-off recovery — its own pool, never mixed into the
+                      receivable figures above. Only shown once there's
+                      actually a recovery to account for. */}
+                  {(r.owedRecovery > 0 || r.collectedRecovery > 0 || r.remittedRecovery > 0) && (
+                    <div className="mt-3 pt-3 border-t border-border">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-xs text-muted-foreground">Write-Off Recovery</p>
+                        <Badge variant={r.owedRecovery > 0 ? 'destructive' : 'default'} className="shrink-0">{formatCurrency(r.owedRecovery)}</Badge>
+                      </div>
+                      {canRecordRemittance && (
+                        <div className="mt-2 flex justify-end">
+                          <Button variant="outline" size="sm" disabled={r.owedRecovery <= 0} onClick={() => openRecord(r.id, r.name, 'recovery')}>
+                            Record Recovery
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -352,6 +416,27 @@ export default function RemittancePage() {
                     )}
                   </TableRow>
                 ))}
+                {/* Write-off recovery — kept off the main row entirely (never
+                    mixed into Collected/Remitted/Balance Owed above), one
+                    line per collector that actually has any, matching the
+                    mobile card's treatment. */}
+                {rows.filter(r => r.owedRecovery > 0 || r.collectedRecovery > 0 || r.remittedRecovery > 0).map(r => (
+                  <TableRow key={`${r.id}-recovery`} className="hover:bg-secondary/50 bg-secondary/20">
+                    <TableCell className="text-sm text-muted-foreground">{r.name} — Write-Off Recovery</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(r.collectedRecovery)}</TableCell>
+                    <TableCell className="text-sm">{formatCurrency(r.remittedRecovery)}</TableCell>
+                    <TableCell className="text-sm font-medium">
+                      <Badge variant={r.owedRecovery > 0 ? 'destructive' : 'default'}>{formatCurrency(r.owedRecovery)}</Badge>
+                    </TableCell>
+                    {canRecordRemittance && (
+                      <TableCell className="text-right">
+                        <Button variant="outline" size="sm" disabled={r.owedRecovery <= 0} onClick={() => openRecord(r.id, r.name, 'recovery')}>
+                          Record Recovery
+                        </Button>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
             </>
@@ -362,9 +447,9 @@ export default function RemittancePage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Record Remittance — {form.collector_name}</DialogTitle>
+            <DialogTitle>{form.category === 'recovery' ? 'Record Recovery' : 'Record Remittance'} — {form.collector_name}</DialogTitle>
             <DialogDescription>
-              Which cash account(s) is the {formatCurrency(form.amount)} remittance going into? Loans Receivable is credited automatically — the total must match the remittance amount exactly.
+              Which cash account(s) is the {formatCurrency(form.amount)} {form.category === 'recovery' ? 'write-off recovery' : 'remittance'} going into? {form.category === 'recovery' ? 'Miscellaneous Income' : 'Loans Receivable'} is credited automatically — the total must match the amount exactly.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
