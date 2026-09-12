@@ -102,18 +102,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [fetchProfile]);
 
   const signIn = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (!error && data.user) {
-      logAudit({ action: 'login', entityType: 'auth', entityId: data.user.id, userId: data.user.id, details: { email } });
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (!error && data.user) {
+        logAudit({ action: 'login', entityType: 'auth', entityId: data.user.id, userId: data.user.id, details: { email } });
+      }
+      return { error: error?.message ?? null };
+    } catch {
+      // signInWithPassword only catches its own AuthError internally (see
+      // @supabase/auth-js's GoTrueClient) — a raw network failure (flaky
+      // mobile signal, a DNS hiccup, a timed-out request: very real for
+      // branch/field staff logging in over mobile data) is NOT an
+      // AuthError, so the client re-throws it instead of resolving with
+      // {error}. Left uncaught here, that exception used to propagate out
+      // of the login page's handleSubmit — which has no try/catch of its
+      // own — permanently skipping its setSubmitting(false) and leaving
+      // the Sign In button stuck on "Signing in..." forever with zero
+      // feedback. That's the exact "ayaw mag-log in, then fine on retry a
+      // bit later" pattern Kat reported (Discord, Sep 2026) — a page
+      // reload was the only way out, which reset the stuck state and let a
+      // retry succeed once signal was better, looking like the problem
+      // "fixed itself." Converting it to a normal {error} here restores
+      // both: the button un-sticks, and the user actually sees why.
+      return { error: 'Could not reach the server. Check your connection and try again.' };
     }
-    return { error: error?.message ?? null };
   };
 
   const signOut = async () => {
     // Captured before signOut() clears the session — logAudit can't fall
     // back to supabase.auth.getUser() once there's no session left to ask.
     const uid = user?.id ?? null;
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Same class of bug as signIn above: a network failure while telling
+      // the server to invalidate this session is not an AuthError, so the
+      // client rethrows instead of resolving with {error}. Left uncaught,
+      // that used to skip everything below — local state never cleared,
+      // and topbar.tsx's signOut().then(() => router.push('/login')) never
+      // fired, so clicking Logout with a flaky connection did nothing at
+      // all with no feedback. What actually matters for this device is
+      // that it stops presenting itself as authenticated, which the code
+      // below still does regardless of whether the server-side call
+      // landed — a session that couldn't be invalidated this instant will
+      // still expire on its own.
+    }
     if (uid) logAudit({ action: 'logout', entityType: 'auth', entityId: uid, userId: uid });
     setProfile(null);
     setUser(null);

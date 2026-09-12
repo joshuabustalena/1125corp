@@ -29,12 +29,22 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setSubmitting(true);
-    const { error } = await signIn(email, password);
-    setSubmitting(false);
-    if (error) {
-      setError(error);
-    } else {
-      router.push('/dashboard');
+    // finally, not a plain setSubmitting(false) after the await — signIn
+    // itself now catches everything and always resolves with {error}, but
+    // this is the belt-and-suspenders backstop: without it, any future
+    // exception here would leave the button stuck on "Signing in..."
+    // forever with no way out except reloading the page. See the comment
+    // on auth-context.tsx's signIn for the real bug this class of gap
+    // caused (Kat, Discord Sep 2026).
+    try {
+      const { error } = await signIn(email, password);
+      if (error) {
+        setError(error);
+      } else {
+        router.push('/dashboard');
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
