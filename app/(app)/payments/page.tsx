@@ -101,6 +101,12 @@ export default function PaymentsPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Filters the Loan dropdown in the Post Collection dialog — collectors
+  // asked for this (Sep 2026): with 50+ active loans in an area, scrolling
+  // to find one customer's name in the closed native-style Select list was
+  // slow. Matches by customer name OR loan number, same fields already
+  // shown in each option's own label.
+  const [loanSearch, setLoanSearch] = useState('');
   const [saving, setSaving] = useState(false);
   // Synchronous double-submit guard for handleSubmit — see the comment
   // there. A plain useState wouldn't work for this: setSaving(true) is
@@ -185,6 +191,7 @@ export default function PaymentsPage() {
   function openPostCollection() {
     setLocation(null);
     setLocationAddress(null);
+    setLoanSearch('');
     requestLocation();
     setDialogOpen(true);
   }
@@ -250,7 +257,7 @@ export default function PaymentsPage() {
       } else {
         toast({
           title: 'Loan not ready for payment',
-          description: 'This loan must be disbursed by a Cashier before payments can be posted.',
+          description: 'This loan must be disbursed by a Cashier before payments can be posted, and a loan with a renewal application pending disbursement is locked from new payments until that renewal is disbursed or declined.',
           variant: 'destructive',
         });
       }
@@ -279,6 +286,27 @@ export default function PaymentsPage() {
       query = query.eq('branch_id', profile?.branch_id ?? NO_BRANCH);
     }
     const { data } = await query;
+
+    // A loan already has a renewal application in flight (still 'pending'
+    // or 'approved', not yet disbursed) — Kat's Sep 2026 request. That
+    // renewal's offset_balance locked in this loan's remaining_balance as
+    // of application time, to be credited off at disbursement (see
+    // handleDisburse in loans/[id]/page.tsx). Letting a payment still land
+    // here in the meantime double-counts that same money: once as a real
+    // cash collection now, again via the offset baked into the renewal's
+    // eventual disbursement, which doesn't know a payment happened after
+    // it captured that snapshot. Excluded from the picker entirely rather
+    // than just discouraged, since the renewal is usually approved by a
+    // Branch Manager and disbursed by a Cashier — someone posting a
+    // payment here has no reason to know a renewal is even pending.
+    const { data: pendingRenewals } = await supabase
+      .from('loans')
+      .select('renewed_from_loan_id')
+      .in('status', ['pending', 'approved'])
+      .not('renewed_from_loan_id', 'is', null);
+    const lockedForRenewal = new Set((pendingRenewals ?? []).map((r: any) => r.renewed_from_loan_id));
+    const selectable = (data ?? []).filter((l: any) => !lockedForRenewal.has(l.id));
+
     // Sorted by the borrower's surname, not by loan_number. Collectors asked
     // for this: at the doorstep they know the person's name, not their loan
     // number, and loan_number order scatters the names randomly.
@@ -287,7 +315,7 @@ export default function PaymentsPage() {
     // table sorts WITHIN the embed, it can't sort the parent rows by a child
     // column. Sorting here also guarantees the same collation the dropdown
     // renders with.
-    const sorted = (data ?? []).slice().sort((a: any, b: any) =>
+    const sorted = selectable.slice().sort((a: any, b: any) =>
       formatCustomerName(a.customers?.first_name, a.customers?.last_name)
         .localeCompare(formatCustomerName(b.customers?.first_name, b.customers?.last_name))
       || String(a.loan_number).localeCompare(String(b.loan_number))
@@ -483,6 +511,16 @@ export default function PaymentsPage() {
   // Drives the write-off-specific copy below and the receipt's schedule
   // fields — see handleSubmit for why those are skipped for this case.
   const isWrittenOffLoan = selectedLoan?.status === 'written_off';
+  // Loan dropdown search — matches the same two fields already shown in
+  // each option's label (name, loan number), so whatever the collector
+  // sees on screen is exactly what they can type to find it.
+  const loanSearchTerm = loanSearch.trim().toLowerCase();
+  const filteredLoanOptions = loanSearchTerm
+    ? loans.filter(l =>
+        formatCustomerName(l.customers?.first_name, l.customers?.last_name).toLowerCase().includes(loanSearchTerm) ||
+        String(l.loan_number).toLowerCase().includes(loanSearchTerm)
+      )
+    : loans;
   // Always the collector assigned to the customer, whoever posts it — an
   // Admin or Cashier taking a walk-in at the office included. Client
   // confirmed (Aug 2026): the money belongs to that collector's area, so it
@@ -1155,14 +1193,50 @@ export default function PaymentsPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label>Loan *</Label>
-              <Select value={form.loan_id} onValueChange={handleLoanSelect} required>
+              <Select
+                value={form.loan_id}
+                onValueChange={handleLoanSelect}
+                onOpenChange={(open) => { if (!open) setLoanSearch(''); }}
+                required
+              >
                 <SelectTrigger><SelectValue placeholder="Select loan" /></SelectTrigger>
                 <SelectContent>
-                  {loans.map(l => (
-                    <SelectItem key={l.id} value={l.id}>
-                      {l.loan_number} — {formatCustomerName(l.customers?.first_name, l.customers?.last_name)} (Bal: {formatCurrency(l.remaining_balance)}){l.status === 'written_off' ? ' — Written Off' : ''}
-                    </SelectItem>
-                  ))}
+                  {/* Not a SelectItem — a plain input so it can actually be
+                      typed into. stopPropagation on keydown keeps Radix
+                      Select's own type-ahead/arrow-key handling (which
+                      otherwise steals keystrokes meant for this field) out
+                      of the way; onSelect/pointerDown likewise stop it from
+                      treating a click here as picking an option and closing
+                      the dropdown. */}
+                  <div className="sticky top-0 z-10 bg-popover p-1 pb-1.5 mb-1 border-b border-border">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                      <input
+                        autoFocus
+                        value={loanSearch}
+                        onChange={(e) => setLoanSearch(e.target.value)}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        onSelect={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        placeholder="Search by name or loan number..."
+                        className="w-full h-8 pl-7 pr-2 text-sm rounded-md border border-input bg-background placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                    </div>
+                  </div>
+                  {filteredLoanOptions.length === 0 ? (
+                    <p className="py-4 text-center text-sm text-muted-foreground">No matching loan</p>
+                  ) : (
+                    filteredLoanOptions.map(l => (
+                      <SelectItem key={l.id} value={l.id}>
+                        {l.loan_number} — {formatCustomerName(l.customers?.first_name, l.customers?.last_name)} (Bal: {formatCurrency(l.remaining_balance)})
+                        {l.status === 'written_off' && (
+                          <span className="ml-1.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-destructive/15 text-destructive align-middle">
+                            Written Off
+                          </span>
+                        )}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>

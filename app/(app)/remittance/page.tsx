@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,10 +20,10 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, generateEntryNumber } from '@/lib/format';
+import { formatCurrency, formatDate, formatCustomerName, generateEntryNumber } from '@/lib/format';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { selectAllRows } from '@/lib/db-chunk';
-import { ArrowRightLeft, Loader2, Wallet, Plus, Trash2 } from 'lucide-react';
+import { ArrowRightLeft, Loader2, Wallet, Plus, Trash2, Eye, History } from 'lucide-react';
 
 type Line = { account_id: string; amount: string };
 
@@ -56,8 +56,43 @@ export default function RemittancePage() {
   const [remittedRecovery, setRemittedRecovery] = useState<Record<string, number>>({});
   const [cumulativeCollectedRecovery, setCumulativeCollectedRecovery] = useState<Record<string, number>>({});
   const [cumulativeRemittedRecovery, setCumulativeRemittedRecovery] = useState<Record<string, number>>({});
+  // Kat's Sep 2026 follow-up: "pano po ito machecheck kung ano ano ito" —
+  // the Write-Off Recovery badge was just a lump sum with no way to see what
+  // it's actually made of. Every recovery payment up to `date`, grouped by
+  // collector, plus each collector's most recent recovery-remittance date
+  // (if any) — since a remittance always fully clears whatever was owed at
+  // that moment (see openRecord/handleSubmit), any payment dated on or
+  // before that last remittance is already accounted for; only ones strictly
+  // after it make up the currently-owed badge. See openRecoveryDetails.
+  const [recoveryPayments, setRecoveryPayments] = useState<Record<string, any[]>>({});
+  const [lastRecoveryRemittanceDate, setLastRecoveryRemittanceDate] = useState<Record<string, string>>({});
+  const [detailsCollectorId, setDetailsCollectorId] = useState<string | null>(null);
+  // Kat's Sep 2026 follow-up, part two: "ano po nag cacause ng negative
+  // balance" — Balance Owed going negative means MORE has been recorded as
+  // remitted than was ever collected, and there was no way to see the
+  // individual remittance entries at all to find out why (a duplicate from
+  // a double-submitted Record Remittance, most likely — see the
+  // submittingRef guard added to handleSubmit below; or a payment edited/
+  // deleted after its remittance was already recorded). Every remittance
+  // row per collector, both categories together — filtered by category
+  // when the history dialog opens. See openRemittanceHistory.
+  const [remittancesByCollector, setRemittancesByCollector] = useState<Record<string, any[]>>({});
+  const [historyCollectorId, setHistoryCollectorId] = useState<string | null>(null);
+  const [historyCategory, setHistoryCategory] = useState<'collection' | 'recovery'>('collection');
+  const [deleteRemittanceTarget, setDeleteRemittanceTarget] = useState<any>(null);
+  const [deletingRemittance, setDeletingRemittance] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Synchronous double-submit guard — same reasoning as payments/page.tsx's
+  // submittingRef: the `saving` state above disables the Save button, but
+  // that disable only takes effect after a React re-render, which isn't
+  // instant. A fast enough double-click/double-tap can fire handleSubmit
+  // twice before that repaint, inserting the SAME remittance amount twice —
+  // exactly the kind of duplicate that pushes Balance Owed negative (more
+  // recorded as remitted than was ever actually collected). A ref is
+  // checked/set synchronously in the same tick as the click, immune to
+  // render timing, so it closes that gap where `saving` state can't.
+  const submittingRef = useRef(false);
   const [accounts, setAccounts] = useState<any[]>([]);
   // category 'recovery' is a write-off recovery settlement — auto-credits
   // Miscellaneous Income instead of Loans Receivable. See openRecord.
@@ -97,12 +132,16 @@ export default function RemittancePage() {
     // never reverts — see add_write_off_recovery_collection.sql) can be
     // split into its own pool below instead of inflating what's "owed"
     // against real receivables.
+    // cumPays/cumRems carry a few extra columns beyond what the same-day
+    // pays/rems need — loan_number/customer/OR# and remittance_date — so the
+    // recovery breakdown dialog below has something to show without a
+    // separate round trip when it's opened.
     const [{ data: cols }, { data: pays }, { data: rems }, cumPays, cumRems] = await Promise.all([
       colQuery,
-      supabase.from('payments').select('collector_id, amount_paid, loans(status)').eq('payment_date', date),
+      supabase.from('payments').select('collector_id, amount_paid, created_at, loans(status, written_off_at)').eq('payment_date', date),
       supabase.from('remittances').select('collector_id, amount, is_write_off_recovery').eq('remittance_date', date),
-      selectAllRows<any>(() => supabase.from('payments').select('collector_id, amount_paid, loans(status)').lte('payment_date', date)),
-      selectAllRows<any>(() => supabase.from('remittances').select('collector_id, amount, is_write_off_recovery').lte('remittance_date', date)),
+      selectAllRows<any>(() => supabase.from('payments').select('id, collector_id, amount_paid, payment_date, created_at, loans(status, loan_number, written_off_at, customers(first_name, last_name)), receipts(or_number)').lte('payment_date', date)),
+      selectAllRows<any>(() => supabase.from('remittances').select('id, collector_id, amount, is_write_off_recovery, remittance_date, notes, profiles(full_name)').lte('remittance_date', date)),
     ]);
 
     setCollectors(cols ?? []);
@@ -117,7 +156,27 @@ export default function RemittancePage() {
       return map;
     }
 
-    const isRecoveryPayment = (r: any) => r.loans?.status === 'written_off';
+    // A written-off loan's status alone isn't enough — that's the loan's
+    // status TODAY, not what it was when this particular payment was made.
+    // A loan usually carries real payment history from before it ever got
+    // written off (it doesn't start life written off), and those older
+    // payments were already correctly counted as ordinary receivable
+    // collections — often already remitted, under the normal rules, long
+    // before the write-off happened. Checking status alone retroactively
+    // reclassifies that old, already-settled money as "recovery" the
+    // moment the loan is written off, silently yanking it out of past
+    // Collected totals and permanently unbalancing every remittance that
+    // was correctly recorded before the write-off — exactly what happened
+    // to Benjo Sibug's ₱637,165 remittance the moment 3 of his customers'
+    // loans got written off days later (Kat/Discord, Sep 2026): a ₱25,650
+    // phantom gap traced to 4 payments made 2+ days BEFORE their loans'
+    // own written_off_at. Only a payment made ON OR AFTER the loan's own
+    // written_off_at is an actual recovery.
+    const isRecoveryPayment = (r: any) => {
+      if (r.loans?.status !== 'written_off') return false;
+      if (!r.loans?.written_off_at) return true; // no timestamp on record — fail toward the old, conservative behavior
+      return !r.created_at || r.created_at >= r.loans.written_off_at;
+    };
     const isRecoveryRemittance = (r: any) => !!r.is_write_off_recovery;
 
     setCollected(sumByCollector(pays ?? [], 'amount_paid', (r) => !isRecoveryPayment(r)));
@@ -128,8 +187,93 @@ export default function RemittancePage() {
     setCumulativeCollectedRecovery(sumByCollector(cumPays, 'amount_paid', isRecoveryPayment));
     setCumulativeRemitted(sumByCollector(cumRems, 'amount', (r) => !isRecoveryRemittance(r)));
     setCumulativeRemittedRecovery(sumByCollector(cumRems, 'amount', isRecoveryRemittance));
+
+    // Breakdown data for "View Details" on the recovery row — see the state
+    // comment above for the "only after the last recovery remittance" logic.
+    const recoveryByCollector: Record<string, any[]> = {};
+    for (const p of cumPays) {
+      if (!p.collector_id || !isRecoveryPayment(p)) continue;
+      (recoveryByCollector[p.collector_id] ??= []).push(p);
+    }
+    setRecoveryPayments(recoveryByCollector);
+
+    const lastRecoveryDate: Record<string, string> = {};
+    for (const r of cumRems) {
+      if (!r.collector_id || !isRecoveryRemittance(r)) continue;
+      if (!lastRecoveryDate[r.collector_id] || r.remittance_date > lastRecoveryDate[r.collector_id]) {
+        lastRecoveryDate[r.collector_id] = r.remittance_date;
+      }
+    }
+    setLastRecoveryRemittanceDate(lastRecoveryDate);
+
+    // Every remittance row per collector (both categories) — what
+    // openRemittanceHistory below reads from to show individual entries
+    // instead of just the lump Remitted sum, so a duplicate is actually
+    // findable and deletable rather than just a mystery negative number.
+    const remsByCollector: Record<string, any[]> = {};
+    for (const r of cumRems) {
+      if (!r.collector_id) continue;
+      (remsByCollector[r.collector_id] ??= []).push(r);
+    }
+    setRemittancesByCollector(remsByCollector);
+
     setLoading(false);
   }
+
+  function openRecoveryDetails(collectorId: string) {
+    setDetailsCollectorId(collectorId);
+  }
+
+  function openRemittanceHistory(collectorId: string, category: 'collection' | 'recovery') {
+    setHistoryCollectorId(collectorId);
+    setHistoryCategory(category);
+  }
+
+  const historyRows = (historyCollectorId ? remittancesByCollector[historyCollectorId] ?? [] : [])
+    .filter((r: any) => !!r.is_write_off_recovery === (historyCategory === 'recovery'))
+    .slice()
+    .sort((a: any, b: any) => (a.remittance_date < b.remittance_date ? 1 : a.remittance_date > b.remittance_date ? -1 : 0));
+  const historyTotal = historyRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
+  const historyCollectorName = collectors.find(c => c.id === historyCollectorId)?.profiles?.full_name ?? '';
+
+  async function handleDeleteRemittance() {
+    if (!deleteRemittanceTarget) return;
+    setDeletingRemittance(true);
+    // Don't leave the matching ledger entry behind — same "no orphaned
+    // half-entry" care as handleSubmit's own rollback below. Journal Entries
+    // would otherwise still show a remittance that officially no longer
+    // exists, and worse, its Loans Receivable/Miscellaneous Income credit
+    // would keep counting in every report that reads the ledger, even
+    // though the record it was based on is gone.
+    const { data: entry } = await supabase
+      .from('journal_entries').select('id')
+      .eq('source', 'remittance').eq('source_id', deleteRemittanceTarget.id)
+      .maybeSingle();
+    if (entry) {
+      await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', entry.id);
+      await supabase.from('journal_entries').delete().eq('id', entry.id);
+    }
+    const { error } = await supabase.from('remittances').delete().eq('id', deleteRemittanceTarget.id);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      setDeletingRemittance(false);
+      return;
+    }
+    toast({ title: 'Remittance deleted', description: 'The entry and its ledger post were removed.' });
+    setDeleteRemittanceTarget(null);
+    setDeletingRemittance(false);
+    loadData();
+  }
+
+  const detailsCutoff = detailsCollectorId ? lastRecoveryRemittanceDate[detailsCollectorId] : undefined;
+  // Sorted newest-first so the most recent (and most likely to be asked
+  // about) payment is right at the top.
+  const detailsRows = (detailsCollectorId ? recoveryPayments[detailsCollectorId] ?? [] : [])
+    .filter((p: any) => !detailsCutoff || p.payment_date > detailsCutoff)
+    .slice()
+    .sort((a: any, b: any) => (a.payment_date < b.payment_date ? 1 : a.payment_date > b.payment_date ? -1 : 0));
+  const detailsTotal = detailsRows.reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
+  const detailsCollectorName = collectors.find(c => c.id === detailsCollectorId)?.profiles?.full_name ?? '';
 
   function openRecord(collectorId: string, collectorName: string, category: 'collection' | 'recovery' = 'collection') {
     const owed = category === 'recovery'
@@ -187,12 +331,19 @@ export default function RemittancePage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Checked/set synchronously, in the same tick as the click — see the
+    // submittingRef comment up top for why the `saving` state disable on
+    // the Save button isn't, on its own, fast enough to rule out a
+    // double-submit here.
+    if (submittingRef.current) return;
     if (!form.collector_id || !canSave) return;
     if (incompleteLines.length > 0) {
       toast({ title: 'Missing account', description: 'Every line with an amount needs a cash account selected.', variant: 'destructive' });
       return;
     }
+    submittingRef.current = true;
     setSaving(true);
+    try {
 
     // Same branch-aware resolution as loan disbursement / the payroll
     // voucher — the live Chart of Accounts has a separate Loans Receivable
@@ -211,7 +362,6 @@ export default function RemittancePage() {
     const targetAccount = accounts.find(a => a.code === targetCode);
     if (!targetAccount) {
       toast({ title: 'Error', description: `${targetAccountName} account (${targetCode}) not found in the Chart of Accounts`, variant: 'destructive' });
-      setSaving(false);
       return;
     }
 
@@ -226,7 +376,6 @@ export default function RemittancePage() {
 
     if (error || !remittance) {
       toast({ title: 'Error', description: error?.message ?? 'Could not record remittance', variant: 'destructive' });
-      setSaving(false);
       return;
     }
 
@@ -247,7 +396,6 @@ export default function RemittancePage() {
       toast({ title: 'Remittance saved, but ledger post failed', description: entryError?.message, variant: 'destructive' });
       setDialogOpen(false);
       loadData();
-      setSaving(false);
       return;
     }
 
@@ -278,14 +426,16 @@ export default function RemittancePage() {
       toast({ title: 'Remittance saved, but ledger post failed', description: linesError.message, variant: 'destructive' });
       setDialogOpen(false);
       loadData();
-      setSaving(false);
       return;
     }
 
     toast({ title: 'Success', description: 'Remittance recorded' });
     setDialogOpen(false);
     loadData();
-    setSaving(false);
+    } finally {
+      setSaving(false);
+      submittingRef.current = false;
+    }
   }
 
   const rows = collectors.map(c => {
@@ -359,13 +509,16 @@ export default function RemittancePage() {
                     <div><p className="text-xs text-muted-foreground">Collected</p><p>{formatCurrency(r.collected)}</p></div>
                     <div><p className="text-xs text-muted-foreground">Remitted</p><p>{formatCurrency(r.remitted)}</p></div>
                   </div>
-                  {canRecordRemittance && (
-                    <div className="mt-3 flex justify-end">
+                  <div className="mt-3 flex justify-end gap-2">
+                    <Button variant="outline" size="sm" onClick={() => openRemittanceHistory(r.id, 'collection')}>
+                      <History className="w-3.5 h-3.5 mr-1.5" />View History
+                    </Button>
+                    {canRecordRemittance && (
                       <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id, r.name)}>
                         Record Remittance
                       </Button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                   {/* Write-off recovery — its own pool, never mixed into the
                       receivable figures above. Only shown once there's
                       actually a recovery to account for. */}
@@ -375,13 +528,19 @@ export default function RemittancePage() {
                         <p className="text-xs text-muted-foreground">Write-Off Recovery</p>
                         <Badge variant={r.owedRecovery > 0 ? 'destructive' : 'default'} className="shrink-0">{formatCurrency(r.owedRecovery)}</Badge>
                       </div>
-                      {canRecordRemittance && (
-                        <div className="mt-2 flex justify-end">
+                      <div className="mt-2 flex flex-wrap justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => openRecoveryDetails(r.id)}>
+                          <Eye className="w-3.5 h-3.5 mr-1.5" />View Details
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => openRemittanceHistory(r.id, 'recovery')}>
+                          <History className="w-3.5 h-3.5 mr-1.5" />Remittances
+                        </Button>
+                        {canRecordRemittance && (
                           <Button variant="outline" size="sm" disabled={r.owedRecovery <= 0} onClick={() => openRecord(r.id, r.name, 'recovery')}>
                             Record Recovery
                           </Button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -395,7 +554,7 @@ export default function RemittancePage() {
                   <TableHead>Collected</TableHead>
                   <TableHead>Remitted</TableHead>
                   <TableHead>Balance Owed</TableHead>
-                  {canRecordRemittance && <TableHead className="text-right">Actions</TableHead>}
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -407,19 +566,28 @@ export default function RemittancePage() {
                     <TableCell className="text-sm font-medium">
                       <Badge variant={r.owed > 0 ? 'destructive' : 'default'}>{formatCurrency(r.owed)}</Badge>
                     </TableCell>
-                    {canRecordRemittance && (
-                      <TableCell className="text-right">
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="icon" title="View History" onClick={() => openRemittanceHistory(r.id, 'collection')}>
+                        <History className="w-4 h-4" />
+                      </Button>
+                      {canRecordRemittance && (
                         <Button variant="outline" size="sm" disabled={r.owed <= 0} onClick={() => openRecord(r.id, r.name)}>
                           Record Remittance
                         </Button>
-                      </TableCell>
-                    )}
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {/* Write-off recovery — kept off the main row entirely (never
                     mixed into Collected/Remitted/Balance Owed above), one
                     line per collector that actually has any, matching the
-                    mobile card's treatment. */}
+                    mobile card's treatment. View Details is open to anyone
+                    who can see this row at all (including a Field Collector
+                    checking their own "My Remittance") — it's the same
+                    collected/owed totals already shown, just broken down
+                    into individual payments, not a new permission surface.
+                    Record Recovery stays canRecordRemittance-only, same as
+                    Record Remittance above. */}
                 {rows.filter(r => r.owedRecovery > 0 || r.collectedRecovery > 0 || r.remittedRecovery > 0).map(r => (
                   <TableRow key={`${r.id}-recovery`} className="hover:bg-secondary/50 bg-secondary/20">
                     <TableCell className="text-sm text-muted-foreground">{r.name} — Write-Off Recovery</TableCell>
@@ -428,13 +596,19 @@ export default function RemittancePage() {
                     <TableCell className="text-sm font-medium">
                       <Badge variant={r.owedRecovery > 0 ? 'destructive' : 'default'}>{formatCurrency(r.owedRecovery)}</Badge>
                     </TableCell>
-                    {canRecordRemittance && (
-                      <TableCell className="text-right">
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="icon" title="View Details (payments)" onClick={() => openRecoveryDetails(r.id)}>
+                        <Eye className="w-4 h-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" title="View Remittances" onClick={() => openRemittanceHistory(r.id, 'recovery')}>
+                        <History className="w-4 h-4" />
+                      </Button>
+                      {canRecordRemittance && (
                         <Button variant="outline" size="sm" disabled={r.owedRecovery <= 0} onClick={() => openRecord(r.id, r.name, 'recovery')}>
                           Record Recovery
                         </Button>
-                      </TableCell>
-                    )}
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -499,6 +673,146 @@ export default function RemittancePage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Write-off recovery breakdown — Kat's Sep 2026 question ("pano po
+          ito machecheck kung ano ano ito"): the badge is a lump sum, this is
+          the individual payments it's made of. Only ones dated after the
+          collector's last recovery remittance (if any) — anything on or
+          before that date already got cleared out by it, same invariant
+          openRecord/handleSubmit rely on. */}
+      <Dialog open={!!detailsCollectorId} onOpenChange={(open) => !open && setDetailsCollectorId(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Write-Off Recovery — {detailsCollectorName}</DialogTitle>
+            <DialogDescription>
+              {detailsCutoff
+                ? `Every recovery payment since the last recovery remittance on ${formatDate(detailsCutoff)}.`
+                : 'Every recovery payment this collector has posted on a written-off loan.'}
+            </DialogDescription>
+          </DialogHeader>
+          {detailsRows.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No recovery payments to show.</p>
+          ) : (
+            <>
+              <div className="max-h-96 overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Loan #</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>OR #</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {detailsRows.map((p: any) => (
+                      <TableRow key={p.id}>
+                        <TableCell className="text-sm">{formatDate(p.payment_date)}</TableCell>
+                        <TableCell className="text-sm">{p.loans?.loan_number ?? '—'}</TableCell>
+                        <TableCell className="text-sm">{formatCustomerName(p.loans?.customers?.first_name, p.loans?.customers?.last_name)}</TableCell>
+                        <TableCell className="text-sm font-mono">{p.receipts?.or_number ?? '—'}</TableCell>
+                        <TableCell className="text-right text-sm">{formatCurrency(p.amount_paid)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex justify-between text-sm font-medium p-3 rounded-lg bg-secondary/50">
+                <span>Total ({detailsRows.length} payment{detailsRows.length === 1 ? '' : 's'})</span>
+                <span>{formatCurrency(detailsTotal)}</span>
+              </div>
+            </>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDetailsCollectorId(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remittance history — Kat's Sep 2026 follow-up: "ano po nag cacause
+          ng negative balance dito sa remittance". A negative Balance Owed
+          only ever means more got recorded as remitted than was ever
+          collected — there was no way to see the individual remittance
+          entries at all to find out why, only the lump Remitted sum. Most
+          likely cause: the same amount submitted twice from a double-click
+          before handleSubmit's own submittingRef guard existed (added
+          alongside this). Admin can delete a bad entry directly from here —
+          that also removes its posted ledger entry, so nothing is left
+          double-counted in Journal Entries either. */}
+      <Dialog open={!!historyCollectorId} onOpenChange={(open) => !open && setHistoryCollectorId(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {historyCategory === 'recovery' ? 'Write-Off Recovery Remittances' : 'Remittance History'} — {historyCollectorName}
+            </DialogTitle>
+            <DialogDescription>
+              Every {historyCategory === 'recovery' ? 'recovery remittance' : 'remittance'} entry recorded for this collector — if Remitted looks too high, a duplicate here is the most likely reason.
+            </DialogDescription>
+          </DialogHeader>
+          {historyRows.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No remittances recorded yet.</p>
+          ) : (
+            <>
+              <div className="max-h-96 overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Recorded By</TableHead>
+                      <TableHead>Notes</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      {isAdmin && <TableHead className="text-right">Actions</TableHead>}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {historyRows.map((r: any) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="text-sm">{formatDate(r.remittance_date)}</TableCell>
+                        <TableCell className="text-sm">{r.profiles?.full_name ?? '—'}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{r.notes ?? '—'}</TableCell>
+                        <TableCell className="text-right text-sm font-medium">{formatCurrency(r.amount)}</TableCell>
+                        {isAdmin && (
+                          <TableCell className="text-right">
+                            <Button variant="ghost" size="icon" title="Delete" onClick={() => setDeleteRemittanceTarget(r)}>
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex justify-between text-sm font-medium p-3 rounded-lg bg-secondary/50">
+                <span>Total ({historyRows.length} entr{historyRows.length === 1 ? 'y' : 'ies'})</span>
+                <span>{formatCurrency(historyTotal)}</span>
+              </div>
+            </>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setHistoryCollectorId(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteRemittanceTarget} onOpenChange={(open) => !open && setDeleteRemittanceTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Remittance</DialogTitle>
+            <DialogDescription>
+              Delete this {formatCurrency(deleteRemittanceTarget?.amount)} entry from {deleteRemittanceTarget ? formatDate(deleteRemittanceTarget.remittance_date) : ''}? This also removes its posted journal entry. This does not restore anything to the collector&apos;s Collected total — it only removes what was recorded as remitted, so Balance Owed will go back up by this amount. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteRemittanceTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteRemittance} disabled={deletingRemittance}>
+              {deletingRemittance && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
