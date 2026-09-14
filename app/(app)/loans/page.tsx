@@ -75,6 +75,13 @@ export default function LoansPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [customerFilter, setCustomerFilter] = useState('all');
+  // Admin-only — every other role is already pinned to their own branch (see
+  // loadLoans/loadOptions below), so a filter for it would just be a
+  // redundant single-choice dropdown for them. Justin's Sep 2026 request:
+  // Loan Management had no way to narrow to one branch at all for Admin,
+  // and the Area list below wasn't even scoped by branch first, mixing
+  // every branch's areas into one long dropdown.
+  const [branchFilter, setBranchFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -158,7 +165,7 @@ export default function LoansPage() {
     if (isCollector && !myCollector) return;
     loadLoans();
     loadOptions();
-  }, [profile, myCollector, search, statusFilter, customerFilter, areaFilter, page]);
+  }, [profile, myCollector, search, statusFilter, customerFilter, branchFilter, areaFilter, page]);
 
   async function loadOptions() {
     let customerQuery = supabase.from('customers').select('id, first_name, last_name, max_loan_limit, branch_id, area_id, collector_id').eq('status', 'active').order('last_name').order('first_name').order('last_name').order('first_name');
@@ -172,6 +179,12 @@ export default function LoansPage() {
     } else if (!isAdmin) {
       customerQuery = customerQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
       areaQuery = areaQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (branchFilter !== 'all') {
+      // Admin picked a specific branch — narrow the Area dropdown to that
+      // branch's own areas instead of showing every branch's areas mixed
+      // together (customers stay unscoped here on purpose: the New Loan
+      // dialog's own Customer picker isn't tied to this filter).
+      areaQuery = areaQuery.eq('branch_id', branchFilter);
     }
     const [c, b, a, col, lt] = await Promise.all([
       customerQuery,
@@ -216,6 +229,8 @@ export default function LoansPage() {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
     } else if (!isAdmin) {
       query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
+    } else if (branchFilter !== 'all') {
+      query = query.eq('branch_id', branchFilter);
     }
     if (statusFilter !== 'all') {
       query = query.eq('status', statusFilter);
@@ -557,7 +572,7 @@ export default function LoansPage() {
               className="pl-10"
             />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Customer</Label>
               <Select value={customerFilter} onValueChange={(v) => { setCustomerFilter(v); setPage(1); }}>
@@ -583,6 +598,31 @@ export default function LoansPage() {
                 </SelectContent>
               </Select>
             </div>
+            {isAdmin && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Branch</Label>
+                <Select
+                  value={branchFilter}
+                  onValueChange={(v) => {
+                    setBranchFilter(v);
+                    // Area belongs to whichever branch was picked before —
+                    // carrying it over after switching branches would
+                    // silently filter by an area that isn't even in the
+                    // newly-selected branch (or, for "All Branches", one
+                    // that used to be a valid narrowing and no longer is
+                    // paired with anything on screen).
+                    setAreaFilter('all');
+                    setPage(1);
+                  }}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Branches</SelectItem>
+                    {branches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Area</Label>
               <Select value={areaFilter} onValueChange={(v) => { setAreaFilter(v); setPage(1); }}>
