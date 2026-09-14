@@ -17,7 +17,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, formatTime } from '@/lib/format';
+import { formatCurrency, formatDate, formatTime, todayStr } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { buildPrintHtml } from '@/lib/print-document';
 import { isSpendableCashAccount } from '@/lib/cash-buckets';
@@ -31,7 +31,7 @@ export default function GasVoucherPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const canGenerate = isAdmin || profile?.role_name === 'Cashier';
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(todayStr());
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
   const [collectors, setCollectors] = useState<any[]>([]);

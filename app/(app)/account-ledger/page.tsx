@@ -16,7 +16,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, dateToStr, todayStr } from '@/lib/format';
 import { Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
 export default function AccountLedgerPage() {
@@ -25,8 +25,8 @@ export default function AccountLedgerPage() {
 
   const [accounts, setAccounts] = useState<any[]>([]);
   const [ledgerAccountId, setLedgerAccountId] = useState('');
-  const [ledgerStartDate, setLedgerStartDate] = useState(new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]);
-  const [ledgerEndDate, setLedgerEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [ledgerStartDate, setLedgerStartDate] = useState(dateToStr(new Date(Date.now() - 90 * 86400000)));
+  const [ledgerEndDate, setLedgerEndDate] = useState(todayStr());
   const [ledgerRows, setLedgerRows] = useState<any[] | null>(null);
   const [ledgerOpeningBalance, setLedgerOpeningBalance] = useState(0);
   const [ledgerLoading, setLedgerLoading] = useState(false);

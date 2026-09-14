@@ -17,7 +17,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, exportToCSV } from '@/lib/format';
+import { formatCurrency, exportToCSV, todayStr } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { CASH_BUCKETS, cashBucketFor, isSpendableCashAccount } from '@/lib/cash-buckets';
@@ -80,7 +80,7 @@ export default function AccountingPage() {
   // remembers to log an entry there, while every voucher/disbursement in
   // the app already auto-posts to the ledger via postJournalEntry.
   async function loadLedgerStats() {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     // Every branch keeps its own set of cash accounts now (Vault, Bank BPI,
     // Bank Gcash, etc. — however many each branch actually has), plus any
     // shared/company-wide cash account (branch_id null, e.g. "Cash on
@@ -174,13 +174,13 @@ export default function AccountingPage() {
       const { error } = await supabase.from('cash_flow').insert({
         type: form.type, category: form.category, amount: Number(form.amount),
         reference: form.reference || null, notes: form.notes || null,
-        transaction_date: new Date().toISOString().split('T')[0],
+        transaction_date: todayStr(),
         branch_id: entryBranchId,
       });
       if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
       else { toast({ title: 'Success', description: 'Cash flow entry added' }); setDialogOpen(false); load(); }
     } else {
-      const expenseDate = form.expense_date || new Date().toISOString().split('T')[0];
+      const expenseDate = form.expense_date || todayStr();
       const { error } = await supabase.from('expenses').insert({
         category: form.expense_category, amount: Number(form.amount),
         description: form.description || null,

@@ -17,7 +17,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, formatCustomerName, todayStr } from '@/lib/format';
 import { selectAllRows } from '@/lib/db-chunk';
 import { FileDown, Download, Loader2, TrendingUp, Receipt } from 'lucide-react';
 
@@ -28,7 +28,7 @@ export default function PaymentReportsPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
-  const [dateFilter, setDateFilter] = useState(new Date().toISOString().split('T')[0]);
+  const [dateFilter, setDateFilter] = useState(todayStr());
   const [branchFilter, setBranchFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
   const [customerFilter, setCustomerFilter] = useState('all');
@@ -204,7 +204,7 @@ export default function PaymentReportsPage() {
         heightLeft -= usableHeight;
       }
 
-      pdf.save(`payment-report-${new Date().toISOString().split('T')[0]}.pdf`);
+      pdf.save(`payment-report-${todayStr()}.pdf`);
     } catch (err: any) {
       toast({ title: 'PDF generation failed', description: err?.message ?? 'Could not generate report PDF', variant: 'destructive' });
     }

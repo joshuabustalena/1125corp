@@ -22,7 +22,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { hasPermission } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso, formatCustomerName } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso, formatCustomerName, todayStr } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { buildPrintHtml } from '@/lib/print-document';
@@ -122,7 +122,7 @@ export default function PayrollPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [period, setPeriod] = useState('1');
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [payDate, setPayDate] = useState(todayStr());
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
   const [payslipTarget, setPayslipTarget] = useState<any>(null);
@@ -155,7 +155,7 @@ export default function PayrollPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [voucherBranchId, setVoucherBranchId] = useState('');
   const [voucherPeriod, setVoucherPeriod] = useState('1');
-  const [voucherPayDate, setVoucherPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [voucherPayDate, setVoucherPayDate] = useState(todayStr());
   const [voucherCashierName, setVoucherCashierName] = useState('');
   const [voucherAdminName, setVoucherAdminName] = useState('');
   const [generatingVoucher, setGeneratingVoucher] = useState(false);
@@ -1187,7 +1187,7 @@ export default function PayrollPage() {
       ?? '1000';
 
     const thirteenthLedger = await postJournalEntry({
-      entryDate: new Date().toISOString().split('T')[0],
+      entryDate: todayStr(),
       description: `13th Month Voucher — ${thirteenthCycleLabel}`,
       reference: thirteenthVoucherNumber,
       source: 'thirteenth_month_voucher',

@@ -19,7 +19,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, todayStr } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { Banknote, Loader2, TrendingUp, Scale, Download, Printer } from 'lucide-react';
@@ -249,7 +249,7 @@ export default function CashCountPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const canRecordCount = isAdmin || profile?.role_name === 'Cashier';
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(todayStr());
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
   const [expected, setExpected] = useState(0);

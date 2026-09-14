@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase/client';
 import { sendPushNotification } from '@/lib/push';
+import { dateToStr, todayStr } from '@/lib/format';
 
 const UPCOMING_DUE_WINDOW_DAYS = 3;
 
@@ -11,8 +12,8 @@ const UPCOMING_DUE_WINDOW_DAYS = 3;
 export async function checkDueDateAlerts(): Promise<void> {
   try {
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-    const windowEnd = new Date(today.getTime() + UPCOMING_DUE_WINDOW_DAYS * 86400000).toISOString().split('T')[0];
+    const todayDateStr = todayStr();
+    const windowEnd = dateToStr(new Date(today.getTime() + UPCOMING_DUE_WINDOW_DAYS * 86400000));
 
     const { data: loans } = await supabase
       .from('loans')
@@ -34,7 +35,7 @@ export async function checkDueDateAlerts(): Promise<void> {
 
     const toInsert: any[] = [];
     for (const loan of loans as any[]) {
-      const isOverdue = loan.due_date < todayStr;
+      const isOverdue = loan.due_date < todayDateStr;
       const type = isOverdue ? 'overdue' : 'upcoming_due';
       const key = `${loan.id}:${type}`;
       if (alreadyNotified.has(key)) continue;

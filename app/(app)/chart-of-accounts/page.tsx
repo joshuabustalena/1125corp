@@ -20,7 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
-import { formatCurrency } from '@/lib/format';
+import { formatCurrency, todayStr } from '@/lib/format';
 import { BookOpen, Plus, Pencil, Trash2, Loader2 } from 'lucide-react';
 
 const SHARED_VALUE = 'shared';
@@ -90,7 +90,7 @@ export default function ChartOfAccountsPage() {
   // right, Chart of Accounts wrong — exactly this asymmetry, since Trial
   // Balance already had the fix and this page didn't).
   async function loadAccountBalances(accts: any[]) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     const data = await selectAllRows<any>(() =>
       supabase
         .from('journal_entry_lines')

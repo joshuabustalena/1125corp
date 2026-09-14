@@ -22,7 +22,7 @@ import { isSpendableCashAccount } from '@/lib/cash-buckets';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, formatTime, numberToWordsPeso } from '@/lib/format';
+import { formatCurrency, formatDate, formatTime, numberToWordsPeso, todayStr } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { postJournalEntry } from '@/lib/ledger';
 import { Wallet2, Plus, Trash2, Download, Loader2, Eye, Printer } from 'lucide-react';
@@ -50,7 +50,7 @@ export default function CashVouchersPage() {
   const [voucherNumber, setVoucherNumber] = useState('—');
   const [payee, setPayee] = useState('');
   const [particulars, setParticulars] = useState('');
-  const [voucherDate, setVoucherDate] = useState(new Date().toISOString().split('T')[0]);
+  const [voucherDate, setVoucherDate] = useState(todayStr());
   // Starts empty and is set from the accounts actually loaded — '1000'
   // ("Cash on Hand") is being retired, and a default pointing at a deleted
   // account silently posts nothing.

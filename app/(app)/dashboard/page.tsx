@@ -92,8 +92,14 @@ function pctChange(current: number, previous: number): string | null {
   return `${sign}${pct.toFixed(0)}%`;
 }
 
+// Local calendar date, NOT toISOString() (which converts to UTC first —
+// the Philippines is UTC+8, so that read every one of today/yesterday/
+// monthStart/etc below as a day early for the first 8 hours of each
+// Philippine day, quietly pulling the wrong day's data into every stat
+// card. See lib/format.ts's dateToStr for the fuller writeup — this was
+// its own separately-broken copy of the same fix.
 function toDateStr(d: Date): string {
-  return d.toISOString().split('T')[0];
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function daysAgo(n: number): Date {
   const d = new Date();

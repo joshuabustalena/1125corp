@@ -66,6 +66,26 @@ export function formatDuration(start: string | Date | null | undefined, end: str
   return `${hours}h ${mins}m`;
 }
 
+// Local calendar date as YYYY-MM-DD, using the browser's own timezone —
+// NOT toISOString(), which converts to UTC first. The Philippines is
+// UTC+8, so `new Date().toISOString().split('T')[0]` reads as YESTERDAY
+// for the first 8 hours of every single Philippine day (12am-8am),
+// silently defaulting date pickers and "today" filters to the wrong day.
+// This was live across ~20 pages (Remittance, Dashboard, Payments, Cash
+// Count, Payroll, Reports, the due-date alert checker, ...) before Kat/
+// Joshua's Sep 2026 report caught it — Remittance opened before 8am and
+// defaulted to the previous day's date instead of today's.
+export function dateToStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Today's date in the browser's own local timezone — the one to reach for
+// anywhere the code means "today" as a YYYY-MM-DD string. Never
+// `new Date().toISOString().split('T')[0]` — see dateToStr above.
+export function todayStr(): string {
+  return dateToStr(new Date());
+}
+
 export function generateLoanNumber(): string {
   const year = new Date().getFullYear();
   const random = Math.floor(100000 + Math.random() * 900000);

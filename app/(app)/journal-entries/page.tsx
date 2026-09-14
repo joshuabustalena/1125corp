@@ -19,7 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateEntryNumber } from '@/lib/format';
+import { formatCurrency, formatDate, generateEntryNumber, todayStr } from '@/lib/format';
 import { Plus, Loader2, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type Line = { account_id: string; debit: string; credit: string; memo: string };
@@ -37,7 +37,7 @@ export default function JournalEntriesPage() {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [entryForm, setEntryForm] = useState({ entry_date: new Date().toISOString().split('T')[0], reference: '', description: '', branch_id: SHARED_VALUE });
+  const [entryForm, setEntryForm] = useState({ entry_date: todayStr(), reference: '', description: '', branch_id: SHARED_VALUE });
   const [lines, setLines] = useState<Line[]>([
     { account_id: '', debit: '', credit: '', memo: '' },
     { account_id: '', debit: '', credit: '', memo: '' },
@@ -121,7 +121,7 @@ export default function JournalEntriesPage() {
 
   function openNewEntry() {
     setEntryForm({
-      entry_date: new Date().toISOString().split('T')[0],
+      entry_date: todayStr(),
       reference: '',
       description: '',
       branch_id: !isAdmin && profile?.branch_id ? profile.branch_id : SHARED_VALUE,

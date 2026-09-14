@@ -20,7 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
-import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, formatCustomerName, todayStr } from '@/lib/format';
 import { takeOrNumber, nextOrNumberOnline, ensureOrPool, getOrPoolCount } from '@/lib/or-numbers';
 import { PaymentReceiptDialog, buildReceiptDataFromPayment } from '@/components/payment-receipt-dialog';
 import { getStoredReceipts, cacheReceiptForOffline, type CachedReceipt } from '@/lib/offline-receipts';
@@ -215,7 +215,7 @@ export default function PaymentsPage() {
   const [form, setForm] = useState({
     loan_id: searchParams.get('loan') ?? '',
     amount_paid: '',
-    payment_date: new Date().toISOString().split('T')[0],
+    payment_date: todayStr(),
     notes: '',
   });
 
@@ -548,7 +548,7 @@ export default function PaymentsPage() {
       return;
     }
     setOrPool(getOrPoolCount());
-    const paymentDate = form.payment_date || new Date().toISOString().split('T')[0];
+    const paymentDate = form.payment_date || todayStr();
     const now = new Date();
     const amountPaidNum = Number(form.amount_paid);
 
@@ -594,7 +594,7 @@ export default function PaymentsPage() {
       time: pending.paymentTime,
     });
 
-    setForm({ ...form, loan_id: '', amount_paid: '', payment_date: new Date().toISOString().split('T')[0], notes: '' });
+    setForm({ ...form, loan_id: '', amount_paid: '', payment_date: todayStr(), notes: '' });
     setDialogOpen(false);
   }
 
@@ -643,7 +643,7 @@ export default function PaymentsPage() {
       setSaving(false);
       return;
     }
-    const paymentDate = form.payment_date || new Date().toISOString().split('T')[0];
+    const paymentDate = form.payment_date || todayStr();
     const now = new Date();
 
     // Decrement the loan's balance atomically in the database, not from
@@ -692,7 +692,7 @@ export default function PaymentsPage() {
         .from('payments').select('id').eq('idempotency_key', idempotencyKey).maybeSingle();
       if (existingPayment) {
         toast({ title: 'Success', description: 'Payment already recorded.' });
-        setForm({ ...form, loan_id: '', amount_paid: '', payment_date: new Date().toISOString().split('T')[0], notes: '' });
+        setForm({ ...form, loan_id: '', amount_paid: '', payment_date: todayStr(), notes: '' });
         setDialogOpen(false);
         setSaving(false);
         loadPayments();
@@ -841,7 +841,7 @@ export default function PaymentsPage() {
       isFullyPaid,
     });
 
-    setForm({ ...form, loan_id: '', amount_paid: '', payment_date: new Date().toISOString().split('T')[0], notes: '' });
+    setForm({ ...form, loan_id: '', amount_paid: '', payment_date: todayStr(), notes: '' });
     setDialogOpen(false);
     setSaving(false);
     loadPayments();

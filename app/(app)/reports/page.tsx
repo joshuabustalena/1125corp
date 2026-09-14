@@ -18,7 +18,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
-import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
+import { formatCurrency, formatDate, exportToCSV, formatCustomerName, dateToStr, todayStr } from '@/lib/format';
 import {
   FileBarChart, Download, Loader2, Printer, TrendingUp, Users, Wallet, Landmark,
 } from 'lucide-react';
@@ -92,8 +92,8 @@ export default function ReportsPage() {
   // with the default 'all' before the lock lands.
   const [branchResolved, setBranchResolved] = useState(false);
   const [reportType, setReportType] = useState('daily_collection');
-  const [startDate, setStartDate] = useState(new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(dateToStr(new Date(Date.now() - 30 * 86400000)));
+  const [endDate, setEndDate] = useState(todayStr());
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ total: 0, count: 0, average: 0, overdueRate: 0 });

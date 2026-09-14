@@ -20,7 +20,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, formatCustomerName, generateEntryNumber } from '@/lib/format';
+import { formatCurrency, formatDate, formatCustomerName, generateEntryNumber, todayStr } from '@/lib/format';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { selectAllRows } from '@/lib/db-chunk';
 import { ArrowRightLeft, Loader2, Wallet, Plus, Trash2, Eye, History } from 'lucide-react';
@@ -34,7 +34,7 @@ export default function RemittancePage() {
   const isAdmin = profile?.role_name === 'Administrator';
   const isCashier = profile?.role_name === 'Cashier';
   const canRecordRemittance = isAdmin || isCashier;
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(todayStr());
   const [loading, setLoading] = useState(true);
   const [collectors, setCollectors] = useState<any[]>([]);
   const [collected, setCollected] = useState<Record<string, number>>({});

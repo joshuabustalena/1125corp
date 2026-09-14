@@ -14,7 +14,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, dateToStr, todayStr } from '@/lib/format';
 import { Loader2, TrendingUp, TrendingDown, Scale } from 'lucide-react';
 
 export default function GeneralLedgerPage() {
@@ -40,13 +40,13 @@ export default function GeneralLedgerPage() {
   // page now, but this data is still loaded here for that calculation.
   const [shareholders, setShareholders] = useState<any[]>([]);
 
-  const [startDate, setStartDate] = useState(new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
-  const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(dateToStr(new Date(Date.now() - 30 * 86400000)));
+  const [endDate, setEndDate] = useState(todayStr());
+  const [asOfDate, setAsOfDate] = useState(todayStr());
   const [incomeStatement, setIncomeStatement] = useState<any>(null);
   const [balanceSheet, setBalanceSheet] = useState<any>(null);
   const [statementLoading, setStatementLoading] = useState(false);
-  const [trialBalanceDate, setTrialBalanceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [trialBalanceDate, setTrialBalanceDate] = useState(todayStr());
   const [trialBalance, setTrialBalance] = useState<any>(null);
 
   useEffect(() => { load(); }, []);

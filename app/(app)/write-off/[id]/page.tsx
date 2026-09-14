@@ -19,7 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, todayStr } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { nextOrNumberOnline } from '@/lib/or-numbers';
@@ -58,7 +58,7 @@ export default function WriteOffDetailPage() {
 
   const [payOpen, setPayOpen] = useState(false);
   const [payAmount, setPayAmount] = useState('');
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [payDate, setPayDate] = useState(todayStr());
   const [payNotes, setPayNotes] = useState('');
   const [paying, setPaying] = useState(false);
   // Synchronous guard — see payments/page.tsx's submittingRef for why a
@@ -91,7 +91,7 @@ export default function WriteOffDetailPage() {
 
   function openPay() {
     setPayAmount('');
-    setPayDate(new Date().toISOString().split('T')[0]);
+    setPayDate(todayStr());
     setPayNotes('');
     setPayOpen(true);
   }

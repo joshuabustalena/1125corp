@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
+import { formatCurrency, formatDate, formatCustomerName, todayStr } from '@/lib/format';
 import { buildPrintHtml } from '@/lib/print-document';
 import { ClipboardList, Loader2, Download, Printer } from 'lucide-react';
 
@@ -41,7 +41,7 @@ export default function CollectionListPage() {
   const isAdmin = profile?.role_name === 'Administrator';
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
   const canAccess = isAdmin || profile?.role_name === 'Cashier' || isFieldCollector;
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(todayStr());
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
   const [collectors, setCollectors] = useState<any[]>([]);

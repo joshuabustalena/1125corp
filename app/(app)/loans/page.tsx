@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exportToCSV, formatCustomerName } from '@/lib/format';
+import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exportToCSV, formatCustomerName, todayStr } from '@/lib/format';
 import { notifyRoles } from '@/lib/notify';
 import {
   Landmark, Plus, Search, Download, Eye, Loader2, Calculator, RefreshCw,
@@ -110,7 +110,7 @@ export default function LoansPage() {
     collector_id: '',
     branch_id: '',
     area_id: '',
-    release_date: new Date().toISOString().split('T')[0],
+    release_date: todayStr(),
     custom_daily_payment: '',
   });
 
@@ -404,7 +404,7 @@ export default function LoansPage() {
   async function handleReapply(l: Loan) {
     setReapplyingId(l.id);
     const newLoanNumber = generateLoanNumber();
-    const releaseDate = new Date().toISOString().split('T')[0];
+    const releaseDate = todayStr();
     // Same first-payment deduction as a fresh application (see handleSubmit)
     // — daily_payment if it was set, otherwise the term average.
     const reapplyFirstPayment = (l as any).daily_payment > 0
@@ -427,7 +427,7 @@ export default function LoansPage() {
       area_id: l.area_id,
       status: 'pending',
       release_date: releaseDate,
-      due_date: new Date(Date.now() + l.term_days * 86400000).toISOString().split('T')[0],
+      due_date: new Date(new Date(releaseDate).getTime() + l.term_days * 86400000).toISOString().split('T')[0],
     });
 
     if (error) {

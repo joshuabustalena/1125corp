@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails } from '@/lib/format';
+import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, todayStr } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
@@ -356,7 +356,7 @@ export default function LoanDetailPage() {
       amount: String(loan.amount),
       interest_rate: String(loan.interest_rate),
       term_days: String(loan.term_days),
-      release_date: new Date().toISOString().split('T')[0],
+      release_date: todayStr(),
       daily_payment: String(Number(loan.daily_payment) || 0),
     });
     setRenewOpen(true);
@@ -428,7 +428,7 @@ export default function LoanDetailPage() {
   async function handleReapply() {
     setReapplying(true);
     const newLoanNumber = `LN-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
-    const releaseDate = new Date().toISOString().split('T')[0];
+    const releaseDate = todayStr();
     // Same first-payment deduction as a fresh application.
     const reapplyFirstPayment = Number(loan.daily_payment) > 0
       ? Number(loan.daily_payment)
@@ -451,7 +451,7 @@ export default function LoanDetailPage() {
       area_id: loan.area_id,
       status: 'pending',
       release_date: releaseDate,
-      due_date: new Date(Date.now() + loan.term_days * 86400000).toISOString().split('T')[0],
+      due_date: new Date(new Date(releaseDate).getTime() + loan.term_days * 86400000).toISOString().split('T')[0],
     }).select('id').single();
 
     if (error) {
@@ -846,7 +846,7 @@ export default function LoanDetailPage() {
         });
       } else {
         const ledgerResult = await postJournalEntry({
-          entryDate: new Date().toISOString().split('T')[0],
+          entryDate: todayStr(),
           description: `Loan write-off — ${loan.loan_number}`,
           source: 'write_off',
           sourceId: loan.id,
@@ -939,7 +939,7 @@ export default function LoanDetailPage() {
     setReleasingCollateral(true);
     const { error } = await supabase.from('collateral').update({
       status: 'released',
-      released_date: new Date().toISOString().split('T')[0],
+      released_date: todayStr(),
       released_to: releasedTo.trim(),
     }).eq('id', releaseTarget.id);
     if (error) {
@@ -1843,7 +1843,7 @@ export default function LoanDetailPage() {
                 </tr>
                 <tr>
                   <td style={{ padding: '2px 0' }}><strong>Branch:</strong> {loan.branches?.name ?? '—'}</td>
-                  <td style={{ padding: '2px 0', textAlign: 'right' }}><strong>Printed:</strong> {formatDate(new Date().toISOString().split('T')[0])}</td>
+                  <td style={{ padding: '2px 0', textAlign: 'right' }}><strong>Printed:</strong> {formatDate(todayStr())}</td>
                 </tr>
               </tbody>
             </table>

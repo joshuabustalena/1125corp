@@ -370,7 +370,16 @@ export default function AttendancePage() {
 
     if (cameraMode === 'checkin') {
       const now = new Date();
-      const today = now.toISOString().split('T')[0];
+      // toDateStr(now), NOT now.toISOString().split('T')[0] — the real bug
+      // behind Jonies/John Dave's "check-in doesn't show up" reports (Kat,
+      // Sep 2026). toISOString() converts to UTC first, so a completely
+      // normal check-in between 12am-8am Manila time (e.g. 7:56am) got
+      // stored under YESTERDAY's date (23:56 UTC the day before) — while
+      // this same page's own dateFilter default (above, already correctly
+      // using local toDateStr/todayStr) queries for TODAY. The row existed,
+      // it just filed itself a day early, so it silently never showed up
+      // under "today" for anyone reviewing attendance.
+      const today = toDateStr(now);
       const hour = now.getHours();
       const minute = now.getMinutes();
       // Work schedule is 8:30 AM – 4:30 PM — checking in any time after
