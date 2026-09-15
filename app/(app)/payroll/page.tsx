@@ -303,6 +303,12 @@ export default function PayrollPage() {
       setMyPayslipRows([]);
     }
 
+    // Every attendance filter in this file counts a record toward payroll
+    // only once an Admin has actually accepted it (review_status ===
+    // 'accepted') — not merely "not rejected." Kat's Sep 2026 report: a
+    // still-pending check-in (nobody has reviewed it at all yet) was
+    // counting as a worked day, computing deductions, and showing up on a
+    // generated payslip before anyone confirmed it actually happened.
     const employeeIds = Array.from(new Set((data ?? []).map(p => p.employee_id)));
     if (employeeIds.length > 0) {
       const [{ data: att }, { data: loans }, { data: specialLoans }] = await Promise.all([
@@ -340,7 +346,7 @@ export default function PayrollPage() {
     const { start, end } = getPeriodRange(p.pay_date, p.period);
     const attendancePresent = attendanceRecords.filter(a =>
       a.employee_id === p.employee_id && a.date >= start && a.date <= end &&
-      (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected'
+      (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted'
     ).length;
     // Birthday bonus and approved-leave auto-present days are paid days
     // that don't have (or, for a worked birthday, aren't only reflected by)
@@ -632,6 +638,9 @@ export default function PayrollPage() {
     // salary/2 split.
     const { start, end } = getPeriodRange(payDate, period);
     const employeeIds = employees.map(e => e.id);
+    // Same review_status === 'accepted' rule as loadPayslips above — a
+    // pending (not yet reviewed) check-in must not count toward actual
+    // payroll generation, only an Admin-accepted one.
     const { data: att } = await supabase.from('attendance').select('employee_id, date, status, review_status, late_deduction, undertime_deduction').in('employee_id', employeeIds).gte('date', start).lte('date', end);
     const { data: holidaysInPeriod } = await supabase.from('holidays').select('holiday_date, name, type').gte('holiday_date', start).lte('holiday_date', end);
 
@@ -660,7 +669,7 @@ export default function PayrollPage() {
     function leaveCreditedDatesInPeriod(employeeId: string, excludeDate: string | null): Set<string> {
       const attendedDates = new Set(
         (att ?? [])
-          .filter(a => a.employee_id === employeeId && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected')
+          .filter(a => a.employee_id === employeeId && (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted')
           .map(a => a.date)
       );
       const creditedDates = new Set<string>();
@@ -699,7 +708,7 @@ export default function PayrollPage() {
         if (h.holiday_date === excludeDate) continue;
         if (excludeLeaveDates.has(h.holiday_date)) continue;
         if (new Date(h.holiday_date).getDay() === 0) continue; // Sunday isn't a scheduled work/collection day
-        const worked = (att ?? []).some(a => a.employee_id === employeeId && a.date === h.holiday_date && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected');
+        const worked = (att ?? []).some(a => a.employee_id === employeeId && a.date === h.holiday_date && (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted');
         if (h.type === 'special') {
           if (worked) { pay += dailyRate * 0.30; days++; }
         } else {
@@ -740,7 +749,7 @@ export default function PayrollPage() {
 
     const totalWorkingDays = countWorkingDays(start, end);
     const records = employees.map(e => {
-      const presentDays = (att ?? []).filter(a => a.employee_id === e.id && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected').length;
+      const presentDays = (att ?? []).filter(a => a.employee_id === e.id && (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted').length;
       const isMonthly = e.pay_type === 'monthly';
       // A fixed-monthly employee (e.g. Branch Manager) is paid half their
       // monthly salary each semi-monthly cutoff regardless of attendance —
@@ -771,13 +780,13 @@ export default function PayrollPage() {
       // an Administrator may have customized individual records, so this
       // never recomputes the amount itself.
       const lateDeduction = (att ?? [])
-        .filter(a => a.employee_id === e.id && a.status === 'late' && a.review_status !== 'rejected')
+        .filter(a => a.employee_id === e.id && a.status === 'late' && a.review_status === 'accepted')
         .reduce((sum, a) => sum + (Number(a.late_deduction) || 0), 0);
       // Undertime is independent of the late/on-time status (it's about
       // leaving early, computed at check-out) — sum it across every
       // non-rejected attendance record in the period, not just 'late' ones.
       const undertimeDeduction = (att ?? [])
-        .filter(a => a.employee_id === e.id && a.review_status !== 'rejected')
+        .filter(a => a.employee_id === e.id && a.review_status === 'accepted')
         .reduce((sum, a) => sum + (Number(a.undertime_deduction) || 0), 0);
       const previousNetPay = previousNetPayByEmployee.get(e.id);
       const carryOverDeduction = previousNetPay !== undefined && previousNetPay < 0 ? -previousNetPay : 0;
@@ -792,7 +801,7 @@ export default function PayrollPage() {
       // no attendance record needed).
       const birthdayDate = !isMonthly ? getBirthdayInPeriod(e.birth_date, start, end) : null;
       const birthdayWorked = birthdayDate
-        ? (att ?? []).some(a => a.employee_id === e.id && a.date === birthdayDate && (a.status === 'present' || a.status === 'late') && a.review_status !== 'rejected')
+        ? (att ?? []).some(a => a.employee_id === e.id && a.date === birthdayDate && (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted')
         : false;
       const birthdayBonus = birthdayDate ? dailyRate : 0;
 
