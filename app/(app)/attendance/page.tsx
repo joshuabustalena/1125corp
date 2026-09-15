@@ -302,14 +302,30 @@ export default function AttendancePage() {
     setCapturedPreviewUrl(null);
   }
 
+  // Longer side of the captured photo, in pixels — this is an ID-verification
+  // thumbnail, not a portrait; nothing here needs to be sharp at more than a
+  // few hundred pixels. getUserMedia is never given a resolution constraint
+  // above (`{ video: { facingMode: 'user' } }`), so the browser picks
+  // whatever it likes — commonly 720p-1080p+ on a modern phone, producing a
+  // multi-hundred-KB to multi-MB JPEG even at 0.85 quality. That's real
+  // upload time on the kind of borderline field signal these are taken on,
+  // and the likely cause of the "connection to the database timed out"
+  // failures (Paul, Sep 2026 screenshot) — that message comes straight from
+  // Supabase's own servers (not this app, not the client SDK — grepped
+  // both), meaning the upload really did reach them and something timed out
+  // writing its metadata, consistent with a slow multi-MB upload rather
+  // than a request that never arrived at all.
+  const MAX_PHOTO_DIMENSION = 720;
+
   function capturePhoto() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const scale = Math.min(1, MAX_PHOTO_DIMENSION / Math.max(video.videoWidth, video.videoHeight));
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
     const ctx = canvas.getContext('2d');
-    ctx?.drawImage(video, 0, 0);
+    ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
       if (!blob) return;
       setCapturedBlob(blob);
@@ -368,10 +384,19 @@ export default function AttendancePage() {
 
     const fileName = `${cameraMode}-${Date.now()}.jpg`;
     const path = `${cameraMode === 'checkin' ? selectedEmployee : checkoutTargetId}/${fileName}`;
-    const { error: uploadError } = await supabase.storage.from('attendance-photos').upload(path, capturedBlob, { contentType: 'image/jpeg' });
+    // One silent retry before bothering the user — "connection to the
+    // database timed out" (Storage writing the object's row) is exactly
+    // the kind of thing that clears itself a couple seconds later, and
+    // this device already has the smaller (post-downscale) blob in memory,
+    // so a retry costs nothing extra to prepare.
+    let uploadError = (await supabase.storage.from('attendance-photos').upload(path, capturedBlob, { contentType: 'image/jpeg' })).error;
+    if (uploadError) {
+      await new Promise(r => setTimeout(r, 1500));
+      uploadError = (await supabase.storage.from('attendance-photos').upload(path, capturedBlob, { contentType: 'image/jpeg' })).error;
+    }
 
     if (uploadError) {
-      toast({ title: 'Photo upload failed', description: uploadError.message, variant: 'destructive' });
+      toast({ title: 'Photo upload failed', description: `${uploadError.message} — tap Confirm to try again.`, variant: 'destructive' });
       setSubmitting(false);
       return;
     }
