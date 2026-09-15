@@ -336,6 +336,17 @@ export default function AttendancePage() {
 
   async function confirmCapture() {
     if (!capturedBlob) return;
+    // A session left open overnight can have its access token go stale by
+    // the time someone opens the app fresh in the morning to check in —
+    // autoRefreshToken only refreshes while a session is actively in use,
+    // not a tab that's been sitting idle for hours. Since check-in is
+    // usually the very first thing anyone does after opening the app for
+    // the day, this is the first real request many sessions make — forcing
+    // a refresh here catches a dead token before it causes the same silent
+    // failure the offline payment queue had (see handleSyncPendingPayments),
+    // and explains a lot of people hitting this around the same time each
+    // morning rather than it being spread out and rare.
+    await supabase.auth.refreshSession();
     // Location is required for both check-in and check-out — a record with
     // no GPS fix can't be trusted for attendance/payroll purposes, so block
     // submission rather than silently store gps_lat/lng as null.
@@ -415,18 +426,22 @@ export default function AttendancePage() {
         location_address: locationAddress,
       });
       if (error) {
-        toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      } else {
-        const checkedInEmployee = employees.find((e) => e.id === selectedEmployee);
-        const name = checkedInEmployee ? `${checkedInEmployee.first_name} ${checkedInEmployee.last_name}` : 'An employee';
-        notifyRoles(['branch_manager', 'administrator'], {
-          type: 'attendance_pending',
-          title: lateMinutes > 0 ? 'Late Check-in — Needs Review' : 'New Check-in — Needs Review',
-          message: `${name} checked in${lateMinutes > 0 ? ` late (${lateMinutes} min)` : ''} and is awaiting review.`,
-          url: '/attendance',
-        }, checkedInEmployee?.branch_id);
-        toast({ title: 'Success', description: 'Checked in successfully' });
+        // Kept out of the fall-through close/refresh below on purpose — see
+        // the comment there for why closing on a real failure is the bug
+        // this whole block exists to avoid.
+        toast({ title: 'Check-in failed', description: `${error.message} — nothing was saved. Try Confirm again.`, variant: 'destructive' });
+        setSubmitting(false);
+        return;
       }
+      const checkedInEmployee = employees.find((e) => e.id === selectedEmployee);
+      const name = checkedInEmployee ? `${checkedInEmployee.first_name} ${checkedInEmployee.last_name}` : 'An employee';
+      notifyRoles(['branch_manager', 'administrator'], {
+        type: 'attendance_pending',
+        title: lateMinutes > 0 ? 'Late Check-in — Needs Review' : 'New Check-in — Needs Review',
+        message: `${name} checked in${lateMinutes > 0 ? ` late (${lateMinutes} min)` : ''} and is awaiting review.`,
+        url: '/attendance',
+      }, checkedInEmployee?.branch_id);
+      toast({ title: 'Success', description: 'Checked in successfully' });
     } else if (checkoutTargetId) {
       const now = new Date();
       const checkoutRecord = records.find(r => r.id === checkoutTargetId);
@@ -457,10 +472,23 @@ export default function AttendancePage() {
         undertime_minutes: undertimeMinutes,
         undertime_deduction: undertimeDeduction,
       }).eq('id', checkoutTargetId);
-      if (error) toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      else toast({ title: 'Success', description: 'Checked out' });
+      if (error) {
+        toast({ title: 'Check-out failed', description: `${error.message} — nothing was saved. Try Confirm again.`, variant: 'destructive' });
+        setSubmitting(false);
+        return;
+      }
+      toast({ title: 'Success', description: 'Checked out' });
     }
 
+    // Only ever reached on success now — both branches above return early on
+    // their own error. This used to run unconditionally regardless of
+    // whether the insert/update actually succeeded: a real failure (a
+    // dropped connection, a stale session — the same class of issue fixed
+    // for offline payment sync) still closed the camera and reset the
+    // dialog, looking exactly like a normal successful check-in from the
+    // collector's side, with nothing actually saved. That's the other real
+    // half of "check-in doesn't show up" — not only the GPS-guard gap the
+    // Confirm button's disabled state above now closes.
     setSubmitting(false);
     closeCamera();
     load();
@@ -943,14 +971,19 @@ export default function AttendancePage() {
           <div className="px-4 py-4 sm:px-6 space-y-4">
             <div className="flex items-start gap-1.5 text-sm text-white/70">
               <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>
+              <span className="flex-1">
                 {locating
                   ? (locationAccuracy !== null ? 'Improving accuracy...' : 'Getting your location...')
-                  : shortenAddress(locationAddress) ?? (location ? `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}` : 'Location unavailable')}
+                  : shortenAddress(locationAddress) ?? (location ? `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}` : 'Location unavailable — Confirm is disabled until this is fixed.')}
                 {locationAccuracy !== null && (
                   <span className="text-white/40"> (accurate to ±{Math.round(locationAccuracy)}m)</span>
                 )}
               </span>
+              {!locating && !location && (
+                <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs shrink-0 text-white hover:bg-white/10 hover:text-white" onClick={requestLocation}>
+                  Retry
+                </Button>
+              )}
             </div>
 
             <div className="flex items-center justify-center gap-3">
@@ -959,7 +992,17 @@ export default function AttendancePage() {
                   <Button type="button" variant="outline" onClick={retake} disabled={submitting} className="bg-transparent text-white border-white/30 hover:bg-white/10 hover:text-white">
                     <RotateCcw className="w-4 h-4 mr-2" />Retake
                   </Button>
-                  <Button type="button" onClick={confirmCapture} disabled={submitting}>
+                  {/* disabled while location is still missing/loading, not
+                      just while submitting — this is the actual fix for
+                      "check-in doesn't show up": Confirm used to stay
+                      tappable with no location fix, silently no-op with
+                      only a toast (easy to miss) instead of ever writing a
+                      row. A collector who didn't catch that toast would
+                      close out believing they'd checked in, and nothing
+                      was ever saved. Disabled is unambiguous — no tap to
+                      miss the meaning of. See confirmCapture's own
+                      location guard, now backed up by this. */}
+                  <Button type="button" onClick={confirmCapture} disabled={submitting || !location}>
                     {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
                     Confirm
                   </Button>
