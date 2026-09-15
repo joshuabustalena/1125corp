@@ -541,8 +541,8 @@ export default function PaymentsPage() {
     const orNumber = takeOrNumber();
     if (!orNumber) {
       toast({
-        title: 'Wala nang OR number',
-        description: 'Naubos na ang naka-reserve na OR numbers sa device na ito. Kailangan mong maka-signal muna para makakuha ng bago bago mag-collect offline.',
+        title: 'Out of OR numbers',
+        description: 'This device has no reserved OR numbers left. You need signal to get more before collecting offline again.',
         variant: 'destructive',
       });
       return;
@@ -575,7 +575,7 @@ export default function PaymentsPage() {
     });
     setPendingPayments(getPendingPayments());
 
-    toast({ title: 'Saved offline', description: `Naka-queue na ang payment na ito. I-Sync kapag may signal na. OR: ${orNumber}` });
+    toast({ title: 'Saved offline', description: `This payment is queued. Sync once you have signal. OR: ${orNumber}` });
 
     setReceiptData({
       orNumber,
@@ -639,7 +639,7 @@ export default function PaymentsPage() {
 
     const orNumber = await nextOrNumberOnline();
     if (!orNumber) {
-      toast({ title: 'Error', description: 'Hindi makakuha ng OR number. Subukan ulit.', variant: 'destructive' });
+      toast({ title: 'Error', description: 'Could not get an OR number. Try again.', variant: 'destructive' });
       setSaving(false);
       return;
     }
@@ -863,6 +863,17 @@ export default function PaymentsPage() {
   // receipt/payment inserts — so if THIS sync run gets interrupted (app
   // closed, tab closed) partway through one item, retrying never re-runs
   // the RPC for that item a second time; it only resumes the bookkeeping.
+  // A raw "row-level security policy" message means nothing to a collector
+  // reading it in the Pending list — translate the one case that's actually
+  // theirs to act on (a still-stale/invalid session even after the refresh
+  // attempt above) into something they can do something about.
+  function friendlySyncError(message: string | null | undefined): string {
+    if (message && /row-level security policy/i.test(message)) {
+      return 'Your session is no longer valid. Log out and log back in, then Sync again.';
+    }
+    return message ?? 'Could not sync this payment.';
+  }
+
   async function handleSyncPendingPayments() {
     // The button's disabled={syncing} state depends on a React re-render,
     // which isn't necessarily instant — a fast enough double-tap could fire
@@ -873,6 +884,30 @@ export default function PaymentsPage() {
     if (syncingRef.current) return;
     syncingRef.current = true;
     setSyncing(true);
+
+    // A payment can sit queued for hours in a real dead zone — long enough
+    // for the access token to expire before signal ever comes back.
+    // autoRefreshToken can't refresh a token while the device is offline,
+    // and doesn't necessarily catch up the instant connectivity returns,
+    // so every RPC call below could run with a stale token and get
+    // rejected — not as an auth error, but as "new row violates row-level
+    // security policy for table 'loans'" (current_role_name() resolves off
+    // auth.uid(), which reads as nobody once the token is dead). Forcing a
+    // refresh first, before touching any pending item, is what actually
+    // fixes that instead of every item failing with a cryptic Postgres
+    // message the collector has no way to act on.
+    const { error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError) {
+      toast({
+        title: 'Session expired',
+        description: 'Your session expired while offline. Log out and log back in, then Sync again — your pending payments are still saved on this device.',
+        variant: 'destructive',
+      });
+      setSyncing(false);
+      syncingRef.current = false;
+      return;
+    }
+
     const queue = getPendingPayments();
     let succeeded = 0;
     let failed = 0;
@@ -886,7 +921,7 @@ export default function PaymentsPage() {
           .single();
         if (rpcError || !rpcResult) {
           failed++;
-          updatePendingPayment(item.id, { syncError: rpcError?.message ?? 'Could not update the loan balance' });
+          updatePendingPayment(item.id, { syncError: friendlySyncError(rpcError?.message) });
           continue;
         }
         // already_applied here is the normal, expected outcome for anything
@@ -923,7 +958,7 @@ export default function PaymentsPage() {
 
       if (receiptError) {
         failed++;
-        updatePendingPayment(item.id, { syncError: receiptError.message });
+        updatePendingPayment(item.id, { syncError: friendlySyncError(receiptError.message) });
         continue;
       }
 
@@ -948,7 +983,7 @@ export default function PaymentsPage() {
 
       if (payError) {
         failed++;
-        updatePendingPayment(item.id, { syncError: payError.message });
+        updatePendingPayment(item.id, { syncError: friendlySyncError(payError.message) });
         continue;
       }
 
@@ -982,11 +1017,11 @@ export default function PaymentsPage() {
     loadLoans();
 
     if (failed === 0) {
-      toast({ title: 'Na-sync lahat', description: `${succeeded} payment(s) na-post na sa database.` });
+      toast({ title: 'All synced', description: `${succeeded} payment(s) posted to the database.` });
     } else {
       toast({
-        title: 'May hindi na-sync',
-        description: `${succeeded} successful, ${failed} may error pa. Manatili sila sa Pending list — subukan ulit mamaya.`,
+        title: 'Some did not sync',
+        description: `${succeeded} successful, ${failed} still have errors. They'll stay in the Pending list — try again later.`,
         variant: 'destructive',
       });
     }
@@ -1292,7 +1327,7 @@ export default function PaymentsPage() {
               <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ backgroundColor: '#FEF3C7', color: '#92400E' }}>
                 <WifiOff className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  Walang signal — mase-save muna ito bilang <strong>pending</strong> sa device na ito. Pwede mo nang i-print ang resibo (walang balance pa), pero kailangan mo pang i-Sync sa Payments page kapag may signal na. Natitirang OR number sa device: <strong>{orPool}</strong>.
+                  No signal — this will be saved as <strong>pending</strong> on this device. You can print the receipt now (no confirmed balance yet), but you&apos;ll still need to Sync on the Payments page once you have signal. OR numbers left on this device: <strong>{orPool}</strong>.
                 </span>
               </div>
             )}
@@ -1372,7 +1407,7 @@ export default function PaymentsPage() {
               Pending Payments
             </DialogTitle>
             <DialogDescription>
-              Collected offline, not yet in the database. {isOnline ? 'May signal ka na — pwede nang i-Sync.' : 'Kailangan ng signal bago ma-Sync.'}
+              Collected offline, not yet in the database. {isOnline ? 'You have signal now — you can Sync.' : 'Signal is needed before you can Sync.'}
             </DialogDescription>
           </DialogHeader>
           {pendingPayments.length === 0 ? (
@@ -1408,7 +1443,7 @@ export default function PaymentsPage() {
                 <Button variant="outline" onClick={() => setPendingPaymentsOpen(false)}>Close</Button>
                 <Button onClick={handleSyncPendingPayments} disabled={syncing || !isOnline}>
                   {syncing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  {isOnline ? `Sync ${pendingPayments.length} Payment${pendingPayments.length > 1 ? 's' : ''}` : 'Kailangan ng signal'}
+                  {isOnline ? `Sync ${pendingPayments.length} Payment${pendingPayments.length > 1 ? 's' : ''}` : 'Signal needed'}
                 </Button>
               </DialogFooter>
             </>
