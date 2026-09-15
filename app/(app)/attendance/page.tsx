@@ -620,36 +620,54 @@ export default function AttendancePage() {
         <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
       </PageHeader>
 
-      {/* Check-in panel */}
-      <Card className="glass-card border-border">
-        <CardContent className="p-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
-            {isAdmin ? (
-              <div className="space-y-2 flex-1">
-                <Label>Select Employee</Label>
-                <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
-                  <SelectTrigger><SelectValue placeholder="Choose employee to check in" /></SelectTrigger>
-                  <SelectContent>
-                    {/* One check-in per employee per day — hide anyone who
-                        already has a record for the date being viewed. */}
-                    {employees.filter(e => e.status === 'active' && !(dateFilter === todayStr() && records.some(r => r.employee_id === e.id))).map(e => <SelectItem key={e.id} value={e.id}>{formatCustomerName(e.first_name, e.last_name)}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : (
-              <div className="space-y-1 flex-1">
-                <Label>Checking in as</Label>
-                <p className="text-sm font-medium">{employees[0] ? `${employees[0].first_name} ${employees[0].last_name}` : 'No matching employee record'}</p>
-                {alreadyCheckedInToday && <p className="text-xs text-muted-foreground">Already checked in today.</p>}
-              </div>
-            )}
-            <Button onClick={() => openCamera('checkin')} disabled={!selectedEmployee || (!isAdmin && alreadyCheckedInToday)} className="h-10">
-              <Camera className="w-4 h-4 mr-2" />
-              Camera Check-In
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Check-in panel — only while actually viewing today. Check-in always
+          writes today's real date regardless of dateFilter (see
+          confirmCapture — the date it saves is never backdated to whatever
+          day happens to be selected here), so offering it while browsing a
+          previous day was always misleading: tapping Camera Check-In while
+          looking at, say, last Tuesday still silently checked someone in
+          for TODAY, not the day on screen. Kat's Sep 2026 policy ("only
+          Admin has access to previous dates") starts from the same root
+          cause — see the Check Out gating further down for the half of
+          that policy this page can actually enforce (completing an old,
+          still-open check-out). */}
+      {dateFilter === todayStr() ? (
+        <Card className="glass-card border-border">
+          <CardContent className="p-6">
+            <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
+              {isAdmin ? (
+                <div className="space-y-2 flex-1">
+                  <Label>Select Employee</Label>
+                  <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
+                    <SelectTrigger><SelectValue placeholder="Choose employee to check in" /></SelectTrigger>
+                    <SelectContent>
+                      {/* One check-in per employee per day — hide anyone who
+                          already has a record for today. */}
+                      {employees.filter(e => e.status === 'active' && !records.some(r => r.employee_id === e.id)).map(e => <SelectItem key={e.id} value={e.id}>{formatCustomerName(e.first_name, e.last_name)}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="space-y-1 flex-1">
+                  <Label>Checking in as</Label>
+                  <p className="text-sm font-medium">{employees[0] ? `${employees[0].first_name} ${employees[0].last_name}` : 'No matching employee record'}</p>
+                  {alreadyCheckedInToday && <p className="text-xs text-muted-foreground">Already checked in today.</p>}
+                </div>
+              )}
+              <Button onClick={() => openCamera('checkin')} disabled={!selectedEmployee || (!isAdmin && alreadyCheckedInToday)} className="h-10">
+                <Camera className="w-4 h-4 mr-2" />
+                Camera Check-In
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="glass-card border-border">
+          <CardContent className="p-4">
+            <p className="text-sm text-muted-foreground">Checking in is only available for today — go back to today to check someone in.</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Date navigator — defaults to today, can step back to previous days */}
       <Card className="glass-card border-border">
@@ -803,10 +821,18 @@ export default function AttendancePage() {
                     )}
                   </div>
                   <div className="mt-3 flex items-center justify-end gap-1 flex-wrap">
-                    {!r.time_out && (
+                    {/* Completing a check-out on a PREVIOUS date's still-open
+                        record is Admin-only — Kat's Sep 2026 policy. Anyone
+                        else can still check someone out same-day (the normal
+                        case), just not retroactively days later using
+                        whatever "now" happens to be at that point. */}
+                    {!r.time_out && (r.date === todayStr() || isAdmin) && (
                       <Button variant="outline" size="sm" onClick={() => openCamera('checkout', r.id)}>
                         <Clock className="w-3.5 h-3.5 mr-1.5" />Check Out
                       </Button>
+                    )}
+                    {!r.time_out && r.date !== todayStr() && !isAdmin && (
+                      <span className="text-xs text-muted-foreground">Only an Admin can check out a previous date</span>
                     )}
                     {canReview && canActOnRecord(r) && r.review_status !== 'accepted' && (
                       <Button variant="outline" size="sm" onClick={() => handleReview(r.id, 'accepted')}>
@@ -938,10 +964,13 @@ export default function AttendancePage() {
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1">
-                          {!r.time_out && (
+                          {!r.time_out && (r.date === todayStr() || isAdmin) && (
                             <Button variant="ghost" size="sm" onClick={() => openCamera('checkout', r.id)}>
                               <Clock className="w-4 h-4 mr-1" />Check Out
                             </Button>
+                          )}
+                          {!r.time_out && r.date !== todayStr() && !isAdmin && (
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">Admin only</span>
                           )}
                           {canReview && canActOnRecord(r) && r.review_status !== 'accepted' && (
                             <Button variant="ghost" size="icon" onClick={() => handleReview(r.id, 'accepted')} title="Accept">
