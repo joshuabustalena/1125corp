@@ -66,6 +66,15 @@ export default function EmployeeLoansPage() {
   const [specialEditSaving, setSpecialEditSaving] = useState(false);
   const [specialDeleteTarget, setSpecialDeleteTarget] = useState<any>(null);
   const [specialDeleting, setSpecialDeleting] = useState(false);
+  // Kat's Sep 2026 report: the Balance shown here looked "stuck" right
+  // after generating payroll — because it genuinely doesn't move yet.
+  // Real balance reduction only happens once a payslip is actually
+  // approved (marked paid), not at generation (see payroll/page.tsx's
+  // approvePayroll and the comment on its own payslip preview, which
+  // already accounts for this the same way). Rather than change that
+  // design, this surfaces what's coming: total loan_deduction from any
+  // still-pending (not yet approved) payroll rows, per employee.
+  const [pendingDeductionByEmployee, setPendingDeductionByEmployee] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!profile) return;
@@ -198,7 +207,47 @@ export default function EmployeeLoansPage() {
       ? (data ?? []).filter((l: any) => l.employees?.branch_id === profile.branch_id)
       : (data ?? []);
     setLoans(scoped);
+
+    // Sum of loan_deduction across every still-PENDING payroll row, per
+    // employee — see the state comment above. Scoped the same way `loans`
+    // itself is (one employee for a self-service viewer, one branch for a
+    // Branch Manager) so this never leaks another branch's figures.
+    let pendingQ = supabase.from('payroll').select('employee_id, loan_deduction').eq('status', 'pending').gt('loan_deduction', 0);
+    if (empId) pendingQ = pendingQ.eq('employee_id', empId);
+    const { data: pendingRows } = await pendingQ;
+    const pendingByEmployee: Record<string, number> = {};
+    for (const r of pendingRows ?? []) {
+      // Branch Manager scoping happens via `scoped` above (employees list),
+      // not here — pendingRows itself isn't branch-filtered, but a total
+      // keyed by employee_id only ever gets read against that employee's
+      // own loan row below, which is already correctly scoped.
+      pendingByEmployee[r.employee_id] = (pendingByEmployee[r.employee_id] ?? 0) + (Number(r.loan_deduction) || 0);
+    }
+    setPendingDeductionByEmployee(pendingByEmployee);
+
     setLoading(false);
+  }
+
+  // Exactly mirrors approvePayroll's own distribution — oldest active loan
+  // first, each capped at its own remaining_balance — so this preview and
+  // what actually happens on approval can never disagree. Computed against
+  // the full `loans` list (not just this employee's), same source
+  // approvePayroll itself would read.
+  function pendingDeductionForLoan(loan: any): number {
+    if (loan.status !== 'active') return 0;
+    let remaining = pendingDeductionByEmployee[loan.employee_id] ?? 0;
+    if (remaining <= 0) return 0;
+    const employeeActiveLoans = loans
+      .filter(l => l.employee_id === loan.employee_id && l.status === 'active')
+      .slice()
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    for (const l of employeeActiveLoans) {
+      const applied = Math.min(remaining, Number(l.remaining_balance) || 0);
+      if (l.id === loan.id) return applied;
+      remaining -= applied;
+      if (remaining <= 0) break;
+    }
+    return 0;
   }
 
   // The branch's configured ceiling is the base for everyone. A Branch
@@ -508,7 +557,13 @@ export default function EmployeeLoansPage() {
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                       <div><p className="text-xs text-muted-foreground">Amount</p><p>{formatCurrency(l.amount)}</p></div>
-                      <div><p className="text-xs text-muted-foreground">Balance</p><p className="font-medium">{formatCurrency(l.remaining_balance)}</p></div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Balance</p>
+                        <p className="font-medium">{formatCurrency(l.remaining_balance)}</p>
+                        {pendingDeductionForLoan(l) > 0 && (
+                          <p className="text-xs text-warning">-{formatCurrency(pendingDeductionForLoan(l))} pending approval</p>
+                        )}
+                      </div>
                       <div><p className="text-xs text-muted-foreground">Deduction</p><p>{formatCurrency(l.deduction_amount)}</p></div>
                       <div><p className="text-xs text-muted-foreground">Term</p><p>{l.term_months} months</p></div>
                       <div className="col-span-2"><p className="text-xs text-muted-foreground">Applied</p><p>{formatDate(l.created_at)}</p></div>
@@ -541,7 +596,12 @@ export default function EmployeeLoansPage() {
                     <TableRow key={l.id} className="hover:bg-secondary/50 cursor-pointer" onClick={() => router.push(`/employee-loans/${l.id}`)}>
                       <TableCell className="text-sm font-medium">{l.employees?.first_name} {l.employees?.last_name}</TableCell>
                       <TableCell className="text-sm">{formatCurrency(l.amount)}</TableCell>
-                      <TableCell className="text-sm">{formatCurrency(l.remaining_balance)}</TableCell>
+                      <TableCell className="text-sm">
+                        {formatCurrency(l.remaining_balance)}
+                        {pendingDeductionForLoan(l) > 0 && (
+                          <p className="text-xs text-warning">-{formatCurrency(pendingDeductionForLoan(l))} pending approval</p>
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm">{formatCurrency(l.deduction_amount)}</TableCell>
                       <TableCell className="text-sm">{l.term_months} months</TableCell>
                       <TableCell><Badge variant={statusVariant(l.status)}>{l.status}</Badge></TableCell>
