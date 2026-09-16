@@ -24,7 +24,7 @@ import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { logAudit } from '@/lib/audit-log';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays, WifiOff, CloudUpload } from 'lucide-react';
+import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays, WifiOff, CloudUpload, Trash2 } from 'lucide-react';
 import {
   getPendingAttendance, queuePendingAttendance, updatePendingAttendance, removePendingAttendance,
   type PendingAttendance,
@@ -97,6 +97,12 @@ export default function AttendancePage() {
   const [syncingAttendance, setSyncingAttendance] = useState(false);
   const syncingAttendanceRef = useRef(false);
   const [isOnline, setIsOnline] = useState(true);
+  // Admin-only cleanup for duplicate/bad records (e.g. a flaky connection
+  // producing several check-in rows for the same person/day — Kat, Sep
+  // 2026). Deliberately not offered to a Branch Manager: unlike Accept/
+  // Reject, a delete can't be undone by re-reviewing it.
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -547,8 +553,19 @@ export default function AttendancePage() {
       if (error) {
         // Kept out of the fall-through close/refresh below on purpose — see
         // the comment there for why closing on a real failure is the bug
-        // this whole block exists to avoid.
-        toast({ title: 'Check-in failed', description: `${error.message} — nothing was saved. Try Confirm again.`, variant: 'destructive' });
+        // this whole block exists to avoid. code 23505 is the one_per_day
+        // unique constraint (see supabase/add_attendance_one_per_day_
+        // constraint.sql) catching a duplicate the client-side guard above
+        // missed — e.g. a race between two rapid taps, or two people acting
+        // on the same profile at once — worth its own message instead of
+        // the raw Postgres constraint-violation text.
+        toast({
+          title: 'Check-in failed',
+          description: error.code === '23505'
+            ? 'This employee already has an attendance record for today.'
+            : `${error.message} — nothing was saved. Try Confirm again.`,
+          variant: 'destructive',
+        });
         setSubmitting(false);
         return;
       }
@@ -711,6 +728,19 @@ export default function AttendancePage() {
         location_address: item.locationAddress,
       });
       if (insertError) {
+        // 23505 = the one_per_day unique constraint (see supabase/
+        // add_attendance_one_per_day_constraint.sql) — a row for this
+        // employee+date won the race between the dedupe check above and
+        // this insert (e.g. two devices syncing the same day at once).
+        // Their attendance for that day exists either way, so this queued
+        // copy is now redundant, not failed — drop it rather than leaving
+        // a permanently-stuck "error" in the Pending list for something
+        // that isn't actually still pending.
+        if (insertError.code === '23505') {
+          removePendingAttendance(item.id);
+          succeeded++;
+          continue;
+        }
         failed++;
         updatePendingAttendance(item.id, { syncError: friendlyAttendanceSyncError(insertError.message) });
         continue;
@@ -748,6 +778,15 @@ export default function AttendancePage() {
   // also when a real peso deduction is on the line.
   async function handleReview(id: string, reviewStatus: 'accepted' | 'rejected') {
     const record = records.find((r) => r.id === id);
+    // Kat's Sep 2026 rule: don't let a still-incomplete day (checked in but
+    // never checked out — or, in principle, the reverse) get Accepted. An
+    // incomplete record can still be Rejected (e.g. a duplicate check-in
+    // that will never get a check-out at all), just never approved into
+    // payroll eligibility while it's missing either side.
+    if (reviewStatus === 'accepted' && record && (!record.time_in || !record.time_out)) {
+      toast({ title: 'Cannot approve yet', description: 'This record is missing a Time In or Time Out. It can only be Accepted once both are present.', variant: 'destructive' });
+      return;
+    }
     const { error } = await supabase.from('attendance').update({ review_status: reviewStatus }).eq('id', id);
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
@@ -764,6 +803,26 @@ export default function AttendancePage() {
         recipientName: `${record.employees?.first_name ?? ''} ${record.employees?.last_name ?? ''}`.trim(),
       });
     }
+  }
+
+  async function handleDeleteAttendance() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const { error } = await supabase.from('attendance').delete().eq('id', deleteTarget.id);
+    setDeleting(false);
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      return;
+    }
+    // No manual logAudit call needed here — unlike approve/reject (which
+    // need a business-meaningful label the generic trigger can't produce),
+    // a delete is already fully captured automatically by the
+    // log_audit_trail() database trigger (see
+    // supabase/add_audit_log_triggers.sql), including the full row that
+    // was removed.
+    setRecords(prev => prev.filter(r => r.id !== deleteTarget.id));
+    setDeleteTarget(null);
+    toast({ title: 'Deleted', description: 'Attendance record removed.' });
   }
 
   function canActOnRecord(r: any) {
@@ -1069,7 +1128,13 @@ export default function AttendancePage() {
                       <span className="text-xs text-muted-foreground">Only an Admin can check out a previous date</span>
                     )}
                     {canReview && canActOnRecord(r) && r.review_status !== 'accepted' && (
-                      <Button variant="outline" size="sm" onClick={() => handleReview(r.id, 'accepted')}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleReview(r.id, 'accepted')}
+                        disabled={!r.time_in || !r.time_out}
+                        title={(!r.time_in || !r.time_out) ? 'Needs both Time In and Time Out before it can be Accepted' : undefined}
+                      >
                         <CheckCircle className="w-3.5 h-3.5 mr-1.5 text-success" />Accept
                       </Button>
                     )}
@@ -1086,6 +1151,11 @@ export default function AttendancePage() {
                     {r.photo_out_url && (
                       <Button variant="outline" size="sm" onClick={() => setPreviewImage({ url: r.photo_out_url, label: 'Check-Out Photo' })}>
                         Out Photo
+                      </Button>
+                    )}
+                    {isAdmin && (
+                      <Button variant="outline" size="sm" className="text-destructive border-destructive/40 hover:text-destructive" onClick={() => setDeleteTarget(r)}>
+                        <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
                       </Button>
                     )}
                   </div>
@@ -1207,7 +1277,13 @@ export default function AttendancePage() {
                             <span className="text-xs text-muted-foreground whitespace-nowrap">Admin only</span>
                           )}
                           {canReview && canActOnRecord(r) && r.review_status !== 'accepted' && (
-                            <Button variant="ghost" size="icon" onClick={() => handleReview(r.id, 'accepted')} title="Accept">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleReview(r.id, 'accepted')}
+                              disabled={!r.time_in || !r.time_out}
+                              title={(!r.time_in || !r.time_out) ? 'Needs both Time In and Time Out before it can be Accepted' : 'Accept'}
+                            >
                               <CheckCircle className="w-4 h-4 text-success" />
                             </Button>
                           )}
@@ -1218,6 +1294,11 @@ export default function AttendancePage() {
                           )}
                           {isBranchManager && !canActOnRecord(r) && r.review_status === 'pending' && (
                             <span className="text-xs text-muted-foreground whitespace-nowrap">Waiting for Admin approval</span>
+                          )}
+                          {isAdmin && (
+                            <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(r)} title="Delete">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
                           )}
                         </div>
                       </TableCell>
@@ -1381,6 +1462,32 @@ export default function AttendancePage() {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Admin-only delete — for cleaning up duplicate/bad records (e.g. a
+          flaky connection producing several check-in rows for the same
+          person/day). Unlike Reject, this can't be undone. */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete Attendance Record?</DialogTitle>
+            <DialogDescription>
+              {deleteTarget && (
+                <>
+                  {deleteTarget.employees?.first_name} {deleteTarget.employees?.last_name} — {formatDate(deleteTarget.date)}, Time In {formatTime(deleteTarget.time_in)}.
+                  {' '}This cannot be undone.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteAttendance} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
