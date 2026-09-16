@@ -14,7 +14,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
@@ -24,7 +24,11 @@ import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { logAudit } from '@/lib/audit-log';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
+import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays, WifiOff, CloudUpload } from 'lucide-react';
+import {
+  getPendingAttendance, queuePendingAttendance, updatePendingAttendance, removePendingAttendance,
+  type PendingAttendance,
+} from '@/lib/offline-attendance-queue';
 
 // Builds the YYYY-MM-DD string from local date parts — toISOString() would
 // convert to UTC first, which silently shifts the date by a day in any
@@ -83,6 +87,16 @@ export default function AttendancePage() {
   const [locating, setLocating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ url: string; label: string } | null>(null);
+  // Check-ins collected with zero signal (or during a Supabase-side outage
+  // — see confirmCapture) — queued here instead of lost, synced for real
+  // once connectivity is back. Same shape of fix as Payments' offline
+  // queue, see lib/offline-attendance-queue.ts for why check-out isn't
+  // included.
+  const [pendingAttendance, setPendingAttendance] = useState<PendingAttendance[]>([]);
+  const [pendingAttendanceOpen, setPendingAttendanceOpen] = useState(false);
+  const [syncingAttendance, setSyncingAttendance] = useState(false);
+  const syncingAttendanceRef = useRef(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -99,6 +113,18 @@ export default function AttendancePage() {
   const loadSeq = useRef(0);
 
   useEffect(() => { if (profile) { loadEmployees(); } }, [profile]);
+  useEffect(() => {
+    setPendingAttendance(getPendingAttendance());
+    if (typeof navigator !== 'undefined') setIsOnline(navigator.onLine);
+    function goOnline() { setIsOnline(true); }
+    function goOffline() { setIsOnline(false); }
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
   useEffect(() => {
     if (!isAdmin) return;
     supabase.from('branches').select('id, name').eq('status', 'active').order('name').then(({ data }) => setBranches(data ?? []));
@@ -350,6 +376,42 @@ export default function AttendancePage() {
       .catch(() => setCameraError('Could not access the camera. Check your browser/device camera permissions and try again.'));
   }
 
+  function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // Queues a check-in entirely on this device — no network call at all.
+  // Only ever called for cameraMode === 'checkin' (see
+  // lib/offline-attendance-queue.ts for why check-out has no offline path).
+  // lateMinutes/status/late_deduction are deliberately NOT computed here —
+  // they're pure functions of checkedInAt and (for the deduction) the
+  // employee's salary, so handleSyncPendingAttendance derives them from the
+  // stored checkedInAt at sync time instead, using whatever employee data
+  // is fresh then rather than trusting a salary figure cached on this
+  // device from whenever the page last loaded.
+  async function queueCheckinOffline(checkedInAt: Date) {
+    const dataUrl = await blobToDataUrl(capturedBlob as Blob);
+    const emp = employees.find((e) => e.id === selectedEmployee);
+    queuePendingAttendance({
+      employeeId: selectedEmployee,
+      employeeName: emp ? `${emp.first_name} ${emp.last_name}` : 'Employee',
+      photoDataUrl: dataUrl,
+      gpsLat: location?.lat ?? null,
+      gpsLng: location?.lng ?? null,
+      locationAddress: locationAddress ?? null,
+      checkedInAt: checkedInAt.toISOString(),
+    });
+    setPendingAttendance(getPendingAttendance());
+    toast({ title: 'Saved offline', description: 'No signal — this check-in is saved on this device. Open Pending Check-Ins to Sync once you have signal.' });
+    setSubmitting(false);
+    closeCamera();
+  }
+
   async function confirmCapture() {
     if (!capturedBlob) return;
     // A session left open overnight can have its access token go stale by
@@ -361,8 +423,13 @@ export default function AttendancePage() {
     // a refresh here catches a dead token before it causes the same silent
     // failure the offline payment queue had (see handleSyncPendingPayments),
     // and explains a lot of people hitting this around the same time each
-    // morning rather than it being spread out and rare.
-    await supabase.auth.refreshSession();
+    // morning rather than it being spread out and rare. Skipped entirely
+    // when we already know there's no signal — no point waiting on a
+    // refresh call that can only time out before falling into the same
+    // offline branch below anyway.
+    if (isOnline) {
+      await supabase.auth.refreshSession();
+    }
     // Location is required for both check-in and check-out — a record with
     // no GPS fix can't be trusted for attendance/payroll purposes, so block
     // submission rather than silently store gps_lat/lng as null.
@@ -380,7 +447,25 @@ export default function AttendancePage() {
       toast({ title: 'Already checked in', description: 'This employee already has an attendance record for today.', variant: 'destructive' });
       return;
     }
+
+    // The real moment they tapped Confirm — captured before any network
+    // attempt, so a check-in that ends up queued offline (or waits through
+    // the upload retry below) still gets its late/status computed from
+    // THIS instant, not from whenever the upload finally finishes or this
+    // eventually syncs.
+    const checkedInAt = new Date();
+
     setSubmitting(true);
+
+    // Zero signal: skip the network entirely and go straight to the local
+    // queue. navigator.onLine can be wrong (a device can report "online"
+    // with no real signal) — the upload-failure fallback below is the
+    // second line of defense for that case; this is just the fast path for
+    // the common, honestly-offline case.
+    if (cameraMode === 'checkin' && !isOnline) {
+      await queueCheckinOffline(checkedInAt);
+      return;
+    }
 
     const fileName = `${cameraMode}-${Date.now()}.jpg`;
     const path = `${cameraMode === 'checkin' ? selectedEmployee : checkoutTargetId}/${fileName}`;
@@ -396,6 +481,15 @@ export default function AttendancePage() {
     }
 
     if (uploadError) {
+      // Still failing after a retry despite what this device thought was a
+      // live connection — check-out has no offline path (see
+      // lib/offline-attendance-queue.ts), so it still just reports the
+      // error, but a check-in falls back to the same local queue used by
+      // the explicit offline branch above rather than losing the attempt.
+      if (cameraMode === 'checkin') {
+        await queueCheckinOffline(checkedInAt);
+        return;
+      }
       toast({ title: 'Photo upload failed', description: `${uploadError.message} — tap Confirm to try again.`, variant: 'destructive' });
       setSubmitting(false);
       return;
@@ -405,19 +499,19 @@ export default function AttendancePage() {
     const photoUrl = urlData.publicUrl;
 
     if (cameraMode === 'checkin') {
-      const now = new Date();
-      // toDateStr(now), NOT now.toISOString().split('T')[0] — the real bug
-      // behind Jonies/John Dave's "check-in doesn't show up" reports (Kat,
-      // Sep 2026). toISOString() converts to UTC first, so a completely
-      // normal check-in between 12am-8am Manila time (e.g. 7:56am) got
-      // stored under YESTERDAY's date (23:56 UTC the day before) — while
-      // this same page's own dateFilter default (above, already correctly
-      // using local toDateStr/todayStr) queries for TODAY. The row existed,
-      // it just filed itself a day early, so it silently never showed up
-      // under "today" for anyone reviewing attendance.
-      const today = toDateStr(now);
-      const hour = now.getHours();
-      const minute = now.getMinutes();
+      // toDateStr(checkedInAt), NOT checkedInAt.toISOString().split('T')[0]
+      // — the real bug behind Jonies/John Dave's "check-in doesn't show up"
+      // reports (Kat, Sep 2026). toISOString() converts to UTC first, so a
+      // completely normal check-in between 12am-8am Manila time (e.g.
+      // 7:56am) got stored under YESTERDAY's date (23:56 UTC the day
+      // before) — while this same page's own dateFilter default (above,
+      // already correctly using local toDateStr/todayStr) queries for
+      // TODAY. The row existed, it just filed itself a day early, so it
+      // silently never showed up under "today" for anyone reviewing
+      // attendance.
+      const today = toDateStr(checkedInAt);
+      const hour = checkedInAt.getHours();
+      const minute = checkedInAt.getMinutes();
       // Work schedule is 8:30 AM – 4:30 PM — checking in any time after
       // 8:30 counts as late.
       const SCHEDULED_TIME_IN_MINUTES = 8 * 60 + 30;
@@ -441,7 +535,7 @@ export default function AttendancePage() {
       const { error } = await supabase.from('attendance').insert({
         employee_id: selectedEmployee,
         date: today,
-        time_in: now.toISOString(),
+        time_in: checkedInAt.toISOString(),
         status: lateMinutes > 0 ? 'late' : 'present',
         late_minutes: lateMinutes,
         late_deduction: lateDeduction,
@@ -517,6 +611,135 @@ export default function AttendancePage() {
     setSubmitting(false);
     closeCamera();
     load();
+  }
+
+  function friendlyAttendanceSyncError(message: string | null | undefined): string {
+    if (message && /row-level security policy/i.test(message)) {
+      return 'Your session is no longer valid. Log out and log back in, then Sync again.';
+    }
+    return message ?? 'Could not sync this check-in.';
+  }
+
+  async function handleSyncPendingAttendance() {
+    // Guards the same double-tap race handleSyncPendingPayments guards
+    // against — a ref is checked/set synchronously, immune to render
+    // timing, so a fast double-tap can't start two sync loops over the
+    // same queue at once.
+    if (syncingAttendanceRef.current) return;
+    syncingAttendanceRef.current = true;
+    setSyncingAttendance(true);
+
+    // Same reasoning as handleSyncPendingPayments: a check-in can sit
+    // queued for hours, long enough for the access token to expire before
+    // signal returns, and autoRefreshToken can't refresh a dead token while
+    // offline. Refresh first so every item below runs with a live session
+    // instead of failing with a cryptic RLS error.
+    const { error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError) {
+      toast({
+        title: 'Session expired',
+        description: 'Your session expired while offline. Log out and log back in, then Sync again — your pending check-ins are still saved on this device.',
+        variant: 'destructive',
+      });
+      setSyncingAttendance(false);
+      syncingAttendanceRef.current = false;
+      return;
+    }
+
+    const queue = getPendingAttendance();
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const item of queue) {
+      const checkedInAt = new Date(item.checkedInAt);
+      const today = toDateStr(checkedInAt);
+
+      // Dedupe guard — attendance has no idempotency-key column, so the
+      // same one-check-in-per-employee-per-day rule enforced elsewhere on
+      // this page (see confirmCapture) doubles as the natural key here: if
+      // a row already exists for this employee+date, an earlier Sync
+      // attempt already wrote it (the request succeeded but the response
+      // never made it back), so just drop this queue entry instead of
+      // creating a duplicate check-in.
+      const { data: existing } = await supabase
+        .from('attendance').select('id').eq('employee_id', item.employeeId).eq('date', today).maybeSingle();
+      if (existing) {
+        removePendingAttendance(item.id);
+        succeeded++;
+        continue;
+      }
+
+      const photoBlob = await (await fetch(item.photoDataUrl)).blob();
+      const fileName = `checkin-${Date.now()}.jpg`;
+      const path = `${item.employeeId}/${fileName}`;
+      const { error: uploadError } = await supabase.storage.from('attendance-photos').upload(path, photoBlob, { contentType: 'image/jpeg' });
+      if (uploadError) {
+        failed++;
+        updatePendingAttendance(item.id, { syncError: friendlyAttendanceSyncError(uploadError.message) });
+        continue;
+      }
+      const { data: urlData } = supabase.storage.from('attendance-photos').getPublicUrl(path);
+
+      // Pure math off the REAL check-in moment stored at queue time — not
+      // today's clock — so someone who checked in on-time at 8:15am but
+      // couldn't sync until 11am doesn't come out of this 3 hours late.
+      const hour = checkedInAt.getHours();
+      const minute = checkedInAt.getMinutes();
+      const SCHEDULED_TIME_IN_MINUTES = 8 * 60 + 30;
+      const lateMinutes = Math.max(0, (hour * 60 + minute) - SCHEDULED_TIME_IN_MINUTES);
+
+      // Fetched unconditionally (not just when late) — branch_id is also
+      // needed below so the review notification reaches that employee's own
+      // Branch Manager instead of broadcasting to every branch.
+      const { data: emp } = await supabase.from('employees').select('salary, pay_type, branch_id').eq('id', item.employeeId).maybeSingle();
+      let lateDeduction = 0;
+      if (lateMinutes > 0 && emp) {
+        const dailyRate = emp.pay_type === 'monthly' ? Number(emp.salary) / 26 : Number(emp.salary);
+        lateDeduction = Math.round((dailyRate / 2) * 100) / 100;
+      }
+
+      const { error: insertError } = await supabase.from('attendance').insert({
+        employee_id: item.employeeId,
+        date: today,
+        time_in: item.checkedInAt,
+        status: lateMinutes > 0 ? 'late' : 'present',
+        late_minutes: lateMinutes,
+        late_deduction: lateDeduction,
+        photo_in_url: urlData.publicUrl,
+        gps_lat: item.gpsLat,
+        gps_lng: item.gpsLng,
+        location_address: item.locationAddress,
+      });
+      if (insertError) {
+        failed++;
+        updatePendingAttendance(item.id, { syncError: friendlyAttendanceSyncError(insertError.message) });
+        continue;
+      }
+
+      notifyRoles(['branch_manager', 'administrator'], {
+        type: 'attendance_pending',
+        title: lateMinutes > 0 ? 'Late Check-in — Needs Review' : 'New Check-in — Needs Review',
+        message: `${item.employeeName} checked in${lateMinutes > 0 ? ` late (${lateMinutes} min)` : ''} and is awaiting review.`,
+        url: '/attendance',
+      }, emp?.branch_id);
+      removePendingAttendance(item.id);
+      succeeded++;
+    }
+
+    setPendingAttendance(getPendingAttendance());
+    syncingAttendanceRef.current = false;
+    setSyncingAttendance(false);
+    load();
+
+    if (failed === 0) {
+      toast({ title: 'All synced', description: `${succeeded} check-in(s) posted to the database.` });
+    } else {
+      toast({
+        title: 'Some did not sync',
+        description: `${succeeded} successful, ${failed} still have errors. They'll stay in the Pending list — try again later.`,
+        variant: 'destructive',
+      });
+    }
   }
 
   // An Administrator can accept/reject any record. A Branch Manager can too,
@@ -617,6 +840,17 @@ export default function AttendancePage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Employee Attendance" description="Camera check-in/check-out with GPS tracking">
+        {pendingAttendance.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-warning border-warning/40 hover:text-warning"
+            onClick={() => setPendingAttendanceOpen(true)}
+          >
+            <CloudUpload className="w-4 h-4 mr-2" />
+            Pending ({pendingAttendance.length})
+          </Button>
+        )}
         <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
       </PageHeader>
 
@@ -1040,6 +1274,15 @@ export default function AttendancePage() {
               )}
             </div>
 
+            {!isOnline && cameraMode === 'checkin' && (
+              <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ backgroundColor: '#FEF3C7', color: '#92400E' }}>
+                <WifiOff className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  No signal — Confirm will save this check-in as <strong>pending</strong> on this device. Open Pending Check-Ins on the Attendance page to Sync once you have signal.
+                </span>
+              </div>
+            )}
+
             <div className="flex items-center justify-center gap-3">
               {capturedPreviewUrl ? (
                 <>
@@ -1058,7 +1301,7 @@ export default function AttendancePage() {
                       location guard, now backed up by this. */}
                   <Button type="button" onClick={confirmCapture} disabled={submitting || !location}>
                     {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
-                    Confirm
+                    {!isOnline && cameraMode === 'checkin' ? 'Save Offline' : 'Confirm'}
                   </Button>
                 </>
               ) : (
@@ -1086,6 +1329,57 @@ export default function AttendancePage() {
           {previewImage && (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={previewImage.url} alt={previewImage.label} className="w-full rounded-lg object-contain max-h-[70vh]" />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Pending (offline) Check-Ins — captured with zero signal, not yet
+          posted to the database. Sync writes them for real, oldest first. */}
+      <Dialog open={pendingAttendanceOpen} onOpenChange={setPendingAttendanceOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CloudUpload className="w-5 h-5" />
+              Pending Check-Ins
+            </DialogTitle>
+            <DialogDescription>
+              Captured offline, not yet in the database. {isOnline ? 'You have signal now — you can Sync.' : 'Signal is needed before you can Sync.'}
+            </DialogDescription>
+          </DialogHeader>
+          {pendingAttendance.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No pending check-ins on this device.</p>
+          ) : (
+            <>
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {pendingAttendance.map(p => (
+                  <div key={p.id} className="p-3 rounded-lg bg-secondary/50">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-medium truncate">{p.employeeName}</p>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0"
+                        title="Remove from queue"
+                        onClick={() => { removePendingAttendance(p.id); setPendingAttendance(getPendingAttendance()); }}
+                      >
+                        <X className="w-3.5 h-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">{new Date(p.checkedInAt).toLocaleString()}</p>
+                    {p.syncError && (
+                      <p className="text-xs mt-1 text-destructive">Sync error: {p.syncError}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setPendingAttendanceOpen(false)}>Close</Button>
+                <Button onClick={handleSyncPendingAttendance} disabled={syncingAttendance || !isOnline}>
+                  {syncingAttendance && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {isOnline ? `Sync ${pendingAttendance.length} Check-In${pendingAttendance.length > 1 ? 's' : ''}` : 'Signal needed'}
+                </Button>
+              </DialogFooter>
+            </>
           )}
         </DialogContent>
       </Dialog>
