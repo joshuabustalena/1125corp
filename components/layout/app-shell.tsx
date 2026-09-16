@@ -13,7 +13,7 @@ import { ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, authStuck } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [user, loading, router]);
 
   if (loading) {
-    return <LoadingScreen />;
+    return <LoadingScreen stuck={authStuck} onRetry={() => window.location.reload()} />;
   }
 
   if (!user) return null;

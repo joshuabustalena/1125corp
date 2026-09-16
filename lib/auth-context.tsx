@@ -23,6 +23,12 @@ interface AuthContextType {
   session: Session | null;
   profile: UserProfile | null;
   loading: boolean;
+  // True once `loading` has stayed true for longer than a normal session
+  // check should ever take — see the effect below. Lets a stuck screen
+  // (getSession()/fetchProfile() never resolving, e.g. during a Supabase
+  // outage like Sep 16, 2026's) offer a Retry instead of spinning forever
+  // with zero feedback and no way out except knowing to hard-refresh.
+  authStuck: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -33,16 +39,39 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   profile: null,
   loading: true,
+  authStuck: false,
   signIn: async () => ({ error: null }),
   signOut: async () => {},
   refreshProfile: async () => {},
 });
+
+// How long `loading` may stay true before we tell the user something's
+// wrong instead of just leaving the branded spinner up. Long enough that a
+// slow-but-working connection isn't flagged as stuck; short enough that
+// nobody sits looking at an unexplained spinner for minutes wondering if
+// the app is broken.
+const AUTH_STUCK_TIMEOUT_MS = 10_000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authStuck, setAuthStuck] = useState(false);
+
+  // Decoupled from the getSession()/fetchProfile() chain on purpose — that
+  // chain has several exit points (session found, no session, error) and
+  // threading a timer through all of them would be easy to get wrong. This
+  // just watches the one thing that actually matters: has `loading` stayed
+  // true too long. Flips back to false itself the moment loading resolves.
+  useEffect(() => {
+    if (!loading) {
+      setAuthStuck(false);
+      return;
+    }
+    const timeoutId = setTimeout(() => setAuthStuck(true), AUTH_STUCK_TIMEOUT_MS);
+    return () => clearTimeout(timeoutId);
+  }, [loading]);
 
   const fetchProfile = useCallback(async (userId: string) => {
     const { data, error } = await supabase
@@ -158,7 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, profile, loading, signIn, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{ user, session, profile, loading, authStuck, signIn, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );
