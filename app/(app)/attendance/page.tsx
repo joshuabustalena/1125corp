@@ -92,6 +92,15 @@ export default function AttendancePage() {
   // once connectivity is back. Same shape of fix as Payments' offline
   // queue, see lib/offline-attendance-queue.ts for why check-out isn't
   // included.
+  // Synchronous double-tap guard for confirmCapture — same reasoning as
+  // Payments' submittingRef: the disabled={submitting} state on the Confirm
+  // button depends on a React re-render, which isn't instant, so a fast
+  // enough second tap could fire confirmCapture again before that commits.
+  // This is checked/set synchronously, immune to render timing, closing off
+  // one of the ways a duplicate check-in could slip past the "already
+  // checked in" guards below (see Julie Ann Pendarlipe's 8+ duplicate rows,
+  // Kat, Sep 2026).
+  const confirmingRef = useRef(false);
   const [pendingAttendance, setPendingAttendance] = useState<PendingAttendance[]>([]);
   const [pendingAttendanceOpen, setPendingAttendanceOpen] = useState(false);
   const [syncingAttendance, setSyncingAttendance] = useState(false);
@@ -420,6 +429,9 @@ export default function AttendancePage() {
 
   async function confirmCapture() {
     if (!capturedBlob) return;
+    if (confirmingRef.current) return;
+    confirmingRef.current = true;
+    try {
     // A session left open overnight can have its access token go stale by
     // the time someone opens the app fresh in the morning to check in —
     // autoRefreshToken only refreshes while a session is actively in use,
@@ -516,6 +528,29 @@ export default function AttendancePage() {
       // silently never showed up under "today" for anyone reviewing
       // attendance.
       const today = toDateStr(checkedInAt);
+
+      // Authoritative, last-moment recheck — the guard near the top of this
+      // function only looked at whatever `records` happened to have loaded
+      // on the page, which can be stale by the time someone actually taps
+      // Confirm (a race between two rapid taps, two people acting on the
+      // same profile, or simply time passing while the photo/GPS/upload
+      // steps above ran). Asking the database directly, right before the
+      // insert, is as close to the actual write as a client-side check can
+      // get. It still isn't a full guarantee against a true simultaneous
+      // race between two devices — only a database constraint can promise
+      // that — but it closes the overwhelming majority of real duplicate
+      // check-ins seen in practice (Julie Ann Pendarlipe, John Dave Manaog,
+      // Jonies De Guzman — all clusters of rows created seconds to minutes
+      // apart on the same device, not two devices racing at the same
+      // instant).
+      const { data: alreadyCheckedIn } = await supabase
+        .from('attendance').select('id').eq('employee_id', selectedEmployee).eq('date', today).maybeSingle();
+      if (alreadyCheckedIn) {
+        toast({ title: 'Already checked in', description: 'This employee already has an attendance record for today.', variant: 'destructive' });
+        setSubmitting(false);
+        return;
+      }
+
       const hour = checkedInAt.getHours();
       const minute = checkedInAt.getMinutes();
       // Work schedule is 8:30 AM – 4:30 PM — checking in any time after
@@ -628,6 +663,9 @@ export default function AttendancePage() {
     setSubmitting(false);
     closeCamera();
     load();
+    } finally {
+      confirmingRef.current = false;
+    }
   }
 
   function friendlyAttendanceSyncError(message: string | null | undefined): string {
