@@ -1473,10 +1473,26 @@ export default function PayrollPage() {
       // that exact code (from add_general_cash_vouchers.sql), so every
       // incentive got posted to Repairs Expense instead, while the client's
       // own manually-created "Incentives Expense" account (a different code)
-      // never received anything. Company-wide, not branch-specific — same
-      // as SSS/Phil/PagIBIG Payable above — so branchId/branchName are null.
-      resolveBranchAccountCode('Incentives Expense', null, null),
-      resolveBranchAccountCode('Withheld Funds Payable', null, null),
+      // never received anything.
+      //
+      // Per-branch, NOT company-wide — this used to pass (null, null) on the
+      // assumption these were shared accounts, but the real Chart of
+      // Accounts has them per-branch just like everything else (Balanga has
+      // its own 5300/2300; Dinalupihan has 23001 but no "Incentives Expense"
+      // at all). Looking them up as company-wide meant this could never find
+      // Balanga's own accounts, and since postJournalEntry refuses to post a
+      // half-entry, ANY voucher with a non-zero incentive that period had
+      // its entire journal entry silently blocked — not just these two
+      // lines (see Balanga voucher 1-1354, Sep 2026, missing from the ledger
+      // entirely over one employee's ₱2,000 incentive).
+      //
+      // Also fixed here: the search term itself was 'Withheld Funds
+      // Payable', but the real account is spelled 'Withholded Funds
+      // Payable' (matches the actual Chart of Accounts entries, typo and
+      // all) — the old spelling could never have matched regardless of
+      // branch scoping.
+      resolveBranchAccountCode('Incentives Expense', voucherBranchId, branchName),
+      resolveBranchAccountCode('Withholded Funds Payable', voucherBranchId, branchName),
     ]);
 
     const payrollVoucherLedger = await postJournalEntry({
