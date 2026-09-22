@@ -138,6 +138,45 @@ export default function UndertakingPage() {
   // Payroll/Gas Voucher/Cash Count, which stay branch-aware.
   const branding = getDocumentBranding('Balanga');
 
+  const documentBody = (
+    <div style={{ width: 900, background: '#fff', color: '#111', padding: '30px 38px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 14, lineHeight: 1.4 }}>
+      <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 13 }}>
+        <div style={{ fontWeight: 700, fontSize: 19, color: '#1F4E79' }}>{COMPANY_NAME}</div>
+        <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>{branding.headerAddress.toUpperCase()}</div>
+        <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>CELL PHONE NUMBER: {branding.contact}</div>
+      </div>
+
+      <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17 }}>BORROWER'S UNDERTAKING</div>
+      <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, marginBottom: 13 }}>(KASUNDUAN SA PAGKAKAUTANG BILANG BORROWER)</div>
+
+      <p style={{ textAlign: 'justify', marginBottom: 12, textIndent: 40 }}>
+        I <span style={{ textDecoration: 'underline' }}>{undertakingData.borrowerName}</span> of legal age, residing at{' '}
+        <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span> voluntarily agree to the following terms and conditions as a borrower of {COMPANY_NAME_DISPLAY}.
+      </p>
+
+      {UNDERTAKING_CLAUSES.map(c => (
+        <p key={c.n} style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.36, marginBottom: 7 }}>
+          <strong>{c.n}. {c.title}</strong> - {c.en} <em style={{ color: '#333' }}>{c.tl}</em>
+        </p>
+      ))}
+
+      <p style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.36, marginTop: 8, marginBottom: 16 }}>
+        I hereby authorize {COMPANY_NAME_DISPLAY} to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act.
+      </p>
+
+      <p style={{ fontSize: 14, marginBottom: 20 }}>
+        I hereunto affix my signature this <span style={{ textDecoration: 'underline' }}>{formatUndertakingDate(undertakingData.date)}</span>, at <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span>
+      </p>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ width: 260, textAlign: 'center' }}>
+          <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.borrowerName}</div>
+          <div style={{ fontStyle: 'italic' }}>Borrower</div>
+        </div>
+      </div>
+    </div>
+  );
+
   async function handlePrint() {
     const refs = [page1Ref].filter(r => r.current);
     if (refs.length === 0) return;
@@ -225,45 +264,28 @@ export default function UndertakingPage() {
         <div className="bg-secondary/30 p-4 rounded-lg">
         <DocumentScaler width={900}>
         <div className="flex flex-col items-center gap-4">
-          <div ref={page1Ref} style={{ width: 900, background: '#fff', color: '#111', padding: '30px 38px', fontFamily: '"Times New Roman", Calibri, serif', fontSize: 14, lineHeight: 1.4 }}>
-            <div style={{ textAlign: 'center', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 13 }}>
-              <div style={{ fontWeight: 700, fontSize: 19, color: '#1F4E79' }}>{COMPANY_NAME}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>{branding.headerAddress.toUpperCase()}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#1F4E79' }}>CELL PHONE NUMBER: {branding.contact}</div>
-            </div>
-
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17 }}>BORROWER'S UNDERTAKING</div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, marginBottom: 13 }}>(KASUNDUAN SA PAGKAKAUTANG BILANG BORROWER)</div>
-
-            <p style={{ textAlign: 'justify', marginBottom: 12, textIndent: 40 }}>
-              I <span style={{ textDecoration: 'underline' }}>{undertakingData.borrowerName}</span> of legal age, residing at{' '}
-              <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span> voluntarily agree to the following terms and conditions as a borrower of {COMPANY_NAME_DISPLAY}.
-            </p>
-
-            {UNDERTAKING_CLAUSES.map(c => (
-              <p key={c.n} style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.36, marginBottom: 7 }}>
-                <strong>{c.n}. {c.title}</strong> - {c.en} <em style={{ color: '#333' }}>{c.tl}</em>
-              </p>
-            ))}
-
-            <p style={{ textAlign: 'justify', fontSize: 12.5, lineHeight: 1.36, marginTop: 8, marginBottom: 16 }}>
-              I hereby authorize {COMPANY_NAME_DISPLAY} to collect, process, verify, store, and use my personal information for purposes of loan evaluation, credit investigation, account administration, collection, and compliance with applicable laws and regulations. I understand that my information shall be protected in accordance with Republic Act No. 10173 or the Data Privacy Act.
-            </p>
-
-            <p style={{ fontSize: 14, marginBottom: 20 }}>
-              I hereunto affix my signature this <span style={{ textDecoration: 'underline' }}>{formatUndertakingDate(undertakingData.date)}</span>, at <span style={{ textDecoration: 'underline' }}>{undertakingData.residenceAddress || '—'}</span>
-            </p>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <div style={{ width: 260, textAlign: 'center' }}>
-                <div style={{ textDecoration: 'underline', marginBottom: 4 }}>{undertakingData.borrowerName}</div>
-                <div style={{ fontStyle: 'italic' }}>Borrower</div>
-              </div>
-            </div>
-          </div>
+          {documentBody}
         </div>
         </DocumentScaler>
         </div>
+      </div>
+
+      {/* Hidden, always-unscaled copy that Print/Download actually capture
+          from — DocumentScaler shrinks the visible copy above via a CSS
+          transform to fit narrow/mobile screens (see its own comment
+          claiming html2canvas is unaffected by that), but on a real phone
+          — a Cashier printing from a branch tablet, not a wide desktop
+          window — that scale factor can be well under 1, and html2canvas
+          does not reliably capture a node whose ANCESTOR carries a strong
+          transform: scale(): text came out cramped/overlapping exactly on
+          Julie Ann's account (Cashier, Balanga), whose device is a small
+          screen, while it looked fine testing on a desktop-width window
+          where the scale stays at/near 1 and effectively does nothing.
+          Capturing from this separate, never-scaled, off-screen copy
+          instead makes the output identical regardless of what device or
+          window size triggered Print/Download. */}
+      <div style={{ position: 'fixed', top: 0, left: -99999, pointerEvents: 'none' }} aria-hidden="true">
+        <div ref={page1Ref}>{documentBody}</div>
       </div>
     </div>
   );

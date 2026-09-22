@@ -709,29 +709,46 @@ export default function LoanDetailPage() {
     // Interest and Service Fee are per branch now too — they used to post to
     // the flat '4000'/'4010', which are Balanga's accounts, so every
     // Dinalupihan release credited Balanga's revenue.
-    const [loansReceivableCode, cashVaultCode, interestCode, serviceFeeCode] = await Promise.all([
-      resolveBranchAccountCode('Loans Receivable', loan.branch_id, loan.branches?.name),
-      resolveBranchAccountCode('Cash in Vault', loan.branch_id, loan.branches?.name),
-      resolveBranchAccountCode('Interest Revenue', loan.branch_id, loan.branches?.name),
-      resolveBranchAccountCode('Service Fee', loan.branch_id, loan.branches?.name),
-    ]);
+    // Wrapped in try/catch — resolveBranchAccountCode has no error handling
+    // of its own (unlike postJournalEntry, which never throws), so a hard
+    // connection failure during these lookups (not a normal Postgres error,
+    // an actual dropped/failed request) used to propagate straight out of
+    // this function uncaught, silently skipping the journal entry AND
+    // everything after it (the success toast, notifyRoles) with nothing on
+    // screen to show anything had gone wrong. The loan and cash voucher
+    // above had already saved for real by this point — the disbursement
+    // itself was never in doubt — only the ledger entry for it silently
+    // never got attempted. See LN-2026-255256 (Jyllan Pimentel, Sep 22
+    // 2026) — caught only because someone happened to notice it missing
+    // from Journal Entries days later.
+    let ledgerResult: { ok: boolean; missingCodes: string[] } | null = null;
+    try {
+      const [loansReceivableCode, cashVaultCode, interestCode, serviceFeeCode] = await Promise.all([
+        resolveBranchAccountCode('Loans Receivable', loan.branch_id, loan.branches?.name),
+        resolveBranchAccountCode('Cash in Vault', loan.branch_id, loan.branches?.name),
+        resolveBranchAccountCode('Interest Revenue', loan.branch_id, loan.branches?.name),
+        resolveBranchAccountCode('Service Fee', loan.branch_id, loan.branches?.name),
+      ]);
 
-    const ledgerResult = await postJournalEntry({
-      entryDate: now.split('T')[0],
-      description: `Loan disbursement — ${loan.loan_number}${disbursedCustomerName ? ` — ${disbursedCustomerName}` : ''}`,
-      reference: voucherNumber,
-      source: 'disbursement',
-      sourceId: loan.id,
-      createdBy: profile?.id ?? null,
-      branchId: loan.branch_id ?? null,
-      lines: [
-        { accountCode: loansReceivableCode ?? '', debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
-        { accountCode: loansReceivableCode ?? '', credit: offsetBalance, memo: 'Offset balance from previous loan' },
-        { accountCode: cashVaultCode ?? '', credit: cashReleased, memo: 'Cash released to borrower' },
-        { accountCode: serviceFeeCode ?? '', credit: serviceFee, memo: 'Service fee' },
-        { accountCode: interestCode ?? '', credit: interestAmount, memo: 'Interest revenue' },
-      ],
-    });
+      ledgerResult = await postJournalEntry({
+        entryDate: now.split('T')[0],
+        description: `Loan disbursement — ${loan.loan_number}${disbursedCustomerName ? ` — ${disbursedCustomerName}` : ''}`,
+        reference: voucherNumber,
+        source: 'disbursement',
+        sourceId: loan.id,
+        createdBy: profile?.id ?? null,
+        branchId: loan.branch_id ?? null,
+        lines: [
+          { accountCode: loansReceivableCode ?? '', debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
+          { accountCode: loansReceivableCode ?? '', credit: offsetBalance, memo: 'Offset balance from previous loan' },
+          { accountCode: cashVaultCode ?? '', credit: cashReleased, memo: 'Cash released to borrower' },
+          { accountCode: serviceFeeCode ?? '', credit: serviceFee, memo: 'Service fee' },
+          { accountCode: interestCode ?? '', credit: interestAmount, memo: 'Interest revenue' },
+        ],
+      });
+    } catch {
+      ledgerResult = null;
+    }
 
     toast({ title: 'Loan disbursed', description: `${loan.loan_number} is now active.` });
     logAudit({ action: 'approve', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number, stage: 'disbursed' }, userId: profile?.id ?? null });
@@ -743,10 +760,17 @@ export default function LoanDetailPage() {
       message: `Loan ${loan.loan_number} for ${disbursedCustomerName} was disbursed and is now active.`,
       url: `/loans/${loan.id}`,
     }, loan.branch_id);
-    // A missing account code means a real peso amount silently never made
-    // it into the ledger — surface that immediately instead of leaving an
-    // incomplete-looking journal entry for someone to notice later.
-    if (ledgerResult.missingCodes.length > 0) {
+    // A missing account code, or the connection failure caught above, both
+    // mean a real peso amount silently never made it into the ledger —
+    // surface that immediately instead of leaving an incomplete-looking (or
+    // entirely missing) journal entry for someone to notice later.
+    if (!ledgerResult) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: `${loan.loan_number} was disbursed successfully, but a connection issue stopped the journal entry from being created. Check Journal Entries for this loan and post it manually if it's missing.`,
+        variant: 'destructive',
+      });
+    } else if (ledgerResult.missingCodes.length > 0) {
       toast({
         title: 'Ledger entry incomplete',
         description: `Could not find account(s) ${ledgerResult.missingCodes.join(', ')} in the Chart of Accounts — those amounts were not posted. Check Chart of Accounts and re-post manually if needed.`,
@@ -833,39 +857,64 @@ export default function LoanDetailPage() {
       // outstanding. Resolved by NAME (see supabase/add_doubtful_accounts_expense.sql)
       // never a hardcoded code — the same '5040' collision lesson as
       // Incentives Expense elsewhere this session.
-      const branchName = loan.branches?.name ?? null;
-      const [receivableCode, doubtfulCode] = await Promise.all([
-        resolveBranchAccountCode('Loans Receivable', loan.branch_id, branchName),
-        resolveBranchAccountCode('Doubtful Accounts Expense', loan.branch_id, branchName),
-      ]);
-      if (!receivableCode || !doubtfulCode) {
+      // Wrapped in try/catch — resolveBranchAccountCode has no error
+      // handling of its own (unlike postJournalEntry, which never throws),
+      // so a hard connection failure during these lookups used to
+      // propagate straight out of this function uncaught, skipping not
+      // just the ledger entry but the cleanup below it too (closing this
+      // dialog, resetting state, navigating away, clearing the loading
+      // spinner) — leaving the dialog looking stuck open with no
+      // explanation, even though the write-off itself had already saved
+      // for real a few lines up. Same class of gap as the loan
+      // disbursement flow above (see LN-2026-255256, Sep 22 2026).
+      let branchName: string | null = null;
+      let receivableCode: string | null = null;
+      let doubtfulCode: string | null = null;
+      let ledgerResult: { ok: boolean; missingCodes: string[] } | null = null;
+      let ledgerConnectionFailed = false;
+      try {
+        branchName = loan.branches?.name ?? null;
+        [receivableCode, doubtfulCode] = await Promise.all([
+          resolveBranchAccountCode('Loans Receivable', loan.branch_id, branchName),
+          resolveBranchAccountCode('Doubtful Accounts Expense', loan.branch_id, branchName),
+        ]);
+        if (receivableCode && doubtfulCode) {
+          ledgerResult = await postJournalEntry({
+            entryDate: todayStr(),
+            description: `Loan write-off — ${loan.loan_number}`,
+            source: 'write_off',
+            sourceId: loan.id,
+            createdBy: profile?.id ?? null,
+            branchId: loan.branch_id ?? null,
+            lines: [
+              { accountCode: doubtfulCode, debit: Number(loan.remaining_balance), memo: reasonText },
+              { accountCode: receivableCode, credit: Number(loan.remaining_balance), memo: `Write-off — ${loan.loan_number}` },
+            ],
+          });
+        }
+      } catch {
+        ledgerConnectionFailed = true;
+      }
+      if (ledgerConnectionFailed) {
+        toast({
+          title: 'Loan written off, but ledger entry not posted',
+          description: `A connection issue stopped the journal entry from being created. Check Journal Entries for ${loan.loan_number} and post it manually if it's missing.`,
+          variant: 'destructive',
+        });
+      } else if (!receivableCode || !doubtfulCode) {
         toast({
           title: 'Loan written off, but ledger entry not posted',
           description: `Could not find ${!doubtfulCode ? 'a Doubtful Accounts Expense' : 'the Loans Receivable'} account in the Chart of Accounts${branchName ? ` for ${branchName}` : ''}. Post the entry manually in Journal Entries.`,
           variant: 'destructive',
         });
-      } else {
-        const ledgerResult = await postJournalEntry({
-          entryDate: todayStr(),
-          description: `Loan write-off — ${loan.loan_number}`,
-          source: 'write_off',
-          sourceId: loan.id,
-          createdBy: profile?.id ?? null,
-          branchId: loan.branch_id ?? null,
-          lines: [
-            { accountCode: doubtfulCode, debit: Number(loan.remaining_balance), memo: reasonText },
-            { accountCode: receivableCode, credit: Number(loan.remaining_balance), memo: `Write-off — ${loan.loan_number}` },
-          ],
+      } else if (!ledgerResult?.ok) {
+        toast({
+          title: 'Loan written off, but ledger entry not posted',
+          description: `Missing account: ${ledgerResult?.missingCodes.join(', ') || 'unknown'}. Post the entry manually in Journal Entries.`,
+          variant: 'destructive',
         });
-        if (!ledgerResult.ok) {
-          toast({
-            title: 'Loan written off, but ledger entry not posted',
-            description: `Missing account: ${ledgerResult.missingCodes.join(', ') || 'unknown'}. Post the entry manually in Journal Entries.`,
-            variant: 'destructive',
-          });
-        } else {
-          toast({ title: 'Loan written off', description: `${loan.loan_number} has been moved to Write-Off.` });
-        }
+      } else {
+        toast({ title: 'Loan written off', description: `${loan.loan_number} has been moved to Write-Off.` });
       }
 
       setWriteOffOpen(false);
