@@ -37,7 +37,7 @@ import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-brandi
 import {
   ArrowLeft, ArrowRight, Landmark, Wallet, Calendar, User, MapPin, Check,
   Loader2, RefreshCw, Plus, Receipt, ChevronLeft, ChevronRight, CalendarDays,
-  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown, Trash2, Ban, Printer,
+  CheckCircle2, FileText, Banknote, Download, ShieldCheck, AlertTriangle, ChevronDown, Trash2, Ban, Printer, History,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -95,6 +95,14 @@ export default function LoanDetailPage() {
   const [writingOff, setWritingOff] = useState(false);
   const [printingHistory, setPrintingHistory] = useState(false);
   const historyPrintRef = useRef<HTMLDivElement>(null);
+  // Kat's Sep 2026 request: whoever's reviewing a new loan Request needs a
+  // quick way to see this customer's OTHER loans (paid off cleanly vs.
+  // declined/written-off, still owing a balance, etc.) to judge whether
+  // they're a good repayment risk — without having to search Customers
+  // separately and lose their place on this loan.
+  const [pastLoansOpen, setPastLoansOpen] = useState(false);
+  const [pastLoans, setPastLoans] = useState<any[]>([]);
+  const [loadingPastLoans, setLoadingPastLoans] = useState(false);
 
   async function loadLoan() {
     const id = params.id as string;
@@ -222,6 +230,24 @@ export default function LoanDetailPage() {
     setScheduleMonth(loan.release_date ? new Date(loan.release_date) : new Date());
     setScheduleOpen(true);
   }
+
+  async function openPastLoans() {
+    setPastLoansOpen(true);
+    setLoadingPastLoans(true);
+    const { data } = await supabase
+      .from('loans')
+      .select('id, loan_number, status, amount, total_payable, remaining_balance, release_date, due_date')
+      .eq('customer_id', loan.customer_id)
+      .neq('id', loan.id)
+      .order('release_date', { ascending: false });
+    setPastLoans(data ?? []);
+    setLoadingPastLoans(false);
+  }
+
+  // Display label only, same reasoning as app/(app)/loans/page.tsx's
+  // statusLabel — the stored value stays 'pending' everywhere it's
+  // queried/filtered, this only changes what text renders for it.
+  const statusLabel = (status: string) => status === 'pending' ? 'Request Loan' : status;
 
   function getMonthGrid(monthDate: Date) {
     const year = monthDate.getFullYear();
@@ -1098,6 +1124,10 @@ export default function LoanDetailPage() {
             Calendar
           </Button>
         )}
+        <Button size="sm" variant="outline" onClick={openPastLoans}>
+          <History className="w-4 h-4 mr-2" />
+          Past Loans
+        </Button>
         {isAdmin && (loan.status === 'active' || loan.status === 'overdue') && (
           <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => { setWriteOffOpen(true); setWriteOffReason('deceased'); setWriteOffNotes(''); }}>
             <Ban className="w-4 h-4 mr-2" />
@@ -1126,7 +1156,7 @@ export default function LoanDetailPage() {
           <CardContent className="space-y-3">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Status:</span>
-              <Badge variant={loan.status === 'active' ? 'default' : loan.status === 'overdue' || loan.status === 'declined' ? 'destructive' : 'secondary'}>{loan.status}</Badge>
+              <Badge variant={loan.status === 'active' ? 'default' : loan.status === 'overdue' || loan.status === 'declined' ? 'destructive' : 'secondary'}>{statusLabel(loan.status)}</Badge>
             </div>
             {loan.status === 'declined' && loan.decline_reason && (
               <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
@@ -1780,6 +1810,55 @@ export default function LoanDetailPage() {
               {writingOff && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Write Off Loan
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Past Loans — every OTHER loan this same customer has had, so
+          whoever's deciding on a new Request (or just checking on an
+          existing one) can see their repayment track record at a glance. */}
+      <Dialog open={pastLoansOpen} onOpenChange={setPastLoansOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Past Loans — {loan.customers?.first_name} {loan.customers?.last_name}</DialogTitle>
+            <DialogDescription>Every other loan on record for this customer, most recent first.</DialogDescription>
+          </DialogHeader>
+          {loadingPastLoans ? (
+            <div className="flex items-center justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+          ) : pastLoans.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-10">No other loans on record for this customer — this is their first.</p>
+          ) : (
+            <div className="max-h-96 overflow-y-auto -mx-1 px-1">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Loan #</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Balance</TableHead>
+                    <TableHead>Release</TableHead>
+                    <TableHead>Due</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pastLoans.map((l) => (
+                    <TableRow key={l.id} className="cursor-pointer hover:bg-secondary/50" onClick={() => { setPastLoansOpen(false); router.push(`/loans/${l.id}`); }}>
+                      <TableCell className="font-medium text-sm">{l.loan_number}</TableCell>
+                      <TableCell>
+                        <Badge variant={l.status === 'active' ? 'default' : l.status === 'overdue' || l.status === 'declined' ? 'destructive' : 'secondary'}>{statusLabel(l.status)}</Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">{formatCurrency(l.amount)}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(l.remaining_balance)}</TableCell>
+                      <TableCell className="text-sm">{formatDate(l.release_date)}</TableCell>
+                      <TableCell className="text-sm">{formatDate(l.due_date)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPastLoansOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

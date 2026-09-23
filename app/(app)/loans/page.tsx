@@ -537,6 +537,13 @@ export default function LoansPage() {
       default: return 'secondary';
     }
   };
+  // Display label only — the stored status value stays 'pending' (every
+  // query/filter in this file and elsewhere still reads/writes that exact
+  // string). Kat's Sep 2026 request: a brand-new loan application, before
+  // anyone has approved it, reads clearer as "Request Loan" than the more
+  // generic "pending" — which is also used for several unrelated things
+  // elsewhere in the app (payroll, attendance review, leave requests).
+  const statusLabel = (status: string) => status === 'pending' ? 'Request Loan' : status;
 
   // Same "past due_date" rule the Dashboard/Reports/Collection List already
   // use for Overdue Amount — the full remaining balance counts once the
@@ -589,7 +596,7 @@ export default function LoansPage() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="pending">Request Loan</SelectItem>
                   <SelectItem value="approved">Approved</SelectItem>
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="declined">Declined</SelectItem>
@@ -658,7 +665,7 @@ export default function LoansPage() {
                         <p className="font-medium text-sm truncate">{l.loan_number}</p>
                         <p className="text-xs text-muted-foreground truncate">{formatCustomerName(l.customers?.first_name, l.customers?.last_name)}</p>
                       </div>
-                      <Badge variant={statusVariant(l.status)} className="shrink-0">{l.status}</Badge>
+                      <Badge variant={statusVariant(l.status)} className="shrink-0">{statusLabel(l.status)}</Badge>
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                       <div><p className="text-xs text-muted-foreground">Amount</p><p>{formatCurrency(l.amount)}</p></div>
@@ -721,7 +728,7 @@ export default function LoansPage() {
                       <TableCell className="text-sm">{overdueAmount(l) > 0 ? <span className="font-medium text-destructive">{formatCurrency(overdueAmount(l))}</span> : '—'}</TableCell>
                       <TableCell className="text-sm">{formatDate(l.due_date)}</TableCell>
                       <TableCell>
-                        <Badge variant={statusVariant(l.status)}>{l.status}</Badge>
+                        <Badge variant={statusVariant(l.status)}>{statusLabel(l.status)}</Badge>
                       </TableCell>
                       <TableCell className="text-sm">{l.areas?.name ?? '—'}</TableCell>
                       <TableCell className="text-right">
@@ -992,7 +999,7 @@ export default function LoansPage() {
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {['pending', 'approved', 'active', 'overdue', 'paid', 'declined', 'renewed'].map(s => (
-                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                      <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

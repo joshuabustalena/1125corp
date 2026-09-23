@@ -40,7 +40,14 @@ export default function CollectionListPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
-  const canAccess = isAdmin || profile?.role_name === 'Cashier' || isFieldCollector;
+  // Branch Manager: same as Cashier below — sees the full collector-picker
+  // for their own branch (never the branch switcher itself, which only
+  // renders for isAdmin), not locked down to one collector's row the way
+  // isFieldCollector is. Scoping to just their own branch needs no extra
+  // code here — the effect below already forces branchId to
+  // profile.branch_id for every non-admin role, Branch Manager included.
+  const isBranchManager = profile?.role_name === 'Branch Manager';
+  const canAccess = isAdmin || profile?.role_name === 'Cashier' || isFieldCollector || isBranchManager;
   const [date, setDate] = useState(todayStr());
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
