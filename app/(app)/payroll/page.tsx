@@ -1187,30 +1187,46 @@ export default function PayrollPage() {
     // any "Cash in Vault" account. The cross-branch caveat above still
     // stands — this keeps it POSTING correctly until that split is done.
     // Per branch, same reason as Salaries Expense: '5030' is Balanga's.
-    const thirteenthBenefitsCode = await resolveBranchAccountCode(
-      'Employee Benefits', voucherBranchId, branches.find(b => b.id === voucherBranchId)?.name,
-    );
-    const thirteenthCashCode =
-      (await resolveBranchAccountCode('Cash in Vault', branches.find(b => b.id === voucherBranchId)?.name))
-      ?? (await supabase.from('chart_of_accounts').select('code').ilike('name', 'Cash in Vault%').limit(1).maybeSingle()).data?.code
-      ?? '1000';
+    // Wrapped in try/catch — same reasoning as the payroll voucher call
+    // below: resolveBranchAccountCode/postJournalEntry have no protection
+    // against a connection failure propagating out uncaught, which would
+    // otherwise skip the journal entry with nothing on screen to explain
+    // why (see Reynaldo Taduyo's cash voucher for what that silence costs).
+    let thirteenthLedger: { ok: boolean; missingCodes: string[] } | null = null;
+    try {
+      const thirteenthBenefitsCode = await resolveBranchAccountCode(
+        'Employee Benefits', voucherBranchId, branches.find(b => b.id === voucherBranchId)?.name,
+      );
+      const thirteenthCashCode =
+        (await resolveBranchAccountCode('Cash in Vault', branches.find(b => b.id === voucherBranchId)?.name))
+        ?? (await supabase.from('chart_of_accounts').select('code').ilike('name', 'Cash in Vault%').limit(1).maybeSingle()).data?.code
+        ?? '1000';
 
-    const thirteenthLedger = await postJournalEntry({
-      entryDate: todayStr(),
-      description: `13th Month Voucher — ${thirteenthCycleLabel}`,
-      reference: thirteenthVoucherNumber,
-      source: 'thirteenth_month_voucher',
-      createdBy: profile?.id ?? null,
-      lines: [
-        { accountCode: thirteenthBenefitsCode ?? '', debit: thirteenthNetPayTotal, memo: 'Employee Benefits Expense' },
-        { accountCode: thirteenthCashCode, credit: thirteenthNetPayTotal, memo: 'Cash in Vault' },
-      ],
-    });
+      thirteenthLedger = await postJournalEntry({
+        entryDate: todayStr(),
+        description: `13th Month Voucher — ${thirteenthCycleLabel}`,
+        reference: thirteenthVoucherNumber,
+        source: 'thirteenth_month_voucher',
+        createdBy: profile?.id ?? null,
+        lines: [
+          { accountCode: thirteenthBenefitsCode ?? '', debit: thirteenthNetPayTotal, memo: 'Employee Benefits Expense' },
+          { accountCode: thirteenthCashCode, credit: thirteenthNetPayTotal, memo: 'Cash in Vault' },
+        ],
+      });
+    } catch {
+      thirteenthLedger = null;
+    }
 
-    // A missing account code now blocks the whole entry rather than writing a
-    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
-    // line just quietly never appears.
-    if (thirteenthLedger.missingCodes.length > 0) {
+    if (!thirteenthLedger) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: 'The 13th Month voucher was generated, but a connection issue stopped the journal entry from being created. Check Journal Entries and post it manually if it’s missing.',
+        variant: 'destructive',
+      });
+    } else if (thirteenthLedger.missingCodes.length > 0) {
+      // A missing account code now blocks the whole entry rather than
+      // writing a half-balanced one (see lib/ledger.ts) — so say so,
+      // otherwise the ledger line just quietly never appears.
       toast({
         title: 'Ledger entry not posted',
         description: `Hindi mahanap sa Chart of Accounts ang account(s) ${thirteenthLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
@@ -1219,7 +1235,7 @@ export default function PayrollPage() {
     }
 
 
-    toast({ title: 'Success', description: '13th Month voucher generated and journal entry posted' });
+    toast({ title: 'Success', description: '13th Month voucher generated' + (thirteenthLedger?.ok ? ' and journal entry posted' : '') });
     await handleDownloadThirteenthVoucherPdf(thirteenthVoucherNumber);
     getNextVoucherNumber().then(setThirteenthVoucherNumber);
     loadThirteenthVouchers();
@@ -1461,6 +1477,15 @@ export default function PayrollPage() {
     // was charging Balanga's expense. "Service Vehicle" rather than "Service
     // Vehicle Loan": the cleaned-up Chart names it the former on both
     // branches, and the prefix match covers either spelling.
+    // Wrapped in try/catch below — resolveBranchAccountCode has no error
+    // handling of its own (unlike postJournalEntry, which never throws), so
+    // a hard connection failure during these 8 lookups used to propagate
+    // straight out of this function uncaught, skipping the journal entry
+    // AND the success toast/downloads/reloads after it, with nothing on
+    // screen to explain why. The voucher row itself (inserted earlier, see
+    // above) had already saved for real by this point regardless.
+    let payrollVoucherLedger: { ok: boolean; missingCodes: string[] } | null = null;
+    try {
     const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode, salariesCode, incentivesExpenseCode, withheldFundsPayableCode] = await Promise.all([
       resolveBranchAccountCode('Service Vehicle', voucherBranchId, branchName),
       resolveBranchAccountCode('Receivable from Uniform', voucherBranchId, branchName),
@@ -1495,7 +1520,7 @@ export default function PayrollPage() {
       resolveBranchAccountCode('Withholded Funds Payable', voucherBranchId, branchName),
     ]);
 
-    const payrollVoucherLedger = await postJournalEntry({
+    payrollVoucherLedger = await postJournalEntry({
       entryDate: voucherPayDate,
       description: `Payroll Voucher — ${voucherBranch?.name ?? ''} — ${formatDate(voucherPayDate)}`,
       reference: voucherNumber,
@@ -1520,11 +1545,24 @@ export default function PayrollPage() {
         { accountCode: withheldFundsPayableCode ?? '', credit: incentiveRetentionTotal, memo: 'Withheld Funds Payable' },
       ],
     });
+    } catch {
+      payrollVoucherLedger = null;
+    }
 
-    // A missing account code now blocks the whole entry rather than writing a
-    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
-    // line just quietly never appears.
-    if (payrollVoucherLedger.missingCodes.length > 0) {
+    // null means the connection failure above (resolveBranchAccountCode/
+    // postJournalEntry never got a real answer) — a real, if missing-
+    // account-code(s), only blocks the whole entry rather than writing a
+    // half-balanced one (see lib/ledger.ts) — either way, say so, otherwise
+    // the ledger line just quietly never appears (see Reynaldo Taduyo's
+    // cash voucher, a related gap in app/(app)/cash-vouchers/page.tsx, for
+    // what this silence actually costs someone trying to trust the books).
+    if (!payrollVoucherLedger) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: `${voucherBranch?.name ?? 'This'} payroll voucher was generated, but a connection issue stopped the journal entry from being created. Check Journal Entries and post it manually if it's missing.`,
+        variant: 'destructive',
+      });
+    } else if (payrollVoucherLedger.missingCodes.length > 0) {
       toast({
         title: 'Ledger entry not posted',
         description: `Hindi mahanap sa Chart of Accounts ang account(s) ${payrollVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
@@ -1532,8 +1570,7 @@ export default function PayrollPage() {
       });
     }
 
-
-    toast({ title: 'Success', description: 'Payroll voucher generated and journal entry posted' });
+    toast({ title: 'Success', description: 'Payroll voucher generated' + (payrollVoucherLedger?.ok ? ' and journal entry posted' : '') });
     // Download while the just-vouchered rows are still showing in the
     // printable div — load() below refreshes `payroll`, which immediately
     // clears eligiblePayrollRows (they're no longer un-vouchered), so

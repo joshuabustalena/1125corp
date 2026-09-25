@@ -190,25 +190,49 @@ export default function AccountingPage() {
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
-        // Same branch-aware account resolution as the rest of the ledger —
-        // "1000" isn't reliably the right cash account for every branch.
-        const branchName = branches.find(b => b.id === entryBranchId)?.name;
-        const [cashCode, miscExpenseCode] = await Promise.all([
-          resolveBranchAccountCode('Cash in Vault', entryBranchId, branchName),
-          resolveBranchAccountCode('Miscellaneous Expense', entryBranchId, branchName),
-        ]);
-        postJournalEntry({
-          entryDate: expenseDate,
-          description: `Expense — ${form.expense_category}`,
-          source: 'expense',
-          createdBy: profile?.id ?? null,
-          branchId: entryBranchId,
-          lines: [
-            { accountCode: miscExpenseCode ?? '', debit: Number(form.amount), memo: form.description || form.expense_category },
-            { accountCode: cashCode ?? '', credit: Number(form.amount), memo: 'Cash paid out' },
-          ],
-        });
-        toast({ title: 'Success', description: 'Expense added' });
+        // Was previously fire-and-forget (postJournalEntry called without
+        // await, its result never checked at all) — worse than the other
+        // ledger call sites this same class of bug was found in (see
+        // Reynaldo Taduyo's cash voucher, cash-vouchers/page.tsx): even a
+        // missing Chart of Accounts entry went completely unreported here,
+        // not just a connection failure. Also unguarded: a hard connection
+        // failure during account resolution used to propagate out of this
+        // function uncaught, skipping setSaving(false) below and leaving
+        // the Save button stuck forever — same class of gap already fixed
+        // in the write-off dialog on loans/[id]/page.tsx.
+        let expenseLedgerOk = false;
+        try {
+          // Same branch-aware account resolution as the rest of the ledger —
+          // "1000" isn't reliably the right cash account for every branch.
+          const branchName = branches.find(b => b.id === entryBranchId)?.name;
+          const [cashCode, miscExpenseCode] = await Promise.all([
+            resolveBranchAccountCode('Cash in Vault', entryBranchId, branchName),
+            resolveBranchAccountCode('Miscellaneous Expense', entryBranchId, branchName),
+          ]);
+          const expenseLedger = await postJournalEntry({
+            entryDate: expenseDate,
+            description: `Expense — ${form.expense_category}`,
+            source: 'expense',
+            createdBy: profile?.id ?? null,
+            branchId: entryBranchId,
+            lines: [
+              { accountCode: miscExpenseCode ?? '', debit: Number(form.amount), memo: form.description || form.expense_category },
+              { accountCode: cashCode ?? '', credit: Number(form.amount), memo: 'Cash paid out' },
+            ],
+          });
+          expenseLedgerOk = expenseLedger.ok;
+        } catch {
+          expenseLedgerOk = false;
+        }
+        if (!expenseLedgerOk) {
+          toast({
+            title: 'Expense added, but ledger entry not posted',
+            description: 'Check Journal Entries and post it manually if it’s missing.',
+            variant: 'destructive',
+          });
+        } else {
+          toast({ title: 'Success', description: 'Expense added' });
+        }
         setDialogOpen(false);
         load();
       }

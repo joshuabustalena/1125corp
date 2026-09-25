@@ -238,6 +238,14 @@ export default function CashVouchersPage() {
       return;
     }
 
+    // postJournalEntry never throws (see lib/ledger.ts) — a connection
+    // failure mid-call comes back as { ok: false, missingCodes: [] }, not
+    // an exception. That's exactly the gap that let Reynaldo Taduyo's
+    // voucher (1-1543, Sep 24 2026) show "journal entry posted" when it
+    // never actually was: this code used to check ONLY missingCodes.length
+    // (for the Chart-of-Accounts-gap case), which stays 0 on a connection
+    // failure too, so that silent-fail case fell straight through to the
+    // success toast below with nothing to show anything had gone wrong.
     const cashVoucherLedger = await postJournalEntry({
       entryDate: voucherDate,
       description: `Cash Voucher — ${particulars}`,
@@ -252,10 +260,16 @@ export default function CashVouchersPage() {
       ],
     });
 
-    // A missing account code now blocks the whole entry rather than writing a
-    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
-    // line just quietly never appears.
-    if (cashVoucherLedger.missingCodes.length > 0) {
+    if (!cashVoucherLedger.ok && cashVoucherLedger.missingCodes.length === 0) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: 'The voucher was saved, but a connection issue stopped the journal entry from being created. Check Journal Entries for this voucher and post it manually if it’s missing.',
+        variant: 'destructive',
+      });
+    } else if (cashVoucherLedger.missingCodes.length > 0) {
+      // A missing account code now blocks the whole entry rather than
+      // writing a half-balanced one (see lib/ledger.ts) — so say so,
+      // otherwise the ledger line just quietly never appears.
       toast({
         title: 'Ledger entry not posted',
         description: `Hindi mahanap sa Chart of Accounts ang account(s) ${cashVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
@@ -263,8 +277,7 @@ export default function CashVouchersPage() {
       });
     }
 
-
-    toast({ title: 'Success', description: 'Cash voucher generated and journal entry posted' });
+    toast({ title: 'Success', description: 'Cash voucher generated' + (cashVoucherLedger.ok ? ' and journal entry posted' : '') });
     await handleDownloadPdf(voucherNumber);
     getNextVoucherNumber().then(setVoucherNumber);
     resetForm();

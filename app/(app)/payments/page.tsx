@@ -50,11 +50,53 @@ import {
 // the earlier attempt silently landed or not, replaying its own key is
 // provably safe either way (already applied -> no-op, never applied ->
 // applies once) — see supabase/add_payment_idempotency_key.sql.
-async function callApplyLoanPaymentWithRetry(loanId: string, amount: number, idempotencyKey: string, maxAttempts = 3) {
+// receiptFields, when passed, makes the RPC ALSO write the receipt +
+// payment row in the same atomic transaction as the balance update (see
+// supabase/make_apply_loan_payment_atomic.sql) — added after Maricor
+// Tanjoco's loan got the same ₱200 debited twice from two separate real
+// collections that each only produced a receipt for one of them: the
+// balance-update RPC succeeded but the app never got as far as the
+// separate receipts/payments inserts that used to follow it as their own
+// round-trips, with nothing between those steps to catch a client-side
+// interruption. Omit receiptFields for a caller that only ever wanted the
+// balance-only behavior (none exist in this app today, but the RPC still
+// supports it for anything added later).
+type PaymentReceiptFields = {
+  orNumber: string;
+  customerId: string | null;
+  collectorId: string | null;
+  paymentDate: string;
+  paymentTime: string | null;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  locationAddress: string | null;
+  notes: string | null;
+};
+
+async function callApplyLoanPaymentWithRetry(
+  loanId: string,
+  amount: number,
+  idempotencyKey: string,
+  receiptFields?: PaymentReceiptFields,
+  maxAttempts = 3,
+) {
   let last: Awaited<ReturnType<typeof supabase.rpc>> | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const result = await supabase
-      .rpc('apply_loan_payment', { p_loan_id: loanId, p_amount: amount, p_idempotency_key: idempotencyKey })
+      .rpc('apply_loan_payment', {
+        p_loan_id: loanId,
+        p_amount: amount,
+        p_idempotency_key: idempotencyKey,
+        p_or_number: receiptFields?.orNumber ?? null,
+        p_customer_id: receiptFields?.customerId ?? null,
+        p_collector_id: receiptFields?.collectorId ?? null,
+        p_payment_date: receiptFields?.paymentDate ?? null,
+        p_payment_time: receiptFields?.paymentTime ?? null,
+        p_gps_lat: receiptFields?.gpsLat ?? null,
+        p_gps_lng: receiptFields?.gpsLng ?? null,
+        p_location_address: receiptFields?.locationAddress ?? null,
+        p_notes: receiptFields?.notes ?? null,
+      })
       .single();
     if (!result.error && result.data) return result;
     last = result;
@@ -668,7 +710,22 @@ export default function PaymentsPage() {
     // against this loan since then, that local number is stale). The RPC
     // reads-and-writes as one row-locked operation, so the balance it
     // returns is always correct regardless of how old the local state is.
-    const { data: rpcResult, error: rpcError } = await callApplyLoanPaymentWithRetry(form.loan_id, Number(form.amount_paid), idempotencyKey);
+    const { data: rpcResult, error: rpcError } = await callApplyLoanPaymentWithRetry(
+      form.loan_id,
+      Number(form.amount_paid),
+      idempotencyKey,
+      {
+        orNumber,
+        customerId: selectedLoan?.customer_id ?? null,
+        collectorId: collectorIdForPosting,
+        paymentDate,
+        paymentTime: now.toTimeString().split(' ')[0],
+        gpsLat: location?.lat ?? null,
+        gpsLng: location?.lng ?? null,
+        locationAddress: locationAddress ?? null,
+        notes: form.notes || (isWrittenOffLoan ? 'Write-off recovery payment' : null),
+      },
+    );
     if (rpcError || !rpcResult) {
       // Every failure here — network-looking (no navigator signal, timed
       // out mid-request — has no Postgres `.code`) OR a genuine Postgres
@@ -695,91 +752,18 @@ export default function PaymentsPage() {
     }
     const balanceBeforePayment = Number((rpcResult as any).previous_balance);
     const authoritativeNewBalance = Number((rpcResult as any).new_balance);
-
-    if ((rpcResult as any).already_applied) {
-      // The BALANCE for this exact attempt was already applied. That does
-      // not mean the payment was fully recorded — see the migration: in the
-      // lost-response case the client never got as far as inserting the
-      // receipt/payment rows. So only stop here if a payments row for this
-      // key genuinely exists; otherwise fall through and record it, using
-      // the balance the original call produced (returned above).
-      const { data: existingPayment } = await supabase
-        .from('payments').select('id').eq('idempotency_key', idempotencyKey).maybeSingle();
-      if (existingPayment) {
-        toast({ title: 'Success', description: 'Payment already recorded.' });
-        setForm({ ...form, loan_id: '', amount_paid: '', payment_date: todayStr(), notes: '' });
-        setDialogOpen(false);
-        setSaving(false);
-        loadPayments();
-        loadLoans();
-        return;
-      }
-    }
-
-    // Create receipt first
-    const { data: receipt, error: receiptError } = await supabase.from('receipts').insert({
-      or_number: orNumber,
-      loan_id: form.loan_id,
-      customer_id: selectedLoan?.customer_id ?? null,
-      collector_id: collectorIdForPosting,
-      amount: Number(form.amount_paid),
-      remaining_balance: authoritativeNewBalance,
-      payment_date: paymentDate,
-      qr_data: JSON.stringify({ or: orNumber, loan: selectedLoan?.loan_number, amount: form.amount_paid }),
-    }).select().single();
-
-    if (receiptError) {
-      // The RPC above already succeeded — the balance is genuinely
-      // decremented in the database at this point, confirmed, not a maybe.
-      // Failing here used to just show an error and return, discarding
-      // idempotencyKey exactly like the RPC-failure gap this same file's
-      // callApplyLoanPaymentWithRetry section was fixed for — leaving the
-      // collector to tap Submit again with a fresh key, which would
-      // decrement the balance a SECOND time since apply_loan_payment has
-      // no way to know this fresh key represents the same real-world
-      // payment. Queuing instead is safe regardless of what synced later
-      // does: it re-calls the RPC with the same key (gets back
-      // already_applied and the correct balance, no second decrement),
-      // then writes the receipt/payment this attempt never got to.
-      // queueOfflinePayment shows its own toast — nothing more to add here.
-      setSaving(false);
-      queueOfflinePayment(idempotencyKey);
-      return;
-    }
-
-    // Create payment
-    const { error: payError } = await supabase.from('payments').insert({
-      loan_id: form.loan_id,
-      customer_id: selectedLoan?.customer_id ?? null,
-      collector_id: collectorIdForPosting,
-      receipt_id: receipt.id,
-      idempotency_key: idempotencyKey,
-      amount_paid: Number(form.amount_paid),
-      principal: 0,
-      interest: 0,
-      penalty: 0,
-      remaining_balance: authoritativeNewBalance,
-      payment_date: paymentDate,
-      payment_time: now.toTimeString().split(' ')[0],
-      gps_lat: location?.lat ?? null,
-      gps_lng: location?.lng ?? null,
-      location_address: locationAddress ?? null,
-      notes: form.notes || (isWrittenOffLoan ? 'Write-off recovery payment' : null),
-    });
-
-    if (payError) {
-      // Same reasoning as the receiptError branch above — the balance is
-      // already decremented (the RPC succeeded), so this can't be treated
-      // as a plain failure without risking a second decrement on retry.
-      // queueOfflinePayment mints its own fresh OR number for the queued
-      // attempt rather than reusing the one already stamped on `receipt`
-      // above, so that row is left orphaned (no matching payment) — a
-      // harmless leftover receipt/OR gap, not a financial double-count,
-      // and the far smaller risk to accept here.
-      setSaving(false);
-      queueOfflinePayment(idempotencyKey);
-      return;
-    }
+    // The RPC now writes the receipt + payment row atomically, in the SAME
+    // transaction as the balance update (see
+    // supabase/make_apply_loan_payment_atomic.sql) — by the time this call
+    // has returned without error, both already exist for real, whether
+    // this was a brand-new attempt or a retry/resync of one whose earlier
+    // response got lost (already_applied === true, but the RPC still
+    // checks for and fills in a genuinely-missing receipt/payment before
+    // returning, rather than assuming the balance update proves the rest
+    // landed too). There are no longer two separate inserts here for a
+    // client-side interruption to land between — that exact gap is how the
+    // same ₱200 ended up debited from Maricor Tanjoco's balance twice,
+    // each with only one receipt to show for it (Sep 17 and Sep 23, 2026).
 
     // No journal entry here on purpose — the cash a collector receives in
     // the field isn't in the company's vault/bank yet, so it isn't posted
@@ -928,79 +912,40 @@ export default function PaymentsPage() {
     let failed = 0;
 
     for (const item of queue) {
-      let newBalance = item.appliedBalance;
-
-      if (!item.balanceApplied) {
-        const { data: rpcResult, error: rpcError } = await supabase
-          .rpc('apply_loan_payment', { p_loan_id: item.loanId, p_amount: item.amount, p_idempotency_key: item.idempotencyKey })
-          .single();
-        if (rpcError || !rpcResult) {
-          failed++;
-          updatePendingPayment(item.id, { syncError: friendlySyncError(rpcError?.message) });
-          continue;
-        }
-        // already_applied here is the normal, expected outcome for anything
-        // queued by the network-failure fallback in handleSubmit: the
-        // original online call really did apply the balance before its
-        // response was lost. The RPC returns that original result and
-        // doesn't deduct again. Either way newBalance is authoritative.
-        newBalance = Number((rpcResult as any).new_balance);
-        updatePendingPayment(item.id, { balanceApplied: true, appliedBalance: newBalance, syncError: null });
-      }
-
-      // Whether or not the balance was applied on an earlier attempt, the
-      // receipt/payment may or may not have been written — a lost response
-      // specifically means it wasn't. Keyed off idempotency_key so the same
-      // attempt is never recorded twice, and never silently dropped either.
-      const { data: existingPayment } = await supabase
-        .from('payments').select('id').eq('idempotency_key', item.idempotencyKey).maybeSingle();
-      if (existingPayment) {
-        succeeded++;
-        removePendingPayment(item.id);
-        continue;
-      }
-
-      const { data: receipt, error: receiptError } = await supabase.from('receipts').insert({
-        or_number: item.orNumber,
-        loan_id: item.loanId,
-        customer_id: item.customerId,
-        collector_id: item.collectorId,
-        amount: item.amount,
-        remaining_balance: newBalance,
-        payment_date: item.paymentDate,
-        qr_data: JSON.stringify({ or: item.orNumber, loan: item.loanNumber, amount: item.amount }),
-      }).select().single();
-
-      if (receiptError) {
+      // One atomic call now does everything the balance-only RPC + the
+      // existingPayment check + the two separate inserts used to do as
+      // four separate round-trips (see
+      // supabase/make_apply_loan_payment_atomic.sql). Safe to call every
+      // time regardless of item.balanceApplied from an older, partially-
+      // synced attempt: the idempotency key makes the balance step a
+      // no-op if it already landed, and the RPC still checks for and
+      // fills in a genuinely-missing receipt/payment before returning —
+      // the exact gap that let the same ₱200 get debited from Maricor
+      // Tanjoco's balance twice is now impossible to land inside, whether
+      // hit live or during a sync like this one.
+      const { data: rpcResult, error: rpcError } = await supabase
+        .rpc('apply_loan_payment', {
+          p_loan_id: item.loanId,
+          p_amount: item.amount,
+          p_idempotency_key: item.idempotencyKey,
+          p_or_number: item.orNumber,
+          p_customer_id: item.customerId,
+          p_collector_id: item.collectorId,
+          p_payment_date: item.paymentDate,
+          p_payment_time: item.paymentTime,
+          p_gps_lat: item.gpsLat,
+          p_gps_lng: item.gpsLng,
+          p_location_address: item.locationAddress,
+          p_notes: null,
+        })
+        .single();
+      if (rpcError || !rpcResult) {
         failed++;
-        updatePendingPayment(item.id, { syncError: friendlySyncError(receiptError.message) });
+        updatePendingPayment(item.id, { syncError: friendlySyncError(rpcError?.message) });
         continue;
       }
-
-      const { error: payError } = await supabase.from('payments').insert({
-        loan_id: item.loanId,
-        customer_id: item.customerId,
-        collector_id: item.collectorId,
-        receipt_id: receipt.id,
-        idempotency_key: item.idempotencyKey,
-        amount_paid: item.amount,
-        principal: 0,
-        interest: 0,
-        penalty: 0,
-        remaining_balance: newBalance,
-        payment_date: item.paymentDate,
-        payment_time: item.paymentTime,
-        gps_lat: item.gpsLat,
-        gps_lng: item.gpsLng,
-        location_address: item.locationAddress,
-        notes: null,
-      });
-
-      if (payError) {
-        failed++;
-        updatePendingPayment(item.id, { syncError: friendlySyncError(payError.message) });
-        continue;
-      }
+      const newBalance = Number((rpcResult as any).new_balance);
+      updatePendingPayment(item.id, { balanceApplied: true, appliedBalance: newBalance, syncError: null });
 
       removePendingPayment(item.id);
       // Overwrites the "pending" version this OR number was cached under

@@ -101,6 +101,15 @@ export default function AttendancePage() {
   // checked in" guards below (see Julie Ann Pendarlipe's 8+ duplicate rows,
   // Kat, Sep 2026).
   const confirmingRef = useRef(false);
+  // A toast alone was apparently too easy to miss/not trust — Kat's Sep
+  // 2026 report of people unsure whether their check-in/out actually went
+  // through (some genuinely didn't tap Confirm at all; a toast that's easy
+  // to miss doesn't help someone tell which happened to them). This is a
+  // much harder-to-miss, explicit confirmation shown AFTER the camera
+  // closes, over the now-visible Attendance list, so "check the Attendance
+  // tab" in its own message is immediately actionable, not just words.
+  const [successModalOpen, setSuccessModalOpen] = useState(false);
+  const [successModalMessage, setSuccessModalMessage] = useState('');
   const [pendingAttendance, setPendingAttendance] = useState<PendingAttendance[]>([]);
   const [pendingAttendanceOpen, setPendingAttendanceOpen] = useState(false);
   const [syncingAttendance, setSyncingAttendance] = useState(false);
@@ -612,7 +621,7 @@ export default function AttendancePage() {
         message: `${name} checked in${lateMinutes > 0 ? ` late (${lateMinutes} min)` : ''} and is awaiting review.`,
         url: '/attendance',
       }, checkedInEmployee?.branch_id);
-      toast({ title: 'Success', description: 'Checked in successfully' });
+      setSuccessModalMessage(`Your attendance has been submitted, ${name}. Check the Attendance tab to confirm it's there.`);
     } else if (checkoutTargetId) {
       const now = new Date();
       const checkoutRecord = records.find(r => r.id === checkoutTargetId);
@@ -648,7 +657,11 @@ export default function AttendancePage() {
         setSubmitting(false);
         return;
       }
-      toast({ title: 'Success', description: 'Checked out' });
+      const checkedOutName = checkoutRecord?.employees
+        ? `${checkoutRecord.employees.first_name ?? ''} ${checkoutRecord.employees.last_name ?? ''}`.trim()
+        : null;
+      const subject = checkedOutName ? `${checkedOutName}’s` : 'Your';
+      setSuccessModalMessage(`${subject} attendance has been submitted. Check the Attendance tab to confirm it's there.`);
     }
 
     // Only ever reached on success now — both branches above return early on
@@ -663,6 +676,11 @@ export default function AttendancePage() {
     setSubmitting(false);
     closeCamera();
     load();
+    // Shown over the now-visible Attendance list (camera already closed
+    // above) rather than a toast — Kat's Sep 2026 report was people unsure
+    // whether their tap actually went through, and a toast is easy enough
+    // to miss/distrust that it wasn't settling that doubt for them.
+    setSuccessModalOpen(true);
     } finally {
       confirmingRef.current = false;
     }
@@ -1525,6 +1543,24 @@ export default function AttendancePage() {
               {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Delete
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Explicit, hard-to-miss confirmation after a successful check-in or
+          check-out — see successModalMessage above for why this replaced a
+          plain toast for this specific moment. */}
+      <Dialog open={successModalOpen} onOpenChange={setSuccessModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-success">
+              <CheckCircle className="w-5 h-5" />
+              Submitted
+            </DialogTitle>
+            <DialogDescription>{successModalMessage}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setSuccessModalOpen(false)}>OK</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

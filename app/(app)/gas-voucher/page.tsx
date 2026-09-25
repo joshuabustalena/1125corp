@@ -208,30 +208,47 @@ export default function GasVoucherPage() {
       return;
     }
 
-    // Per branch: Dinalupihan gas used to debit Balanga's Transportation
-    // Expense, because '5020' is Balanga's account.
-    const transportCode = await resolveBranchAccountCode(
-      'Transportation Expense', branchId, branches.find(b => b.id === branchId)?.name,
-    );
+    // Wrapped in try/catch — resolveBranchAccountCode/postJournalEntry have
+    // no protection of their own against a connection failure propagating
+    // out uncaught, which would otherwise skip the journal entry (and the
+    // setSaving(false) below, leaving the button stuck) with nothing on
+    // screen to explain why. See Reynaldo Taduyo's cash voucher for what
+    // this exact silence costs someone trying to trust the books.
+    let gasVoucherLedger: { ok: boolean; missingCodes: string[] } | null = null;
+    try {
+      // Per branch: Dinalupihan gas used to debit Balanga's Transportation
+      // Expense, because '5020' is Balanga's account.
+      const transportCode = await resolveBranchAccountCode(
+        'Transportation Expense', branchId, branches.find(b => b.id === branchId)?.name,
+      );
 
-    const gasVoucherLedger = await postJournalEntry({
-      entryDate: date,
-      description: `Gas Allowance — ${branch?.name ?? ''} — ${formatDate(date)}`,
-      reference: voucherNumber,
-      source: 'gas_voucher',
-      sourceId: voucher?.id ?? null,
-      createdBy: profile?.id ?? null,
-      branchId: branchId || null,
-      lines: [
-        { accountCode: transportCode ?? '', debit: grandTotal, memo: 'Transportation Expense (Gas)' },
-        { accountCode: cashAccountCode, credit: grandTotal, memo: cashAccounts.find(a => a.code === cashAccountCode)?.name ?? 'Cash' },
-      ],
-    });
+      gasVoucherLedger = await postJournalEntry({
+        entryDate: date,
+        description: `Gas Allowance — ${branch?.name ?? ''} — ${formatDate(date)}`,
+        reference: voucherNumber,
+        source: 'gas_voucher',
+        sourceId: voucher?.id ?? null,
+        createdBy: profile?.id ?? null,
+        branchId: branchId || null,
+        lines: [
+          { accountCode: transportCode ?? '', debit: grandTotal, memo: 'Transportation Expense (Gas)' },
+          { accountCode: cashAccountCode, credit: grandTotal, memo: cashAccounts.find(a => a.code === cashAccountCode)?.name ?? 'Cash' },
+        ],
+      });
+    } catch {
+      gasVoucherLedger = null;
+    }
 
-    // A missing account code now blocks the whole entry rather than writing a
-    // half-balanced one (see lib/ledger.ts) — so say so, otherwise the ledger
-    // line just quietly never appears.
-    if (gasVoucherLedger.missingCodes.length > 0) {
+    if (!gasVoucherLedger) {
+      toast({
+        title: 'Ledger entry not posted',
+        description: 'The gas voucher was generated, but a connection issue stopped the journal entry from being created. Check Journal Entries and post it manually if it’s missing.',
+        variant: 'destructive',
+      });
+    } else if (gasVoucherLedger.missingCodes.length > 0) {
+      // A missing account code now blocks the whole entry rather than
+      // writing a half-balanced one (see lib/ledger.ts) — so say so,
+      // otherwise the ledger line just quietly never appears.
       toast({
         title: 'Ledger entry not posted',
         description: `Hindi mahanap sa Chart of Accounts ang account(s) ${gasVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
@@ -239,8 +256,7 @@ export default function GasVoucherPage() {
       });
     }
 
-
-    toast({ title: 'Success', description: 'Gas voucher generated and journal entry posted' });
+    toast({ title: 'Success', description: 'Gas voucher generated' + (gasVoucherLedger?.ok ? ' and journal entry posted' : '') });
     getNextVoucherNumber().then(setVoucherNumber);
     loadData();
     setSaving(false);
