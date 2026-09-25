@@ -24,6 +24,7 @@ import { formatCurrency, formatDate, exportToCSV, formatCustomerName, todayStr }
 import { takeOrNumber, nextOrNumberOnline, ensureOrPool, getOrPoolCount } from '@/lib/or-numbers';
 import { PaymentReceiptDialog, buildReceiptDataFromPayment } from '@/components/payment-receipt-dialog';
 import { getStoredReceipts, cacheReceiptForOffline, type CachedReceipt } from '@/lib/offline-receipts';
+import { getCachedLoans, cacheLoans } from '@/lib/offline-loans-cache';
 import {
   getPendingPayments, queuePendingPayment, updatePendingPayment, removePendingPayment,
   type PendingPayment,
@@ -285,7 +286,20 @@ export default function PaymentsPage() {
       // collector_id above, which is tighter still.
       query = query.eq('branch_id', profile?.branch_id ?? NO_BRANCH);
     }
-    const { data } = await query;
+    const { data, error } = await query;
+
+    if (error || !data) {
+      // No network at all (opening the app fresh with zero signal — see
+      // public/sw.js and lib/offline-loans-cache.ts for the full picture)
+      // — fall back to whatever this device last actually saw, instead of
+      // leaving the Loan picker empty. Skips the renewal-lock filtering
+      // below entirely since that needs its own live query too; the rare
+      // case of a loan getting locked for renewal since this was last
+      // cached is an accepted tradeoff, not a silent data-integrity risk —
+      // the real payment RPC still re-reads live state at post time.
+      setLoans(getCachedLoans());
+      return;
+    }
 
     // A loan already has a renewal application in flight (still 'pending'
     // or 'approved', not yet disbursed) — Kat's Sep 2026 request. That
@@ -321,6 +335,7 @@ export default function PaymentsPage() {
       || String(a.loan_number).localeCompare(String(b.loan_number))
     );
     setLoans(sorted);
+    cacheLoans(sorted);
   }
 
   function handleLoanSelect(loanId: string) {
