@@ -127,13 +127,19 @@ export default function AccountingPage() {
       : Promise.resolve([] as any[]);
     let paymentsQuery = supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', today);
     if (branchFilter !== 'all') paymentsQuery = paymentsQuery.eq('customers.branch_id', branchFilter);
-    let loansQuery = supabase.from('loans').select('remaining_balance').eq('status', 'active');
-    if (branchFilter !== 'all') loansQuery = loansQuery.eq('branch_id', branchFilter);
+    // Active loans are already at 471 company-wide and only grow — paginated
+    // so Total Receivable can't silently drop whichever loans land past
+    // PostgREST's 1000-row cap, same class of bug as cashLinesPromise above.
+    const loansPromise = selectAllRows<any>(() => {
+      let q = supabase.from('loans').select('remaining_balance').eq('status', 'active');
+      if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+      return q;
+    });
 
-    const [cashLines, { data: paymentsToday }, { data: activeLoans }] = await Promise.all([
+    const [cashLines, { data: paymentsToday }, activeLoans] = await Promise.all([
       cashLinesPromise,
       paymentsQuery,
-      loansQuery,
+      loansPromise,
     ]);
 
     const cashByBucket: Record<string, number> = {};
@@ -161,7 +167,7 @@ export default function AccountingPage() {
       todayCollections: (paymentsToday ?? []).reduce((s, p: any) => s + Number(p.amount_paid), 0),
       todayCashRelease,
       todayCashExpenses,
-      totalReceivable: (activeLoans ?? []).reduce((s, l: any) => s + Number(l.remaining_balance), 0),
+      totalReceivable: (activeLoans as any[]).reduce((s, l: any) => s + Number(l.remaining_balance), 0),
     });
   }
 

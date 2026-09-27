@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -18,7 +19,9 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
-import { formatCurrency, formatDate, exportToCSV, formatCustomerName, dateToStr, todayStr } from '@/lib/format';
+import { formatCurrency, formatDate, formatTime, exportToCSV, formatCustomerName, dateToStr, todayStr } from '@/lib/format';
+import { buildPrintHtml } from '@/lib/print-document';
+import { COMPANY_NAME_DISPLAY } from '@/lib/document-branding';
 import {
   FileBarChart, Download, Loader2, Printer, TrendingUp, Users, Wallet, Landmark,
 } from 'lucide-react';
@@ -78,8 +81,25 @@ function overdueOrDelayFor(l: any, today: Date): { amount: number; isPastDue: bo
 const MONEY_COLUMNS = new Set([
   'Amount', 'CashCollected', 'Offset', 'FirstPayment', 'TotalDeduction', 'TotalCollection',
   'TotalCollections', 'TotalRelease', 'TotalInterest', 'ServiceFee', 'NetProceeds',
-  'OverdueAmount', 'Balance',
+  'OverdueAmount', 'Balance', 'AmountReleased',
 ]);
+
+// Same labels the Report Type dropdown shows — reused so the printed
+// document's title always says which report it is, instead of the raw
+// 'monthly_release' key.
+function reportTypeLabel(type: string, isFieldCollector: boolean): string {
+  switch (type) {
+    case 'daily_collection': return 'Daily Collection';
+    case 'weekly_collection': return 'Weekly Collection (per Area)';
+    case 'monthly_collection': return 'Monthly Collection (per Area)';
+    case 'branch_performance': return isFieldCollector ? 'Release (My Area)' : 'Branch Performance';
+    case 'monthly_release': return 'Monthly Release';
+    case 'overdue_amount': return 'Overdue Amount & Rate';
+    case 'customers_per_area': return isFieldCollector ? 'All Customers' : 'Customers per Area';
+    case 'delinquent_customers': return 'Delayed / Past-Due Customers';
+    default: return 'Report';
+  }
+}
 
 export default function ReportsPage() {
   const { toast } = useToast();
@@ -94,6 +114,9 @@ export default function ReportsPage() {
   const [reportType, setReportType] = useState('daily_collection');
   const [startDate, setStartDate] = useState(dateToStr(new Date(Date.now() - 30 * 86400000)));
   const [endDate, setEndDate] = useState(todayStr());
+  // Monthly Release picks one calendar month instead of a date range — Kat's
+  // request: "buong September, makikita nila kung sino-sino yung narelease".
+  const [monthFilter, setMonthFilter] = useState(todayStr().substring(0, 7));
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ total: 0, count: 0, average: 0, overdueRate: 0 });
@@ -108,6 +131,12 @@ export default function ReportsPage() {
   // otherwise filteredCustomerIds() returns an empty list (rendering an
   // empty report) and the per-area groupings all collapse to "Unassigned".
   const [filtersLoaded, setFiltersLoaded] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const printPageRefs = useRef<(HTMLDivElement | null)[]>([]);
+  // Same-size chunks as Collection List's printable worksheet — a full table
+  // with its own column headings per sheet, instead of one giant image
+  // shrunk down to fit a single page.
+  const ROWS_PER_PRINT_PAGE = 32;
 
   useEffect(() => { loadFilterOptions(); }, []);
 
@@ -364,6 +393,25 @@ export default function ReportsPage() {
           .sort((a: any, b: any) => b.OverdueAmount - a.OverdueAmount);
         break;
       }
+      // One row per released loan within the chosen calendar month — matches
+      // the client's own Cash Flow/Count sheet (Date, Name, Amount Released),
+      // just generated from the ledger instead of typed in by hand.
+      case 'monthly_release': {
+        const [y, m] = monthFilter.split('-').map(Number);
+        const monthStart = `${monthFilter}-01`;
+        const monthEnd = dateToStr(new Date(y, m, 0));
+        let q = supabase.from('loans').select('release_date, release_amount, branch_id, area_id, customers(first_name, last_name)')
+          .gte('release_date', monthStart).lte('release_date', monthEnd).order('release_date');
+        if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
+        else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
+        const { data } = await q;
+        reportData = (data ?? []).map((l: any) => ({
+          Date: l.release_date,
+          Name: formatCustomerName(l.customers?.first_name, l.customers?.last_name),
+          AmountReleased: Number(l.release_amount) || 0,
+        }));
+        break;
+      }
       case 'customers_per_area': {
         let q = supabase.from('customers').select('area_id, branch_id, areas(name)').eq('status', 'active');
         if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
@@ -408,7 +456,7 @@ export default function ReportsPage() {
     }
 
     setData(reportData);
-    const total = reportData.reduce((s, r) => s + (r.Amount ?? r.TotalCollection ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.Customers ?? 0), 0);
+    const total = reportData.reduce((s, r) => s + (r.Amount ?? r.TotalCollection ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.AmountReleased ?? r.Customers ?? 0), 0);
     setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0, overdueRate: overallOverdueRate });
     setLoading(false);
   }
@@ -419,8 +467,69 @@ export default function ReportsPage() {
     toast({ title: 'Success', description: 'Report exported' });
   }
 
-  function handlePrint() {
-    window.print();
+  // Branch/Area/Period line shown under the report title, on-screen filter
+  // card values translated to their display names.
+  const branchLabel = isFieldCollector
+    ? (myArea?.name ?? 'My Area')
+    : (branchFilter === 'all' ? 'All Branches' : (branches.find(b => b.id === branchFilter)?.name ?? '—'));
+  const areaLabel = isFieldCollector
+    ? (myArea?.name ?? '—')
+    : (areaFilter === 'all' ? 'All Areas' : (areas.find(a => a.id === areaFilter)?.name ?? '—'));
+  const periodLabel = reportType === 'monthly_release'
+    ? new Date(`${monthFilter}-01`).toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+    : `${formatDate(startDate)} – ${formatDate(endDate)}`;
+
+  // Same chunk-per-sheet approach as Collection List's printable worksheet —
+  // each page keeps its own full-size column headings instead of one long
+  // table image shrunk down to fit a single sheet (unreadable past a
+  // handful of rows, which most of these reports easily exceed).
+  const printPages: (typeof data)[] = [];
+  for (let i = 0; i < data.length; i += ROWS_PER_PRINT_PAGE) {
+    printPages.push(data.slice(i, i + ROWS_PER_PRINT_PAGE));
+  }
+  if (printPages.length === 0) printPages.push([]);
+  const printColumns = data.length > 0 ? Object.keys(data[0]) : [];
+
+  function formatCell(key: string, val: unknown): string {
+    if (key === 'OverdueRate' && typeof val === 'number') return `${val}%`;
+    if (typeof val === 'number' && MONEY_COLUMNS.has(key)) return formatCurrency(val);
+    return String(val ?? '');
+  }
+
+  async function handlePrint() {
+    if (data.length === 0) return;
+    printPageRefs.current.length = printPages.length;
+    const refs = printPageRefs.current.filter(Boolean) as HTMLDivElement[];
+    if (refs.length === 0) return;
+    // Opened synchronously, still inside the click's trusted-event window —
+    // any `await` before window.open() (html2canvas takes a while over
+    // several pages) makes some browsers no longer treat it as a direct
+    // response to the click and silently block it as a pop-up. Filling in
+    // the real content afterward, once it's ready, avoids that.
+    const printWindow = window.open('', '_blank', 'width=900,height=1000');
+    if (!printWindow) {
+      toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the report', variant: 'destructive' });
+      return;
+    }
+    printWindow.document.write('<html><body style="font-family:sans-serif;padding:40px;color:#666">Preparing report…</body></html>');
+    setPrinting(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const pages: { url: string; width: number; height: number }[] = [];
+      for (const ref of refs) {
+        const canvas = await html2canvas(ref, { backgroundColor: '#ffffff', scale: 2, width: 900, windowWidth: 900 });
+        pages.push({ url: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
+      }
+      printWindow.document.open();
+      printWindow.document.write(buildPrintHtml(`${reportTypeLabel(reportType, isFieldCollector)} Report`, pages, 8.5, 13));
+      printWindow.document.close();
+      printWindow.onload = () => printWindow.print();
+      printWindow.onafterprint = () => printWindow.close();
+    } catch (err: any) {
+      printWindow.close();
+      toast({ title: 'Print failed', description: err?.message ?? 'Could not generate the report for printing', variant: 'destructive' });
+    }
+    setPrinting(false);
   }
 
   // Weekly/Monthly rows now carry BOTH a period and an Area, so the label has
@@ -430,17 +539,20 @@ export default function ReportsPage() {
     const period = d.Month ?? d.Week;
     const name = period
       ? (d.Area ? `${period} · ${d.Area}` : period)
-      : (d.Branch ?? d.Area ?? d.Date ?? `Row ${i + 1}`);
+      : (d.Branch ?? d.Area ?? d.Name ?? d.Date ?? `Row ${i + 1}`);
     return {
       name,
-      value: d.TotalCollections ?? d.TotalCollection ?? d.Amount ?? d.OverdueAmount ?? d.Customers ?? d.Balance ?? 0,
+      value: d.TotalCollections ?? d.TotalCollection ?? d.Amount ?? d.OverdueAmount ?? d.Customers ?? d.Balance ?? d.AmountReleased ?? 0,
     };
   });
 
   return (
     <div className="space-y-6">
       <PageHeader title="Reports" description="Generate and export financial reports">
-        <Button variant="outline" size="sm" onClick={handlePrint}><Printer className="w-4 h-4 mr-2" />Print</Button>
+        <Button variant="outline" size="sm" onClick={handlePrint} disabled={printing || data.length === 0}>
+          {printing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Printer className="w-4 h-4 mr-2" />}
+          Print
+        </Button>
         <Button variant="outline" size="sm" onClick={handleExport} disabled={data.length === 0}><Download className="w-4 h-4 mr-2" />Export CSV</Button>
         <Button size="sm" onClick={generateReport}><FileBarChart className="w-4 h-4 mr-2" />Generate</Button>
       </PageHeader>
@@ -497,20 +609,30 @@ export default function ReportsPage() {
                   <SelectItem value="weekly_collection">Weekly Collection (per Area)</SelectItem>
                   <SelectItem value="monthly_collection">Monthly Collection (per Area)</SelectItem>
                   <SelectItem value="branch_performance">{isFieldCollector ? 'Release (My Area)' : 'Branch Performance'}</SelectItem>
+                  <SelectItem value="monthly_release">Monthly Release</SelectItem>
                   <SelectItem value="overdue_amount">Overdue Amount &amp; Rate</SelectItem>
                   <SelectItem value="customers_per_area">{isFieldCollector ? 'All Customers' : 'Customers per Area'}</SelectItem>
                   <SelectItem value="delinquent_customers">Delayed / Past-Due Customers</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2 flex-1">
-              <Label>Start Date</Label>
-              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-            </div>
-            <div className="space-y-2 flex-1">
-              <Label>End Date</Label>
-              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-            </div>
+            {reportType === 'monthly_release' ? (
+              <div className="space-y-2 flex-1">
+                <Label>Month</Label>
+                <Input type="month" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} />
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2 flex-1">
+                  <Label>Start Date</Label>
+                  <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                </div>
+                <div className="space-y-2 flex-1">
+                  <Label>End Date</Label>
+                  <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                </div>
+              </>
+            )}
             <Button onClick={generateReport}>Generate</Button>
           </div>
         </CardContent>
@@ -597,6 +719,98 @@ export default function ReportsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Hidden printable copy — same letterhead (logo + company name) as
+          every other printed document in the app, with the report type as
+          the title so a printed page is self-explanatory on its own. */}
+      {typeof document !== 'undefined' && createPortal(
+        <div style={{ position: 'fixed', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1 }}>
+          {printPages.map((pageRows, pageIndex) => {
+            const now = new Date();
+            return (
+              <div
+                key={pageIndex}
+                ref={(el) => { printPageRefs.current[pageIndex] = el; }}
+                style={{ width: 900, background: '#fff', color: '#111', padding: 32, fontFamily: '"Times New Roman", Calibri, serif' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <img src="/image/1125_Corp_Logo.png" alt="1125Corp" style={{ width: 52, height: 52, objectFit: 'contain' }} />
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
+                  </div>
+                  <table style={{ fontSize: 11 }}>
+                    <tbody>
+                      <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Report Date:</td><td>{formatDate(now.toISOString())}</td></tr>
+                      <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Report Time:</td><td>{formatTime(now.toISOString())}</td></tr>
+                      <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Printed by:</td><td>{profile?.role_name ?? ''}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#1F4E79', letterSpacing: 0.5, marginBottom: 4 }}>
+                  {reportTypeLabel(reportType, isFieldCollector).toUpperCase()} REPORT
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 24, fontSize: 12, color: '#444', marginBottom: 4 }}>
+                  <span><strong>Branch:</strong> {branchLabel}</span>
+                  <span><strong>Area:</strong> {areaLabel}</span>
+                  <span><strong>Period:</strong> {periodLabel}</span>
+                </div>
+                {printPages.length > 1 && (
+                  <div style={{ textAlign: 'center', fontSize: 11, color: '#666', marginBottom: 10 }}>Page {pageIndex + 1} of {printPages.length}</div>
+                )}
+
+                {/* Summary stats only on the first sheet — repeating them on
+                    every page would just be noise on a multi-page report. */}
+                {pageIndex === 0 && (
+                  <div style={{ display: 'flex', gap: 14, marginBottom: 16, marginTop: 10 }}>
+                    <div style={{ flex: 1, padding: 12, background: '#f4f6f9', borderRadius: 6, textAlign: 'center' }}>
+                      <div style={{ fontSize: 10, color: '#666' }}>{reportType === 'customers_per_area' ? 'Total Customers' : 'Total'}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: '#0B7A3D' }}>
+                        {reportType === 'customers_per_area' ? stats.total : formatCurrency(stats.total)}
+                      </div>
+                    </div>
+                    <div style={{ flex: 1, padding: 12, background: '#f4f6f9', borderRadius: 6, textAlign: 'center' }}>
+                      <div style={{ fontSize: 10, color: '#666' }}>Records</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: '#1F4E79' }}>{stats.count}</div>
+                    </div>
+                    {reportType === 'overdue_amount' ? (
+                      <div style={{ flex: 1, padding: 12, background: '#f4f6f9', borderRadius: 6, textAlign: 'center' }}>
+                        <div style={{ fontSize: 10, color: '#666' }}>Overdue Rate</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#B91C1C' }}>{stats.overdueRate}%</div>
+                      </div>
+                    ) : reportType !== 'customers_per_area' ? (
+                      <div style={{ flex: 1, padding: 12, background: '#f4f6f9', borderRadius: 6, textAlign: 'center' }}>
+                        <div style={{ fontSize: 10, color: '#666' }}>Average</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#1F4E79' }}>{formatCurrency(stats.average)}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ background: '#0B1F3A', color: '#fff' }}>
+                      {printColumns.map(key => (
+                        <th key={key} style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #000' }}>{key}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((row, i) => (
+                      <tr key={i}>
+                        {printColumns.map(key => (
+                          <td key={key} style={{ padding: '5px 8px', border: '1px solid #000' }}>{formatCell(key, row[key])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

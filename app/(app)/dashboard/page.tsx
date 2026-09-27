@@ -211,6 +211,13 @@ export default function DashboardPage() {
         cashAccounts.map((a: any) => [a.id, cashBucketFor(a.name)])
       );
 
+      // Payments alone are now 4,770/month and 1,502/week company-wide — any
+      // of these unpaginated .select() calls that sum/count over a real date
+      // range (not a single day, and not the deliberately small .limit(5)
+      // widgets below) silently drops whatever falls past PostgREST's 1000-
+      // row cap. Confirmed live: Monthly Collections was reading ₱1.70M
+      // against a true ₱4.94M, Weekly Collections ₱647K against a true
+      // ₱1.00M. selectAllRows pages through every matching row instead.
       const [
         customers, newCustomers, loans, allLoanStatuses,
         paymentsToday, paymentsYesterday, paymentsMonth, paymentsLastMonth,
@@ -220,22 +227,22 @@ export default function DashboardPage() {
       ] = await Promise.all([
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true })),
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
-        scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date, area_id, areas(name)').eq('status', 'active')),
-        scopeByBranch(supabase.from('loans').select('status')),
+        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date, area_id, areas(name)').eq('status', 'active'))),
+        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('status'))),
         scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', today)),
         scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', yesterday)),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', monthStart)),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd)),
+        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', monthStart))),
+        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd))),
         scopeByCustomerIds(supabase.from('payments').select('*, customers!inner(branch_id), customers(first_name, last_name), loans(loan_number)').order('created_at', { ascending: false }).limit(5)),
         scopeByBranch(supabase.from('loans').select('*, customers(first_name, last_name)').eq('status', 'active').order('due_date', { ascending: true }).limit(5)),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', sevenDaysAgo)),
+        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', sevenDaysAgo))),
         supabase.from('journal_entries').select('entry_date, journal_entry_lines(credit, chart_of_accounts(account_type))').gte('entry_date', sevenDaysAgo),
-        scopeByBranch(supabase.from('customers').select('area_id, areas(name)').eq('status', 'active')),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', fourWeeksAgo)),
-        scopeByBranch(supabase.from('loans').select('release_amount, disbursed_at').not('disbursed_at', 'is', null).gte('disbursed_at', fourWeeksAgo)),
-        scopeByBranch(supabase.from('gas_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo)),
-        scopeByBranch(supabase.from('general_cash_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo)),
-        scopeByEmployeeIds(supabase.from('attendance').select('status').gte('date', monthStart)),
+        selectAllRows<any>(() => scopeByBranch(supabase.from('customers').select('area_id, areas(name)').eq('status', 'active'))),
+        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', fourWeeksAgo))),
+        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('release_amount, disbursed_at').not('disbursed_at', 'is', null).gte('disbursed_at', fourWeeksAgo))),
+        selectAllRows<any>(() => scopeByBranch(supabase.from('gas_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo))),
+        selectAllRows<any>(() => scopeByBranch(supabase.from('general_cash_vouchers').select('total_amount, voucher_date').gte('voucher_date', fourWeeksAgo))),
+        selectAllRows<any>(() => scopeByEmployeeIds(supabase.from('attendance').select('status').gte('date', monthStart))),
         scopeByBranch(supabase.from('employees').select('id, position').eq('status', 'active')),
         scopeByEmployeeIds(supabase.from('attendance').select('employee_id, employees(position)').eq('date', today)),
         scopeByEmployeeIds(supabase.from('payroll').select('net_pay').gte('pay_date', monthStart)),
@@ -262,7 +269,7 @@ export default function DashboardPage() {
         cashByBucket[bucket] = (cashByBucket[bucket] ?? 0) + (Number(l.debit) || 0) - (Number(l.credit) || 0);
       }
 
-      const activeLoans: any[] = loans.data ?? [];
+      const activeLoans: any[] = loans;
       const overdue = activeLoans.filter((l: any) => l.due_date && new Date(l.due_date) < new Date());
       const outstandingBalance = activeLoans.reduce((s: number, l: any) => s + Number(l.remaining_balance), 0);
 
@@ -292,15 +299,15 @@ export default function DashboardPage() {
       const overdueAmount = overdue.reduce((s: number, l: any) => s + Number(l.remaining_balance), 0);
       const overdueRate = outstandingBalance > 0 ? (overdueAmount / outstandingBalance) * 100 : 0;
 
-      const statusCounts = (allLoanStatuses.data ?? []).reduce((acc: Record<string, number>, l: any) => {
+      const statusCounts = (allLoanStatuses as any[]).reduce((acc: Record<string, number>, l: any) => {
         acc[l.status] = (acc[l.status] ?? 0) + 1;
         return acc;
       }, {});
       const paidLoans = statusCounts['paid'] ?? 0;
       const pendingLoans = statusCounts['pending'] ?? 0;
 
-      const monthlyCollections = (paymentsMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
-      const lastMonthCollections = (paymentsLastMonth.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
+      const monthlyCollections = (paymentsMonth as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
+      const lastMonthCollections = (paymentsLastMonth as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
 
       const employeeRows = employees.data ?? [];
       const collectorsTotal = employeeRows.filter((e: any) => e.position === 'Branch Field Collector').length;
@@ -322,7 +329,7 @@ export default function DashboardPage() {
         overdueRate,
         todayCollections: (paymentsToday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
-        weeklyCollections: (paymentsWeek.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
+        weeklyCollections: (paymentsWeek as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         monthlyCollections,
         lastMonthCollections,
         outstandingBalance,
@@ -346,7 +353,7 @@ export default function DashboardPage() {
       // day, so the two lines can genuinely diverge.
       const dayLabels = Array.from({ length: 7 }, (_, i) => daysAgo(6 - i));
       const paymentsByDay = new Map<string, number>();
-      for (const p of (paymentsWeek.data ?? [])) {
+      for (const p of (paymentsWeek as any[])) {
         const key = p.payment_date;
         paymentsByDay.set(key, (paymentsByDay.get(key) ?? 0) + Number(p.amount_paid));
       }
@@ -374,7 +381,7 @@ export default function DashboardPage() {
       ]);
 
       const areaCounts = new Map<string, number>();
-      for (const c of (customersByArea.data ?? []) as any[]) {
+      for (const c of customersByArea as any[]) {
         const name = c.areas?.name;
         if (!name) continue;
         areaCounts.set(name, (areaCounts.get(name) ?? 0) + 1);
@@ -398,19 +405,19 @@ export default function DashboardPage() {
         return t >= new Date(toDateStr(start)).getTime() && t <= new Date(toDateStr(end)).getTime();
       }
       setCashFlowData(weekBuckets.map((wk, i) => {
-        const inflow = (paymentsFourWeeks.data ?? [])
+        const inflow = (paymentsFourWeeks as any[])
           .filter((p: any) => inRange(p.payment_date, wk.start, wk.end))
           .reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
-        const disbursed = (disbursedFourWeeks.data ?? [])
+        const disbursed = (disbursedFourWeeks as any[])
           .filter((l: any) => inRange(l.disbursed_at, wk.start, wk.end))
           .reduce((s: number, l: any) => s + Number(l.release_amount), 0);
-        const expenses = [...(gasVouchersFourWeeks.data ?? []), ...(cashVouchersFourWeeks.data ?? [])]
+        const expenses = [...(gasVouchersFourWeeks as any[]), ...(cashVouchersFourWeeks as any[])]
           .filter((v: any) => inRange(v.voucher_date, wk.start, wk.end))
           .reduce((s: number, v: any) => s + Number(v.total_amount), 0);
         return { name: `Week ${i + 1}`, inflow, outflow: disbursed + expenses };
       }));
 
-      const attendanceCounts = (attendanceMonth.data ?? []).reduce((acc: Record<string, number>, a: any) => {
+      const attendanceCounts = (attendanceMonth as any[]).reduce((acc: Record<string, number>, a: any) => {
         acc[a.status] = (acc[a.status] ?? 0) + 1;
         return acc;
       }, {});
