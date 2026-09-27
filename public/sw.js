@@ -50,13 +50,26 @@ self.addEventListener('fetch', (event) => {
   // This is what actually makes a previously-opened page's JS available
   // with zero signal, not just its HTML shell.
   if (url.pathname.startsWith('/_next/static/')) {
+    // The .catch() at the end is new — previously missing here, a chunk
+    // that was never cached (e.g. a route not fully visited yet on this
+    // device) AND fails to fetch live (a flaky-but-not-fully-offline
+    // connection — "TypeError: Load failed" is Safari's own wording for
+    // exactly this) rejected all the way out of respondWith with nothing
+    // to show for it, surfacing as a raw, uncaught error on screen instead
+    // of degrading. There's still no real fallback CONTENT for an
+    // arbitrary missing JS chunk (unlike a page navigation, where falling
+    // back to a cached page or offline.html makes sense) — but returning
+    // a real, if failing, Response here rather than letting the rejection
+    // itself propagate gives the browser/Next.js's own module-loading
+    // error handling a normal HTTP failure to react to, instead of an
+    // unhandled rejection inside the service worker.
     event.respondWith(
       caches.open(STATIC_CACHE).then((cache) =>
         cache.match(req).then((cached) => cached || fetch(req).then((res) => {
           if (res.ok) cache.put(req, res.clone());
           return res;
         }))
-      )
+      ).catch(() => new Response('', { status: 503, statusText: 'Offline — asset not cached' }))
     );
     return;
   }

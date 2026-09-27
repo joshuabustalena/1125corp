@@ -8,6 +8,7 @@ import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
 import { Button } from '@/components/ui/button';
 import { LoadingScreen } from '@/components/loading-screen';
+import { OfflinePrecache } from '@/components/offline-precache';
 import { getRequiredPermission, hasPermission } from '@/lib/permissions';
 import { ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -32,9 +33,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) return null;
 
   const allowed = hasPermission(profile?.permissions, getRequiredPermission(pathname));
+  // Only for someone who can actually reach Payments — no point silently
+  // downloading and caching a page a role like Accountant-only can never
+  // open anyway.
+  const canUsePayments = hasPermission(profile?.permissions, 'payments');
 
   return (
     <div className="min-h-screen bg-secondary">
+      {canUsePayments && <OfflinePrecache />}
       <div className="hidden lg:block">
         <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
       </div>
