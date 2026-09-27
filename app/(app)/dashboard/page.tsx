@@ -21,6 +21,7 @@ import {
 } from 'recharts';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
+import { selectAllRows } from '@/lib/db-chunk';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 import { CASH_BUCKETS, cashBucketFor, isSpendableCashAccount } from '@/lib/cash-buckets';
 
@@ -238,16 +239,25 @@ export default function DashboardPage() {
         scopeByBranch(supabase.from('employees').select('id, position').eq('status', 'active')),
         scopeByEmployeeIds(supabase.from('attendance').select('employee_id, employees(position)').eq('date', today)),
         scopeByEmployeeIds(supabase.from('payroll').select('net_pay').gte('pay_date', monthStart)),
+        // Balanga alone now has 1,175 journal_entry_lines across its cash
+        // accounts — past PostgREST's silent 1000-row cap, which was
+        // making this sum drop ~46K off Cash in Vault with no error at
+        // all (same failure the Trial Balance page already guards
+        // against; see lib/db-chunk.ts). selectAllRows pages through
+        // every matching row instead of taking whatever fits in one
+        // response.
         cashAccountIds.length > 0
-          ? (branchFilter === 'all'
-            ? supabase.from('journal_entry_lines').select('account_id, debit, credit').in('account_id', cashAccountIds)
-            : supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries!inner(branch_id)').in('account_id', cashAccountIds).or(`branch_id.eq.${branchFilter},branch_id.is.null`, { foreignTable: 'journal_entries' }))
-          : Promise.resolve({ data: [] as any[] }),
+          ? selectAllRows<any>(() => {
+              let q = supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries!inner(branch_id)').in('account_id', cashAccountIds);
+              if (branchFilter !== 'all') q = q.or(`branch_id.eq.${branchFilter},branch_id.is.null`, { foreignTable: 'journal_entries' });
+              return q;
+            })
+          : Promise.resolve([] as any[]),
         scopeByLoanBranch(supabase.from('cash_vouchers').select('amount, loans!inner(branch_id)').eq('voucher_date', today)),
       ]);
 
       const cashByBucket: Record<string, number> = {};
-      for (const l of ((cashLines as any).data ?? []) as any[]) {
+      for (const l of cashLines as any[]) {
         const bucket = bucketByAccountId.get(l.account_id) ?? 'other';
         cashByBucket[bucket] = (cashByBucket[bucket] ?? 0) + (Number(l.debit) || 0) - (Number(l.credit) || 0);
       }

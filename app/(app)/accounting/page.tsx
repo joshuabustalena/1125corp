@@ -17,6 +17,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
+import { selectAllRows } from '@/lib/db-chunk';
 import { formatCurrency, exportToCSV, todayStr } from '@/lib/format';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
@@ -105,23 +106,32 @@ export default function AccountingPage() {
     // character URL and the request fails outright ("fetch failed"), so
     // Collections Today silently read zero for anyone locked to that branch.
 
-    let cashLinesQuery = cashAccountIds.length > 0
-      ? supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries!inner(entry_date, source, branch_id)').in('account_id', cashAccountIds)
-      : null;
-    if (cashLinesQuery && branchFilter !== 'all') {
-      // A cash line only counts for this branch's balance if the entry
-      // itself is tagged to this branch OR is shared/company-wide — an
-      // entry tagged to the OTHER branch touching a shared cash account
-      // shouldn't bleed into this branch's balance.
-      cashLinesQuery = cashLinesQuery.or(`branch_id.eq.${branchFilter},branch_id.is.null`, { foreignTable: 'journal_entries' });
-    }
+    // Balanga alone now has 1,175 journal_entry_lines across its cash
+    // accounts — past PostgREST's silent 1000-row cap, which was making
+    // this sum drop ~46K off Cash in Vault with no error at all (same
+    // failure the Trial Balance page already had to guard against; see
+    // lib/db-chunk.ts). selectAllRows pages through every matching row
+    // instead of taking whatever fits in one response.
+    const cashLinesPromise = cashAccountIds.length > 0
+      ? selectAllRows<any>(() => {
+          let q = supabase.from('journal_entry_lines').select('account_id, debit, credit, journal_entries!inner(entry_date, source, branch_id)').in('account_id', cashAccountIds);
+          if (branchFilter !== 'all') {
+            // A cash line only counts for this branch's balance if the entry
+            // itself is tagged to this branch OR is shared/company-wide — an
+            // entry tagged to the OTHER branch touching a shared cash account
+            // shouldn't bleed into this branch's balance.
+            q = q.or(`branch_id.eq.${branchFilter},branch_id.is.null`, { foreignTable: 'journal_entries' });
+          }
+          return q;
+        })
+      : Promise.resolve([] as any[]);
     let paymentsQuery = supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', today);
     if (branchFilter !== 'all') paymentsQuery = paymentsQuery.eq('customers.branch_id', branchFilter);
     let loansQuery = supabase.from('loans').select('remaining_balance').eq('status', 'active');
     if (branchFilter !== 'all') loansQuery = loansQuery.eq('branch_id', branchFilter);
 
-    const [{ data: cashLines }, { data: paymentsToday }, { data: activeLoans }] = await Promise.all([
-      cashLinesQuery ?? Promise.resolve({ data: [] as any[] }),
+    const [cashLines, { data: paymentsToday }, { data: activeLoans }] = await Promise.all([
+      cashLinesPromise,
       paymentsQuery,
       loansQuery,
     ]);
@@ -134,7 +144,7 @@ export default function AccountingPage() {
     // borrowers.
     const releaseSources = ['disbursement'];
     const expenseSources = ['expense', 'general_cash_voucher', 'gas_voucher', 'payroll_voucher', 'thirteenth_month_voucher'];
-    for (const l of (cashLines ?? []) as any[]) {
+    for (const l of cashLines as any[]) {
       const net = (Number(l.debit) || 0) - (Number(l.credit) || 0);
       const bucket = bucketByAccountId.get(l.account_id) ?? 'other';
       cashByBucket[bucket] = (cashByBucket[bucket] ?? 0) + net;
