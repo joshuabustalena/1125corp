@@ -400,7 +400,11 @@ export default function ReportsPage() {
         const [y, m] = monthFilter.split('-').map(Number);
         const monthStart = `${monthFilter}-01`;
         const monthEnd = dateToStr(new Date(y, m, 0));
-        let q = supabase.from('loans').select('release_date, release_amount, branch_id, area_id, customers(first_name, last_name)')
+        // Katrina's correction (Sep 28): this counts the LOAN amount (the
+        // principal actually granted), not release_amount (net proceeds
+        // after deductions) — the two differ whenever a renewal's offset
+        // balance or day-one payment gets withheld from what's handed over.
+        let q = supabase.from('loans').select('release_date, amount, branch_id, area_id, customers(first_name, last_name)')
           .gte('release_date', monthStart).lte('release_date', monthEnd).order('release_date');
         if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
@@ -408,7 +412,7 @@ export default function ReportsPage() {
         reportData = (data ?? []).map((l: any) => ({
           Date: l.release_date,
           Name: formatCustomerName(l.customers?.first_name, l.customers?.last_name),
-          AmountReleased: Number(l.release_amount) || 0,
+          AmountReleased: Number(l.amount) || 0,
         }));
         break;
       }
