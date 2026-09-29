@@ -22,6 +22,7 @@ import {
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
+import { overdueOrDelayFor } from '@/lib/overdue';
 import { checkDueDateAlerts } from '@/lib/due-date-alerts';
 import { CASH_BUCKETS, cashBucketFor, isSpendableCashAccount } from '@/lib/cash-buckets';
 
@@ -227,7 +228,7 @@ export default function DashboardPage() {
       ] = await Promise.all([
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true })),
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
-        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date, area_id, areas(name)').eq('status', 'active'))),
+        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date, total_payable, term_days, release_date, area_id, areas(name)').eq('status', 'active'))),
         selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('status'))),
         scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', today)),
         scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', yesterday)),
@@ -270,19 +271,28 @@ export default function DashboardPage() {
       }
 
       const activeLoans: any[] = loans;
+      // "Overdue Loans" (the count) stays past-due-only — a loan either has
+      // crossed its formal due date or it hasn't. The AMOUNT/RATE below is
+      // the separate, wider figure Katrina flagged (Sep 29): Reports' own
+      // Overdue Amount & Rate report already merged past-due with loans
+      // still inside their term but behind the daily schedule (client
+      // request, Aug 2026), but this card kept the narrower past-due-only
+      // sum, so the two disagreed. Both now go through the same
+      // lib/overdue.ts function so they can't drift apart again.
       const overdue = activeLoans.filter((l: any) => l.due_date && new Date(l.due_date) < new Date());
       const outstandingBalance = activeLoans.reduce((s: number, l: any) => s + Number(l.remaining_balance), 0);
+      const loanExposures = activeLoans.map((l: any) => ({ l, exposure: overdueOrDelayFor(l, now) }));
 
       // Same overdue-amount/overdue-rate math as above, broken out per area
       // instead of one branch-wide figure — Kat's Sep 8 request. Grouped
       // straight off activeLoans (already scoped to the selected branch),
       // not a separate query.
       const areaTotals = new Map<string, { name: string; receivable: number; overdue: number }>();
-      for (const l of activeLoans) {
+      for (const { l, exposure } of loanExposures) {
         const areaId = l.area_id ?? 'unassigned';
         const entry = areaTotals.get(areaId) ?? { name: l.areas?.name ?? 'Unassigned', receivable: 0, overdue: 0 };
         entry.receivable += Number(l.remaining_balance);
-        if (l.due_date && new Date(l.due_date) < new Date()) entry.overdue += Number(l.remaining_balance);
+        entry.overdue += exposure.amount;
         areaTotals.set(areaId, entry);
       }
       const areaOverdueRows = Array.from(areaTotals.entries())
@@ -294,9 +304,10 @@ export default function DashboardPage() {
         }))
         .sort((a, b) => b.overdueAmount - a.overdueAmount);
       // Overdue Rate = portfolio at risk — the share of the whole
-      // receivable that's currently overdue, not just a share of loan
-      // count (which "Overdue Loans" already shows).
-      const overdueAmount = overdue.reduce((s: number, l: any) => s + Number(l.remaining_balance), 0);
+      // receivable that's currently overdue OR falling behind schedule,
+      // not just a share of loan count (which "Overdue Loans" already
+      // shows) and not just the narrower past-due slice.
+      const overdueAmount = loanExposures.reduce((s: number, { exposure }) => s + exposure.amount, 0);
       const overdueRate = outstandingBalance > 0 ? (overdueAmount / outstandingBalance) * 100 : 0;
 
       const statusCounts = (allLoanStatuses as any[]).reduce((acc: Record<string, number>, l: any) => {
