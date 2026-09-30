@@ -814,13 +814,14 @@ export default function ReportsPage() {
                             <td key={key} style={{ padding: '5px 8px', border: '1px solid #000' }}>{formatCell(key, row[key])}</td>
                           ))}
                           <td style={{ border: '1px solid #000', textAlign: 'center' }}>
+                            {/* Filled solid instead of a check-mark glyph —
+                                the Unicode ✓ character didn't render
+                                reliably through html2canvas's capture. */}
                             <span style={{
-                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                              width: 12, height: 12, border: '1.5px solid #000',
-                              fontSize: 11, lineHeight: 1, fontWeight: 700,
-                            }}>
-                              {isChecked ? '✓' : ''}
-                            </span>
+                              display: 'inline-block', width: 12, height: 12,
+                              border: '1.5px solid #000',
+                              backgroundColor: isChecked ? '#000' : 'transparent',
+                            }} />
                           </td>
                         </tr>
                       );
