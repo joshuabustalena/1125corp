@@ -802,16 +802,29 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {pageRows.map((row, i) => (
-                      <tr key={i}>
-                        {printColumns.map(key => (
-                          <td key={key} style={{ padding: '5px 8px', border: '1px solid #000' }}>{formatCell(key, row[key])}</td>
-                        ))}
-                        <td style={{ border: '1px solid #000', textAlign: 'center' }}>
-                          <span style={{ display: 'inline-block', width: 12, height: 12, border: '1.5px solid #000' }} />
-                        </td>
-                      </tr>
-                    ))}
+                    {pageRows.map((row, i) => {
+                      // pageRows is a per-page slice of the full data array
+                      // (see printPages above) — the row's real position in
+                      // checkedRows is this page's offset plus its local index.
+                      const globalIndex = pageIndex * ROWS_PER_PRINT_PAGE + i;
+                      const isChecked = checkedRows.has(globalIndex);
+                      return (
+                        <tr key={i}>
+                          {printColumns.map(key => (
+                            <td key={key} style={{ padding: '5px 8px', border: '1px solid #000' }}>{formatCell(key, row[key])}</td>
+                          ))}
+                          <td style={{ border: '1px solid #000', textAlign: 'center' }}>
+                            <span style={{
+                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                              width: 12, height: 12, border: '1.5px solid #000',
+                              fontSize: 11, lineHeight: 1, fontWeight: 700,
+                            }}>
+                              {isChecked ? '✓' : ''}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
