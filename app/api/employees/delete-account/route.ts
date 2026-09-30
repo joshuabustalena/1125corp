@@ -30,6 +30,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'profile_id is required' }, { status: 400 });
   }
 
+  // Explicit, not relied on the profiles->collectors relationship also
+  // cascading — belt-and-suspenders after "A8 A8" (Sep 2026) was left as a
+  // live, selectable collector for weeks post-"deletion" with no confirmed
+  // cascade to prove it wouldn't happen again.
+  await supabaseAdmin.from('collectors').delete().eq('profile_id', profile_id);
+
   // Deleting the auth user cascades to remove the matching profiles row too
   // (profiles.id references auth.users(id) on delete cascade).
   const { error } = await supabaseAdmin.auth.admin.deleteUser(profile_id);

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
@@ -46,6 +47,17 @@ const MONEY_COLUMNS = new Set([
   'OverdueAmount', 'Balance', 'AmountReleased',
 ]);
 
+// Friendlier header text for a column whose raw key (still used internally
+// for money-formatting and CSV export) reads oddly in the table itself.
+// 'AmountReleased' is unique to Monthly Release, so this only ever affects
+// that report's header — no other report type uses that key.
+const COLUMN_LABELS: Record<string, string> = {
+  AmountReleased: 'Amount of loan (Principal)',
+};
+function columnLabel(key: string): string {
+  return COLUMN_LABELS[key] ?? key;
+}
+
 // Same labels the Report Type dropdown shows — reused so the printed
 // document's title always says which report it is, instead of the raw
 // 'monthly_release' key.
@@ -80,6 +92,10 @@ export default function ReportsPage() {
   // request: "buong September, makikita nila kung sino-sino yung narelease".
   const [monthFilter, setMonthFilter] = useState(todayStr().substring(0, 7));
   const [data, setData] = useState<any[]>([]);
+  // Per-row tick-off for manual review (e.g. cross-checking each Monthly
+  // Release line against a physical record) — local to this screen only,
+  // not saved anywhere, so it resets with every new Generate.
+  const [checkedRows, setCheckedRows] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ total: 0, count: 0, average: 0, overdueRate: 0 });
   const [branches, setBranches] = useState<any[]>([]);
@@ -366,7 +382,14 @@ export default function ReportsPage() {
         // principal actually granted), not release_amount (net proceeds
         // after deductions) — the two differ whenever a renewal's offset
         // balance or day-one payment gets withheld from what's handed over.
+        //
+        // Only 'active' loans (Sep 30) — a loan released this month can
+        // since have moved on (renewed into a new loan, paid off, written
+        // off), and this report tracks what's still actually outstanding
+        // from that month's releases, not a historical log of every peso
+        // that ever went out.
         let q = supabase.from('loans').select('release_date, amount, branch_id, area_id, customers(first_name, last_name)')
+          .eq('status', 'active')
           .gte('release_date', monthStart).lte('release_date', monthEnd).order('release_date');
         if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
@@ -422,6 +445,7 @@ export default function ReportsPage() {
     }
 
     setData(reportData);
+    setCheckedRows(new Set());
     const total = reportData.reduce((s, r) => s + (r.Amount ?? r.TotalCollection ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.AmountReleased ?? r.Customers ?? 0), 0);
     setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0, overdueRate: overallOverdueRate });
     setLoading(false);
@@ -662,7 +686,8 @@ export default function ReportsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {Object.keys(data[0]).map(key => <TableHead key={key}>{key}</TableHead>)}
+                    {Object.keys(data[0]).map(key => <TableHead key={key}>{columnLabel(key)}</TableHead>)}
+                    <TableHead className="w-10"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -677,6 +702,16 @@ export default function ReportsPage() {
                               : String(val ?? '')}
                         </TableCell>
                       ))}
+                      <TableCell>
+                        <Checkbox
+                          checked={checkedRows.has(i)}
+                          onCheckedChange={(checked) => setCheckedRows((prev) => {
+                            const next = new Set(prev);
+                            if (checked === true) next.add(i); else next.delete(i);
+                            return next;
+                          })}
+                        />
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -757,7 +792,7 @@ export default function ReportsPage() {
                   <thead>
                     <tr style={{ background: '#0B1F3A', color: '#fff' }}>
                       {printColumns.map(key => (
-                        <th key={key} style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #000' }}>{key}</th>
+                        <th key={key} style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #000' }}>{columnLabel(key)}</th>
                       ))}
                     </tr>
                   </thead>

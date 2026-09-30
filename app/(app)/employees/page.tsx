@@ -382,18 +382,37 @@ export default function EmployeesPage() {
   async function handleDelete() {
     if (!deleteTarget) return;
 
+    // The delete-account API is Administrator-only (deleteUser cascades to
+    // remove the profiles row AND, via that, anywhere the profile is still
+    // referenced — collectors included). Previously, a non-Admin's 403 here
+    // only showed a toast and fell straight through to deleting the
+    // employees row anyway — the employee vanished from this list, looking
+    // fully deleted, while their login account and collectors row quietly
+    // survived and kept showing up everywhere else in the app (still able
+    // to log in, still selectable as a collector). See "A8 A8" (Sep 2026):
+    // deleted from here by a non-Admin, still appearing in collector lists
+    // weeks later. Now this stops before touching the employees row at all
+    // if the login account couldn't be removed, so a delete either fully
+    // succeeds or visibly fails — never half of one.
     if (deleteTarget.profile_id) {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const res = await fetch('/api/employees/delete-account', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-          body: JSON.stringify({ profile_id: deleteTarget.profile_id }),
+      if (!session) {
+        toast({ title: 'Not deleted', description: 'Your session could not be verified — please sign in again and retry.', variant: 'destructive' });
+        return;
+      }
+      const res = await fetch('/api/employees/delete-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ profile_id: deleteTarget.profile_id }),
+      });
+      if (!res.ok) {
+        const result = await res.json().catch(() => ({}));
+        toast({
+          title: 'Not deleted',
+          description: result.error ?? 'Could not remove this employee’s login account, so nothing was deleted. Only an Administrator can delete an employee with a login account.',
+          variant: 'destructive',
         });
-        if (!res.ok) {
-          const result = await res.json().catch(() => ({}));
-          toast({ title: 'Login account not deleted', description: result.error ?? 'Unknown error', variant: 'destructive' });
-        }
+        return;
       }
     }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { PageHeader } from '@/components/layout/page-header';
@@ -65,6 +65,16 @@ export default function LoansPage() {
   const isAdmin = profile?.role_name === 'Administrator';
   const isCollector = profile?.role_name === 'Branch Field Collector';
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
+  // Bumped on every loadLoans() call and checked when it resolves — the
+  // Search box has no debounce, so typing a name fires one request per
+  // keystroke with two sequential awaits each (customer lookup, then the
+  // loans query itself). With no guard, a slower EARLIER keystroke's
+  // response could resolve after a faster LATER one and overwrite it,
+  // rendering a stale/mismatched row set (Katrina, Sep 30: a loan that
+  // doesn't exist for the search actually typed, gone again once she
+  // filtered "deliberately" instead of typing fast). Only the response
+  // matching the most recently started call is ever applied to state.
+  const loadLoansRequestId = useRef(0);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -201,6 +211,7 @@ export default function LoansPage() {
   }
 
   async function loadLoans() {
+    const requestId = ++loadLoansRequestId.current;
     setLoading(true);
     let query = supabase
       .from('loans')
@@ -241,6 +252,11 @@ export default function LoansPage() {
     query = query.range((page - 1) * pageSize, page * pageSize - 1).order('created_at', { ascending: false });
 
     const { data, count } = await query;
+    // A newer call has since started — this response is for a search/filter
+    // state that's no longer current, so it's discarded rather than
+    // overwriting whatever the newer call (still in flight or already
+    // resolved) puts on screen.
+    if (requestId !== loadLoansRequestId.current) return;
     setLoans((data as any) ?? []);
     setTotal(count ?? 0);
     setLoading(false);

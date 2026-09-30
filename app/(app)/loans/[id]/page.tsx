@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, todayStr } from '@/lib/format';
+import { formatCurrency, formatDate, generateLoanNumber, generateEntryNumber, computeLoanDetails, todayStr } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
@@ -103,6 +103,12 @@ export default function LoanDetailPage() {
   const [pastLoansOpen, setPastLoansOpen] = useState(false);
   const [pastLoans, setPastLoans] = useState<any[]>([]);
   const [loadingPastLoans, setLoadingPastLoans] = useState(false);
+  // Whether this disbursed loan has its journal entry — checked separately
+  // from the loan record itself, since a connection failure during
+  // handleDisburse can leave a loan fully disbursed (cash voucher and all)
+  // with no matching ledger entry. null = not checked yet / not disbursed.
+  const [hasJournalEntry, setHasJournalEntry] = useState<boolean | null>(null);
+  const [postingLedger, setPostingLedger] = useState(false);
 
   async function loadLoan() {
     const id = params.id as string;
@@ -112,6 +118,13 @@ export default function LoanDetailPage() {
     ]);
     setLoan(l.data);
     setPayments(p.data ?? []);
+
+    if (l.data?.disbursed_at) {
+      const { data: je } = await supabase.from('journal_entries').select('id').eq('source', 'disbursement').eq('source_id', id).maybeSingle();
+      setHasJournalEntry(!!je);
+    } else {
+      setHasJournalEntry(null);
+    }
 
     const { data: collateralData } = await supabase.from('collateral').select('*').eq('loan_id', id).order('created_at', { ascending: false });
     setCollateral(collateralData ?? []);
@@ -668,6 +681,112 @@ export default function LoanDetailPage() {
     setApproving(false);
   }
 
+  // Auto-post to the general ledger, per the client's exact formula: Debit
+  // Loans Receivable = Loan + Interest - First Payment (the day-one
+  // collection never actually stays outstanding, so it's netted straight out
+  // of what's booked as receivable, rather than booked gross then credited
+  // back). Any carried-over offset balance from a renewal is a separate
+  // credit to Loans Receivable — it's paying down the OLD loan, not reducing
+  // what's owed on this new one. What's left after also netting out the
+  // service fee is the real cash handed to the borrower.
+  //
+  // Shared by handleDisburse (the normal flow) and the "Post Journal Entry"
+  // retry button (for a loan that disbursed successfully but never got its
+  // ledger entry) so the two can't compute the figures differently.
+  //
+  // Root-cause fix (Sep 30 2026, after LN-2026-255256 and LN-2026-550326
+  // both landed with a disbursed loan + cash voucher but no ledger entry):
+  // this used to be ~9 separate network round trips — 4 reads to resolve
+  // account codes, then postJournalEntry's own insert-entry-then-insert-
+  // lines sequence — any one of which could drop mid-way, worse during a
+  // high-traffic stretch like month-end. supabase/make_disbursement_ledger_atomic.sql's
+  // post_disbursement_ledger_entry RPC does everything from "codes resolved"
+  // onward in ONE round trip inside ONE transaction: it either all lands or
+  // none of it does. It's also idempotent on (source='disbursement',
+  // source_id=loan), so calling it again after a client-side timeout is
+  // always safe — never a duplicate entry.
+  //
+  // Account CODE resolution by branch name stays client-side (a few quick
+  // reads with nothing written yet if one fails, not the risky part) —
+  // still wrapped in try/catch since resolveBranchAccountCode has no error
+  // handling of its own, unlike the RPC call below.
+  async function postDisbursementLedgerEntry(loanData: any, entryDate: string, reference: string): Promise<{ ok: boolean; missingCodes: string[] } | null> {
+    const principal = Number(loanData.amount) || 0;
+    const interestAmount = Number(loanData.interest_amount) || 0;
+    const totalPayable = Number(loanData.total_payable) || (principal + interestAmount);
+    const serviceFee = Number(loanData.service_fee) || 0;
+    const offsetBalance = Number(loanData.offset_balance) || 0;
+    const firstPayment = loanData.daily_payment != null && Number(loanData.daily_payment) > 0
+      ? Number(loanData.daily_payment)
+      : (loanData.term_days > 0 ? totalPayable / loanData.term_days : 0);
+    const loansReceivableDebit = principal + interestAmount - firstPayment;
+    const cashReleased = Math.max(0, principal - serviceFee - offsetBalance - firstPayment);
+    const disbursedCustomerName = `${loanData.customers?.first_name ?? ''} ${loanData.customers?.last_name ?? ''}`.trim();
+
+    try {
+      // The live Chart of Accounts now splits Loans Receivable and Cash in
+      // Vault per branch (e.g. code 1100 is Balanga's receivable
+      // specifically, Dinalupihan's is 1200) — resolve the branch-correct
+      // code instead of assuming the Balanga one always applies. Interest
+      // and Service Fee are per branch too — they used to post to the flat
+      // '4000'/'4010', which are Balanga's accounts, so every Dinalupihan
+      // release credited Balanga's revenue.
+      const [loansReceivableCode, cashVaultCode, interestCode, serviceFeeCode] = await Promise.all([
+        resolveBranchAccountCode('Loans Receivable', loanData.branch_id, loanData.branches?.name),
+        resolveBranchAccountCode('Cash in Vault', loanData.branch_id, loanData.branches?.name),
+        resolveBranchAccountCode('Interest Revenue', loanData.branch_id, loanData.branches?.name),
+        resolveBranchAccountCode('Service Fee', loanData.branch_id, loanData.branches?.name),
+      ]);
+
+      const { data, error } = await supabase.rpc('post_disbursement_ledger_entry', {
+        p_loan_id: loanData.id,
+        p_entry_number: generateEntryNumber(),
+        p_entry_date: entryDate,
+        p_description: `Loan disbursement — ${loanData.loan_number}${disbursedCustomerName ? ` — ${disbursedCustomerName}` : ''}`,
+        p_reference: reference,
+        p_created_by: profile?.id ?? null,
+        p_branch_id: loanData.branch_id ?? null,
+        p_receivable_code: loansReceivableCode ?? '',
+        p_cash_code: cashVaultCode ?? '',
+        p_interest_code: interestCode ?? '',
+        p_servicefee_code: serviceFeeCode ?? '',
+        p_receivable_debit: loansReceivableDebit,
+        p_offset_credit: offsetBalance,
+        p_cash_credit: cashReleased,
+        p_servicefee_credit: serviceFee,
+        p_interest_credit: interestAmount,
+      }).single();
+
+      if (error || !data) return null;
+      const row = data as { ok: boolean; missing_codes: string[]; journal_entry_id: string | null };
+      return { ok: row.ok, missingCodes: row.missing_codes ?? [] };
+    } catch {
+      return null;
+    }
+  }
+
+  // Self-service fix for exactly the gap postDisbursementLedgerEntry's
+  // comment describes — a disbursed loan (cash voucher and all) whose ledger
+  // entry never posted, most often a connection drop during a high-traffic
+  // stretch (month-end, everyone closing out at once). Previously this
+  // needed a manual SQL backfill each time; this lets an Admin/Cashier
+  // re-attempt it straight from the loan itself.
+  async function handlePostMissingJournalEntry() {
+    if (!loan?.disbursed_at) return;
+    setPostingLedger(true);
+    const { data: existingVoucher } = await supabase.from('cash_vouchers').select('voucher_number').eq('loan_id', loan.id).maybeSingle();
+    const result = await postDisbursementLedgerEntry(loan, loan.disbursed_at.split('T')[0], existingVoucher?.voucher_number ?? loan.loan_number);
+    if (!result) {
+      toast({ title: 'Still could not post', description: 'A connection issue stopped this from posting again — please retry in a moment.', variant: 'destructive' });
+    } else if (result.missingCodes.length > 0) {
+      toast({ title: 'Ledger entry incomplete', description: `Could not find account(s) ${result.missingCodes.join(', ')} in the Chart of Accounts.`, variant: 'destructive' });
+    } else {
+      toast({ title: 'Journal entry posted', description: `${loan.loan_number}'s disbursement is now recorded in the ledger.` });
+      setHasJournalEntry(true);
+    }
+    setPostingLedger(false);
+  }
+
   async function handleDisburse() {
     setDisbursing(true);
     const voucherNumber = await getNextVoucherNumber();
@@ -706,75 +825,9 @@ export default function LoanDetailPage() {
       toast({ title: 'Loan disbursed, but voucher failed', description: voucherError.message, variant: 'destructive' });
     }
 
-    // Auto-post to the general ledger, per the client's exact formula:
-    // Debit Loans Receivable = Loan + Interest - First Payment (the day-one
-    // collection never actually stays outstanding, so it's netted straight
-    // out of what's booked as receivable, rather than booked gross then
-    // credited back). Any carried-over offset balance from a renewal is a
-    // separate credit to Loans Receivable — it's paying down the OLD loan,
-    // not reducing what's owed on this new one. What's left after also
-    // netting out the service fee is the real cash handed to the borrower.
-    const principal = Number(loan.amount) || 0;
-    const interestAmount = Number(loan.interest_amount) || 0;
-    const totalPayable = Number(loan.total_payable) || (principal + interestAmount);
-    const serviceFee = Number(loan.service_fee) || 0;
-    const offsetBalance = Number(loan.offset_balance) || 0;
-    const firstPayment = loan.daily_payment != null && Number(loan.daily_payment) > 0
-      ? Number(loan.daily_payment)
-      : (loan.term_days > 0 ? totalPayable / loan.term_days : 0);
-    const loansReceivableDebit = principal + interestAmount - firstPayment;
-    const cashReleased = Math.max(0, principal - serviceFee - offsetBalance - firstPayment);
     const disbursedCustomerName = `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim();
-
-    // The live Chart of Accounts now splits Loans Receivable and Cash in
-    // Vault per branch (e.g. code 1100 is Balanga's receivable specifically,
-    // Dinalupihan's is 1200) — resolve the branch-correct code instead of
-    // assuming the Balanga one always applies. Falls back to the old fixed
-    // codes only if no branch-specific account is found, so this never
-    // regresses a single-branch setup.
-    // Interest and Service Fee are per branch now too — they used to post to
-    // the flat '4000'/'4010', which are Balanga's accounts, so every
-    // Dinalupihan release credited Balanga's revenue.
-    // Wrapped in try/catch — resolveBranchAccountCode has no error handling
-    // of its own (unlike postJournalEntry, which never throws), so a hard
-    // connection failure during these lookups (not a normal Postgres error,
-    // an actual dropped/failed request) used to propagate straight out of
-    // this function uncaught, silently skipping the journal entry AND
-    // everything after it (the success toast, notifyRoles) with nothing on
-    // screen to show anything had gone wrong. The loan and cash voucher
-    // above had already saved for real by this point — the disbursement
-    // itself was never in doubt — only the ledger entry for it silently
-    // never got attempted. See LN-2026-255256 (Jyllan Pimentel, Sep 22
-    // 2026) — caught only because someone happened to notice it missing
-    // from Journal Entries days later.
-    let ledgerResult: { ok: boolean; missingCodes: string[] } | null = null;
-    try {
-      const [loansReceivableCode, cashVaultCode, interestCode, serviceFeeCode] = await Promise.all([
-        resolveBranchAccountCode('Loans Receivable', loan.branch_id, loan.branches?.name),
-        resolveBranchAccountCode('Cash in Vault', loan.branch_id, loan.branches?.name),
-        resolveBranchAccountCode('Interest Revenue', loan.branch_id, loan.branches?.name),
-        resolveBranchAccountCode('Service Fee', loan.branch_id, loan.branches?.name),
-      ]);
-
-      ledgerResult = await postJournalEntry({
-        entryDate: now.split('T')[0],
-        description: `Loan disbursement — ${loan.loan_number}${disbursedCustomerName ? ` — ${disbursedCustomerName}` : ''}`,
-        reference: voucherNumber,
-        source: 'disbursement',
-        sourceId: loan.id,
-        createdBy: profile?.id ?? null,
-        branchId: loan.branch_id ?? null,
-        lines: [
-          { accountCode: loansReceivableCode ?? '', debit: loansReceivableDebit, memo: 'Loans Receivable (Loan + Interest - First Payment)' },
-          { accountCode: loansReceivableCode ?? '', credit: offsetBalance, memo: 'Offset balance from previous loan' },
-          { accountCode: cashVaultCode ?? '', credit: cashReleased, memo: 'Cash released to borrower' },
-          { accountCode: serviceFeeCode ?? '', credit: serviceFee, memo: 'Service fee' },
-          { accountCode: interestCode ?? '', credit: interestAmount, memo: 'Interest revenue' },
-        ],
-      });
-    } catch {
-      ledgerResult = null;
-    }
+    const ledgerResult = await postDisbursementLedgerEntry(loan, now.split('T')[0], voucherNumber);
+    setHasJournalEntry(!!ledgerResult?.ok);
 
     toast({ title: 'Loan disbursed', description: `${loan.loan_number} is now active.` });
     logAudit({ action: 'approve', entityType: 'loans', entityId: loan.id, details: { loan_number: loan.loan_number, stage: 'disbursed' }, userId: profile?.id ?? null });
@@ -793,7 +846,7 @@ export default function LoanDetailPage() {
     if (!ledgerResult) {
       toast({
         title: 'Ledger entry not posted',
-        description: `${loan.loan_number} was disbursed successfully, but a connection issue stopped the journal entry from being created. Check Journal Entries for this loan and post it manually if it's missing.`,
+        description: `${loan.loan_number} was disbursed successfully, but a connection issue stopped the journal entry from being created. Open this loan again and use "Post Journal Entry" to retry.`,
         variant: 'destructive',
       });
     } else if (ledgerResult.missingCodes.length > 0) {
@@ -1073,6 +1126,16 @@ export default function LoanDetailPage() {
           <Button size="sm" onClick={handleDisburse} disabled={disbursing}>
             {disbursing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Banknote className="w-4 h-4 mr-2" />}
             Disburse
+          </Button>
+        )}
+        {/* A disbursed loan whose ledger entry never posted (connection
+            drop mid-disbursement, worse during high-traffic stretches like
+            month-end) — self-service retry instead of a manual SQL
+            backfill each time. See postDisbursementLedgerEntry. */}
+        {hasJournalEntry === false && canDisburse && (
+          <Button size="sm" variant="outline" className="text-destructive hover:text-destructive border-destructive/40" onClick={handlePostMissingJournalEntry} disabled={postingLedger}>
+            {postingLedger ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <AlertTriangle className="w-4 h-4 mr-2" />}
+            Post Journal Entry
           </Button>
         )}
         {(loan.disbursed_at || loan.approved_at) && (
