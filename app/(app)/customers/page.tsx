@@ -278,10 +278,33 @@ export default function CustomersPage() {
 
     if (editing) {
       setSaving(true);
-      const { error } = await supabase.from('customers').update(buildCustomerPayload()).eq('id', editing.id);
+      const payload = buildCustomerPayload();
+      const { error } = await supabase.from('customers').update(payload).eq('id', editing.id);
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
+        // Keep this customer's own loans in sync when their collector
+        // changes — payments resolve collector_id from the LOAN, not the
+        // customer (see app/(app)/payments/page.tsx's collectorIdForPosting),
+        // and loans.collector_id also gates what a Branch Field Collector
+        // can even see there (and on Loans). Updating only the customer row
+        // left every one of their EXISTING loans invisible to the new
+        // collector and every new payment on them unattributed — see Area 8
+        // / Balanga, Sep 2026: after a collector resigned and the area was
+        // reassigned here, 61 of 62 loans still pointed at the deleted
+        // collector (loans.collector_id went null, not to the new one), so
+        // almost nothing the new collector took in could be recorded
+        // against them.
+        if (payload.collector_id !== (editing.collector_id ?? null)) {
+          const { error: loanSyncError } = await supabase
+            .from('loans')
+            .update({ collector_id: payload.collector_id })
+            .eq('customer_id', editing.id)
+            .in('status', ['active', 'approved']);
+          if (loanSyncError) {
+            toast({ title: 'Customer updated, but loans not synced', description: loanSyncError.message, variant: 'destructive' });
+          }
+        }
         toast({ title: 'Success', description: 'Customer updated successfully' });
         setDialogOpen(false);
         loadCustomers();

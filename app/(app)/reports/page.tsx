@@ -794,6 +794,11 @@ export default function ReportsPage() {
                       {printColumns.map(key => (
                         <th key={key} style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #000' }}>{columnLabel(key)}</th>
                       ))}
+                      {/* Blank tick-off box per row, matching the on-screen
+                          Checkbox column — this is a static image capture,
+                          so it's a drawn empty square for a physical/paper
+                          check mark, not an interactive control. */}
+                      <th style={{ width: 28, border: '1px solid #000' }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -802,6 +807,9 @@ export default function ReportsPage() {
                         {printColumns.map(key => (
                           <td key={key} style={{ padding: '5px 8px', border: '1px solid #000' }}>{formatCell(key, row[key])}</td>
                         ))}
+                        <td style={{ border: '1px solid #000', textAlign: 'center' }}>
+                          <span style={{ display: 'inline-block', width: 12, height: 12, border: '1.5px solid #000' }} />
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -25,7 +25,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials, exportToCSV, formatCustomerName } from '@/lib/format';
 import { ASSIGNABLE_PERMISSIONS, effectivePermissions, nonAssignablePermissions } from '@/lib/permissions';
 import { Checkbox } from '@/components/ui/checkbox';
-import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, CheckCircle2, Circle } from 'lucide-react';
+import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, CheckCircle2, Circle, ArrowRightLeft } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 const EMPLOYEE_DOCUMENT_TYPES = [
@@ -58,6 +58,17 @@ export default function EmployeesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  // Bulk handover for when a Branch Field Collector resigns/moves on — see
+  // Area 8 / Balanga, Sep 2026: editing customers one at a time only moved
+  // customers.collector_id, leaving every one of their EXISTING loans (and
+  // the payments recorded against them) pointing at the old collector, 61
+  // of 62 loans ending up unattributed once that collector's own record
+  // was removed. This moves customers, their still-open loans, and their
+  // in-flight ledger attribution together, in one action.
+  const [transferTarget, setTransferTarget] = useState<any>(null);
+  const [transferToId, setTransferToId] = useState('');
+  const [transferring, setTransferring] = useState(false);
+  const [branchCollectors, setBranchCollectors] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [createLogin, setCreateLogin] = useState(true);
   const [activeEmpTab, setActiveEmpTab] = useState<'info' | 'documents' | 'access'>('info');
@@ -421,6 +432,67 @@ export default function EmployeesPage() {
     else { toast({ title: 'Success', description: 'Employee deleted' }); setDeleteTarget(null); load(); }
   }
 
+  async function openTransfer(e: any) {
+    setTransferTarget(e);
+    setTransferToId('');
+    // Every OTHER active Branch Field Collector in the same branch — a
+    // handover only makes sense within the branch the customers belong to.
+    const { data } = await supabase
+      .from('collectors')
+      .select('id, profile_id, profiles(full_name)')
+      .eq('branch_id', e.branch_id)
+      .eq('status', 'active')
+      .neq('profile_id', e.profile_id ?? '00000000-0000-0000-0000-000000000000');
+    setBranchCollectors(data ?? []);
+  }
+
+  async function handleTransfer() {
+    if (!transferTarget || !transferToId) return;
+    setTransferring(true);
+    const { data: srcCollector } = await supabase.from('collectors').select('id').eq('profile_id', transferTarget.profile_id).maybeSingle();
+    if (!srcCollector) {
+      toast({ title: 'Nothing to transfer', description: 'This employee has no collector record — there are no customers assigned to them.', variant: 'destructive' });
+      setTransferring(false);
+      return;
+    }
+
+    const { data: movedCustomers, error: custError } = await supabase
+      .from('customers')
+      .update({ collector_id: transferToId })
+      .eq('collector_id', srcCollector.id)
+      .select('id');
+    if (custError) {
+      toast({ title: 'Transfer failed', description: custError.message, variant: 'destructive' });
+      setTransferring(false);
+      return;
+    }
+
+    const customerIds = (movedCustomers ?? []).map((c: any) => c.id);
+    let loansMoved = 0;
+    if (customerIds.length > 0) {
+      // Only loans still being actively collected — a paid/renewed/written-
+      // off loan doesn't need a collector any more, and leaving its old
+      // collector_id as-is preserves who actually originated/closed it.
+      const { data: movedLoans } = await supabase
+        .from('loans')
+        .update({ collector_id: transferToId })
+        .in('customer_id', customerIds)
+        .in('status', ['active', 'approved'])
+        .select('id');
+      loansMoved = movedLoans?.length ?? 0;
+
+      // Carry over ledger attribution too, so the outgoing collector's
+      // in-flight remittance doesn't just vanish from view — see the Sep
+      // 2026 incident this whole feature exists to prevent.
+      await supabase.from('payments').update({ collector_id: transferToId }).eq('collector_id', srcCollector.id);
+    }
+
+    toast({ title: 'Transfer complete', description: `${customerIds.length} customer(s) and ${loansMoved} loan(s) moved.` });
+    setTransferTarget(null);
+    setTransferToId('');
+    setTransferring(false);
+  }
+
   function handleExport() {
     exportToCSV(employees.map(e => ({
       Name: `${e.first_name} ${e.last_name}`, Department: e.department ?? '', Position: e.position ?? '',
@@ -510,6 +582,9 @@ export default function EmployeesPage() {
                     </div>
                     <div className="mt-3 flex items-center justify-end gap-1" onClick={(e2) => e2.stopPropagation()}>
                       <Button variant="outline" size="sm" onClick={() => openEdit(e)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                      {isAdmin && e.position === 'Branch Field Collector' && (
+                        <Button variant="outline" size="sm" onClick={() => openTransfer(e)}><ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />Transfer</Button>
+                      )}
                       <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(e)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
                     </div>
                   </div>
@@ -549,6 +624,9 @@ export default function EmployeesPage() {
                         <div className="flex justify-end" onClick={(e2) => e2.stopPropagation()}>
                           <Button variant="ghost" size="icon" onClick={() => router.push(`/employees/${e.id}`)}><Eye className="w-4 h-4" /></Button>
                           <Button variant="ghost" size="icon" onClick={() => openEdit(e)}><Pencil className="w-4 h-4" /></Button>
+                          {isAdmin && e.position === 'Branch Field Collector' && (
+                            <Button variant="ghost" size="icon" onClick={() => openTransfer(e)} title="Transfer customers to another collector"><ArrowRightLeft className="w-4 h-4" /></Button>
+                          )}
                           <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(e)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                         </div>
                       </TableCell>
@@ -798,6 +876,40 @@ export default function EmployeesPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={handleDelete}>Delete</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!transferTarget} onOpenChange={(open) => !open && setTransferTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Transfer Customers</DialogTitle>
+            <DialogDescription>
+              Move every customer currently assigned to {transferTarget?.first_name} {transferTarget?.last_name} — along with
+              their still-open loans and in-flight remittance — to another collector. Use this whenever a collector
+              resigns or an area changes hands, instead of editing each customer one by one.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Transfer to</Label>
+            <Select value={transferToId} onValueChange={setTransferToId}>
+              <SelectTrigger><SelectValue placeholder="Select a collector" /></SelectTrigger>
+              <SelectContent>
+                {branchCollectors.map((c: any) => (
+                  <SelectItem key={c.id} value={c.id}>{c.profiles?.full_name ?? 'Unnamed'}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {branchCollectors.length === 0 && (
+              <p className="text-xs text-muted-foreground">No other active collectors found in this branch.</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransferTarget(null)}>Cancel</Button>
+            <Button onClick={handleTransfer} disabled={!transferToId || transferring}>
+              {transferring ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ArrowRightLeft className="w-4 h-4 mr-2" />}
+              Transfer
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
