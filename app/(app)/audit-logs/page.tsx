@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -46,25 +46,57 @@ export default function AuditLogsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(0);
   // The 'create'/'edit'/'delete' rows come from the database trigger and
   // carry the full row (or before/after diff) in `details` — nothing in the
   // table itself surfaces that, so this dialog is the only way to actually
   // see what changed rather than just that something did.
   const [detailsTarget, setDetailsTarget] = useState<any | null>(null);
+  // Search box has no debounce, so typing fires one request per keystroke,
+  // each with two sequential awaits (the name lookup below, then the logs
+  // query itself). With no guard, a slower EARLIER keystroke's response
+  // could resolve after a faster LATER one and overwrite it with stale
+  // results — same race fixed the same way on the Loans page.
+  const loadRequestId = useRef(0);
 
   // Search/filter changing always jumps back to page 0 — passed explicitly
   // to load() rather than relying on `page` state (which hasn't re-rendered
   // yet at this point) so this never fires an extra, wrong-page fetch.
-  useEffect(() => { setPage(0); load(0); }, [search, actionFilter]);
+  useEffect(() => { setPage(0); load(0); }, [search, actionFilter, dateFrom, dateTo]);
+
+  // PostgREST's .or() can't filter on a joined table's column, so matching
+  // the search term against the user's name takes a separate lookup whose
+  // resulting ids get OR'd in alongside the action/entity_type match.
+  async function resolveSearchUserIds(term: string): Promise<string[]> {
+    if (!term) return [];
+    const { data } = await supabase.from('profiles').select('id').ilike('full_name', `%${term}%`);
+    return (data ?? []).map((p: any) => p.id);
+  }
+
+  function applyFilters(query: any, matchingUserIds: string[]) {
+    if (search) {
+      const orParts = [`action.ilike.%${search}%`, `entity_type.ilike.%${search}%`];
+      if (matchingUserIds.length > 0) orParts.push(`user_id.in.(${matchingUserIds.join(',')})`);
+      query = query.or(orParts.join(','));
+    }
+    if (actionFilter !== 'all') query = query.eq('action', actionFilter);
+    if (dateFrom) query = query.gte('created_at', `${dateFrom}T00:00:00`);
+    if (dateTo) query = query.lte('created_at', `${dateTo}T23:59:59.999`);
+    return query;
+  }
 
   async function load(pageArg?: number) {
     const p = pageArg ?? page;
     setLoading(true);
+    const requestId = ++loadRequestId.current;
+    const matchingUserIds = await resolveSearchUserIds(search);
+    if (requestId !== loadRequestId.current) return;
     let query = supabase.from('audit_logs').select('*, profiles(full_name, email)').order('created_at', { ascending: false }).range(p * PAGE_SIZE, p * PAGE_SIZE + PAGE_SIZE - 1);
-    if (search) query = query.or(`action.ilike.%${search}%,entity_type.ilike.%${search}%`);
-    if (actionFilter !== 'all') query = query.eq('action', actionFilter);
+    query = applyFilters(query, matchingUserIds);
     const { data } = await query;
+    if (requestId !== loadRequestId.current) return;
     setLogs(data ?? []);
     setLoading(false);
   }
@@ -87,9 +119,9 @@ export default function AuditLogsPage() {
   // the 6-day retention job (add_audit_log_retention.sql) keeps the table
   // small enough that this is never actually reached in practice.
   async function handleExport() {
+    const matchingUserIds = await resolveSearchUserIds(search);
     let query = supabase.from('audit_logs').select('*, profiles(full_name, email)').order('created_at', { ascending: false }).limit(2000);
-    if (search) query = query.or(`action.ilike.%${search}%,entity_type.ilike.%${search}%`);
-    if (actionFilter !== 'all') query = query.eq('action', actionFilter);
+    query = applyFilters(query, matchingUserIds);
     const { data } = await query;
     exportToCSV((data ?? []).map(l => ({
       Timestamp: l.created_at, User: l.profiles?.full_name ?? '', Action: l.action,
@@ -121,7 +153,7 @@ export default function AuditLogsPage() {
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search by action or entity..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
+              <Input placeholder="Search by user, action, or entity..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
             </div>
             <Select value={actionFilter} onValueChange={setActionFilter}>
               <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All Actions" /></SelectTrigger>
@@ -136,6 +168,19 @@ export default function AuditLogsPage() {
                 <SelectItem value="reject">Reject</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mt-3">
+            <div className="flex items-center gap-2 flex-1">
+              <label htmlFor="audit-date-from" className="text-xs text-muted-foreground whitespace-nowrap">From</label>
+              <Input id="audit-date-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="flex-1" />
+            </div>
+            <div className="flex items-center gap-2 flex-1">
+              <label htmlFor="audit-date-to" className="text-xs text-muted-foreground whitespace-nowrap">To</label>
+              <Input id="audit-date-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="flex-1" />
+            </div>
+            {(dateFrom || dateTo) && (
+              <Button variant="ghost" size="sm" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear dates</Button>
+            )}
           </div>
         </CardContent>
       </Card>
