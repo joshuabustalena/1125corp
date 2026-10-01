@@ -64,6 +64,11 @@ export default function LoansPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
   const isCollector = profile?.role_name === 'Branch Field Collector';
+  // Mirrors the loans_insert RLS policy (add_proxy_collector_loans_access.sql)
+  // exactly, so the New Loan button is never hidden from a role the database
+  // would actually let submit one. Branch Proxy Collector and Branch Manager
+  // were already allowed at that layer; this button just hadn't caught up.
+  const canCreateLoan = isAdmin || ['Branch Field Collector', 'Branch Proxy Collector', 'Branch Manager'].includes(profile?.role_name ?? '');
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   // Bumped on every loadLoans() call and checked when it resolves — the
   // Search box has no debounce, so typing a name fires one request per
@@ -392,6 +397,10 @@ export default function LoansPage() {
       collector_id: form.collector_id || null,
       branch_id: form.branch_id || null,
       area_id: form.area_id || null,
+      // Whoever requested the loan is who the loan documents print as its
+      // Field Collector (see voucher/agreement pages) — collector_id stays the
+      // customer's assigned collector, since that drives remittance/scoping.
+      created_by: profile?.id ?? null,
       status: 'pending',
       release_date: form.release_date,
       due_date: dueDate,
@@ -441,6 +450,7 @@ export default function LoansPage() {
       collector_id: l.collector_id,
       branch_id: l.branch_id,
       area_id: l.area_id,
+      created_by: profile?.id ?? null,
       status: 'pending',
       release_date: releaseDate,
       due_date: new Date(new Date(releaseDate).getTime() + l.term_days * 86400000).toISOString().split('T')[0],
@@ -575,7 +585,7 @@ export default function LoansPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        {(profile?.role_name === 'Branch Field Collector' || profile?.role_name === 'Administrator') && (
+        {canCreateLoan && (
           <Button size="sm" onClick={() => { setExistingLoanBlock(null); setDialogOpen(true); }}>
             <Plus className="w-4 h-4 mr-2" />
             New Loan

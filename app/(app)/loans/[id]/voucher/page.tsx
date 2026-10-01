@@ -40,7 +40,7 @@ export default function VoucherPage() {
     const [{ data }, { data: voucher }] = await Promise.all([
       supabase
         .from('loans')
-        .select('*, customers(first_name, last_name), collectors(profiles(full_name)), branches(name), approved_by_profile:profiles!approved_by(full_name), disbursed_by_profile:profiles!disbursed_by(full_name)')
+        .select('*, customers(first_name, last_name), collectors(profiles(full_name)), branches(name), created_by_profile:profiles!created_by(full_name), approved_by_profile:profiles!approved_by(full_name), disbursed_by_profile:profiles!disbursed_by(full_name)')
         .eq('id', id)
         .maybeSingle(),
       supabase.from('cash_vouchers').select('voucher_number').eq('loan_id', id).maybeSingle(),
@@ -82,7 +82,10 @@ export default function VoucherPage() {
     isRenewal,
     borrowerName: `${loan.customers?.first_name ?? ''} ${loan.customers?.last_name ?? ''}`.trim(),
     netProceeds: Number(loan.release_amount),
-    fieldCollectorName: loan.collectors?.profiles?.full_name ?? '',
+    // Whoever requested the loan (e.g. a Proxy Collector covering the area)
+    // prints as Field Collector. Loans from before created_by was recorded
+    // fall back to the customer's assigned collector, as they always did.
+    fieldCollectorName: loan.created_by_profile?.full_name ?? loan.collectors?.profiles?.full_name ?? '',
     branchCashierName: loan.disbursed_by_profile?.full_name ?? '',
     branchManagerName: loan.approved_by_profile?.full_name ?? '',
     branchName: loan.branches?.name ?? '',

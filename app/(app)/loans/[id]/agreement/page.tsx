@@ -89,7 +89,7 @@ export default function LoanAgreementPage() {
     const id = params.id as string;
     const { data } = await supabase
       .from('loans')
-      .select('*, customers(first_name, last_name, address, barangay, city, province, government_id), branches(name), collectors(profiles(full_name)), approved_by_profile:profiles!approved_by(full_name)')
+      .select('*, customers(first_name, last_name, address, barangay, city, province, government_id), branches(name), collectors(profiles(full_name)), created_by_profile:profiles!created_by(full_name), approved_by_profile:profiles!approved_by(full_name)')
       .eq('id', id)
       .maybeSingle();
 
@@ -161,7 +161,9 @@ export default function LoanAgreementPage() {
     loanProceeds,
     branchManagerName: loan.approved_by_profile?.full_name ?? '',
     branchName: loan.branches?.name ?? '',
-    collectorName: loan.collectors?.profiles?.full_name ?? '',
+    // Same rule as the voucher: the requester prints as Field Collector,
+    // falling back to the assigned collector for older loans.
+    collectorName: loan.created_by_profile?.full_name ?? loan.collectors?.profiles?.full_name ?? '',
   };
 
   const aRow = (label: React.ReactNode, value: React.ReactNode, bold = true) => (
