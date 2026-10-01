@@ -51,10 +51,13 @@ export default function CashVouchersPage() {
   const [payee, setPayee] = useState('');
   const [particulars, setParticulars] = useState('');
   const [voucherDate, setVoucherDate] = useState(todayStr());
-  // Starts empty and is set from the accounts actually loaded — '1000'
-  // ("Cash on Hand") is being retired, and a default pointing at a deleted
-  // account silently posts nothing.
-  const [cashAccountCode, setCashAccountCode] = useState('');
+  // Up to 3 cash accounts can jointly fund one voucher (client request, Oct
+  // 2026 — same line-item shape as Remittance's cash lines, but those are
+  // DEBITS, cash coming in; a voucher pays cash OUT, so every line here is a
+  // CREDIT). Starts with one empty line and is re-picked from the accounts
+  // actually loaded — '1000' ("Cash on Hand") is being retired, and a
+  // default pointing at a deleted account silently posts nothing.
+  const [cashSourceLines, setCashSourceLines] = useState<CashVoucherLine[]>([{ account_code: '', amount: '' }]);
   const [lines, setLines] = useState<CashVoucherLine[]>([{ account_code: '', amount: '' }]);
   const [preparedByName, setPreparedByName] = useState('');
   const [approvedByName, setApprovedByName] = useState('');
@@ -176,18 +179,32 @@ export default function CashVouchersPage() {
     && (!branchId || !a.branch_id || a.branch_id === branchId)
   );
 
-  // Pick a sensible source once the accounts (and the branch) are known, and
-  // re-pick if the current choice isn't valid for the selected branch —
-  // otherwise switching branch leaves a stale account selected and the
-  // voucher posts against another branch's cash.
+  // Pick a sensible source for the first cash-source line once the accounts
+  // (and the branch) are known, and re-pick if that choice isn't valid for
+  // the selected branch — otherwise switching branch leaves a stale account
+  // selected and the voucher posts against another branch's cash. Only the
+  // first line is auto-picked; additional lines (a second/third cash
+  // source) start blank for the user to choose.
   useEffect(() => {
     if (cashAccounts.length === 0) return;
-    setCashAccountCode(prev => {
-      if (prev && cashAccounts.some(a => a.code === prev)) return prev;
+    setCashSourceLines(prev => {
+      const first = prev[0];
+      if (first?.account_code && cashAccounts.some(a => a.code === first.account_code)) return prev;
       const vault = cashAccounts.find(a => a.name.toLowerCase().includes('vault'));
-      return (vault ?? cashAccounts[0]).code;
+      return [{ ...first, account_code: (vault ?? cashAccounts[0]).code }, ...prev.slice(1)];
     });
   }, [cashAccounts]);
+
+  const MAX_CASH_SOURCE_LINES = 3;
+  function addCashSourceLine() {
+    setCashSourceLines(prev => (prev.length >= MAX_CASH_SOURCE_LINES ? prev : [...prev, { account_code: '', amount: '' }]));
+  }
+  function removeCashSourceLine(i: number) {
+    setCashSourceLines(prev => prev.filter((_, idx) => idx !== i));
+  }
+  function updateCashSourceLine(i: number, field: keyof CashVoucherLine, value: string) {
+    setCashSourceLines(prev => prev.map((l, idx) => (idx === i ? { ...l, [field]: value } : l)));
+  }
 
   function addLine() {
     setLines(prev => [...prev, { account_code: '', amount: '' }]);
@@ -207,15 +224,32 @@ export default function CashVouchersPage() {
     });
   const totalAmount = resolvedLines.reduce((sum, l) => sum + l.amount, 0);
 
+  const resolvedCashSourceLines = cashSourceLines
+    .filter(l => l.account_code && Number(l.amount) > 0)
+    .map(l => {
+      const acct = accounts.find(a => a.code === l.account_code);
+      return { account_code: l.account_code, account_name: acct?.name ?? '', amount: Number(l.amount) };
+    });
+  const cashSourceTotal = resolvedCashSourceLines.reduce((sum, l) => sum + l.amount, 0);
+  // The cash source lines are the CREDIT side funding this exact voucher —
+  // same "must add up to the total" rule Remittance enforces on its own
+  // lines, just checked against a small tolerance for floating-point rounding.
+  const cashSourceMismatch = resolvedCashSourceLines.length > 0 && Math.abs(cashSourceTotal - totalAmount) > 0.01;
+
   function resetForm() {
     setPayee('');
     setParticulars('');
     setLines([{ account_code: '', amount: '' }]);
+    setCashSourceLines(prev => [{ account_code: prev[0]?.account_code ?? '', amount: '' }]);
     setApprovedByName('');
   }
 
   async function handleGenerate() {
     if (!payee || !particulars || resolvedLines.length === 0 || !branchId) return;
+    if (resolvedCashSourceLines.length === 0 || cashSourceMismatch) {
+      toast({ title: 'Cash source doesn’t match the total', description: `The cash source line(s) must add up to exactly ${formatCurrency(totalAmount)}.`, variant: 'destructive' });
+      return;
+    }
     setSaving(true);
 
     const { data: voucher, error } = await supabase.from('general_cash_vouchers').insert({
@@ -223,7 +257,11 @@ export default function CashVouchersPage() {
       payee,
       particulars,
       voucher_date: voucherDate,
-      cash_account_code: cashAccountCode,
+      // Kept as the first source for anything still reading this single
+      // column; cash_source_lines is the real record once more than one
+      // account funds the voucher.
+      cash_account_code: resolvedCashSourceLines[0].account_code,
+      cash_source_lines: resolvedCashSourceLines,
       lines: resolvedLines,
       total_amount: totalAmount,
       prepared_by_name: preparedByName || null,
@@ -256,7 +294,7 @@ export default function CashVouchersPage() {
       branchId: branchId || null,
       lines: [
         ...resolvedLines.map(l => ({ accountCode: l.account_code, debit: l.amount, memo: particulars })),
-        { accountCode: cashAccountCode, credit: totalAmount, memo: `Cash Voucher — ${payee}` },
+        ...resolvedCashSourceLines.map(l => ({ accountCode: l.account_code, credit: l.amount, memo: `Cash Voucher — ${payee}` })),
       ],
     });
 
@@ -505,15 +543,34 @@ export default function CashVouchersPage() {
             <div className="space-y-2"><Label>Payee *</Label><Input value={payee} onChange={(e) => setPayee(e.target.value)} placeholder="Name of person/entity receiving cash" /></div>
             <div className="space-y-2"><Label>Date *</Label><Input type="date" value={voucherDate} onChange={(e) => setVoucherDate(e.target.value)} /></div>
             <div className="space-y-2 sm:col-span-2"><Label>Particulars *</Label><Input value={particulars} onChange={(e) => setParticulars(e.target.value)} placeholder="e.g. Payment for Employee Loan, Office Repairs" /></div>
-            <div className="space-y-2">
-              <Label>Cash Account *</Label>
-              <Select value={cashAccountCode} onValueChange={setCashAccountCode}>
-                <SelectTrigger><SelectValue placeholder="Select cash account" /></SelectTrigger>
-                <SelectContent>
-                  {cashAccounts.map(a => <SelectItem key={a.id} value={a.code}>{a.code} — {a.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Cash Source * <span className="text-xs text-muted-foreground font-normal">(up to 3 accounts, must total {formatCurrency(totalAmount)})</span></Label>
+            {cashSourceLines.map((line, i) => (
+              <div key={i} className="grid grid-cols-12 gap-2 items-center">
+                <div className="col-span-7">
+                  <Select value={line.account_code} onValueChange={(v) => updateCashSourceLine(i, 'account_code', v)}>
+                    <SelectTrigger><SelectValue placeholder="Select cash account" /></SelectTrigger>
+                    <SelectContent>{cashAccounts.map(a => <SelectItem key={a.id} value={a.code}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-4">
+                  <Input type="number" value={line.amount} onChange={(e) => updateCashSourceLine(i, 'amount', e.target.value)} placeholder="Credit Amount" />
+                </div>
+                <div className="col-span-1">
+                  <Button type="button" variant="ghost" size="icon" onClick={() => removeCashSourceLine(i)} disabled={cashSourceLines.length <= 1}>
+                    <Trash2 className="w-4 h-4 text-destructive" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+            <Button type="button" variant="outline" size="sm" onClick={addCashSourceLine} disabled={cashSourceLines.length >= MAX_CASH_SOURCE_LINES}>
+              <Plus className="w-4 h-4 mr-2" />Add Cash Source
+            </Button>
+            {cashSourceMismatch && (
+              <p className="text-xs text-destructive">Cash source lines total {formatCurrency(cashSourceTotal)}, but must equal {formatCurrency(totalAmount)}.</p>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -587,7 +644,7 @@ export default function CashVouchersPage() {
                 {downloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
                 Download PDF
               </Button>
-              <Button type="button" onClick={handleGenerate} disabled={saving || !payee || !particulars || resolvedLines.length === 0 || !branchId}>
+              <Button type="button" onClick={handleGenerate} disabled={saving || !payee || !particulars || resolvedLines.length === 0 || !branchId || resolvedCashSourceLines.length === 0 || cashSourceMismatch}>
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Generate
               </Button>

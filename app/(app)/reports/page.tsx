@@ -42,9 +42,8 @@ const NO_BRANCH = '00000000-0000-0000-0000-000000000000';
 // 189042.71 instead of ₱189,042.71. Counts (DaysOverdue, Customers, Loans)
 // are deliberately absent so they never get a peso sign.
 const MONEY_COLUMNS = new Set([
-  'Amount', 'CashCollected', 'Offset', 'FirstPayment', 'TotalDeduction', 'TotalCollection',
-  'TotalCollections', 'TotalRelease', 'TotalInterest', 'ServiceFee', 'NetProceeds',
-  'OverdueAmount', 'Balance', 'AmountReleased',
+  'TotalDeduction', 'TotalCollections', 'TotalRelease', 'TotalInterest', 'ServiceFee', 'NetProceeds',
+  'OverdueAmount', 'Balance', 'AmountReleased', 'TotalReceivable', 'TotalCashCollected', 'TotalAmountCollected',
 ]);
 
 // Friendlier header text for a column whose raw key (still used internally
@@ -63,8 +62,6 @@ function columnLabel(key: string): string {
 // 'monthly_release' key.
 function reportTypeLabel(type: string, isFieldCollector: boolean): string {
   switch (type) {
-    case 'daily_collection': return 'Daily Collection';
-    case 'weekly_collection': return 'Weekly Collection (per Area)';
     case 'monthly_collection': return 'Monthly Collection (per Area)';
     case 'branch_performance': return isFieldCollector ? 'Release (My Area)' : 'Branch Performance';
     case 'monthly_release': return 'Monthly Release';
@@ -85,7 +82,7 @@ export default function ReportsPage() {
   // branchResolved gates the first generateReport() so it can't fire once
   // with the default 'all' before the lock lands.
   const [branchResolved, setBranchResolved] = useState(false);
-  const [reportType, setReportType] = useState('daily_collection');
+  const [reportType, setReportType] = useState('monthly_collection');
   const [startDate, setStartDate] = useState(dateToStr(new Date(Date.now() - 30 * 86400000)));
   const [endDate, setEndDate] = useState(todayStr());
   // Monthly Release picks one calendar month instead of a date range — Kat's
@@ -186,78 +183,52 @@ export default function ReportsPage() {
       // plus the day-one First Payment taken out of the proceeds. Both are
       // real collection, but only the first is money that physically moved,
       // so the client wants them on separate lines rather than one figure.
-      case 'daily_collection': {
-        // Paginated — a wide enough date range takes this past PostgREST's
-        // silent 1000-row cap, which would drop payments from the totals with
+      // Replaces the old separate Daily/Weekly/Monthly Collection reports
+      // (client request, Oct 2026 — "parang per month na lang din date na
+      // seselect, same sa monthly release"): pick one month, see every day
+      // within it broken out per area, each day's Cash Collected / Total
+      // Deduction / Total Amount Collected — the same three figures Daily
+      // Collection already computed, just scoped to a month and split by
+      // area instead of lumped company-wide.
+      case 'monthly_collection': {
+        const [y, m] = monthFilter.split('-').map(Number);
+        const monthStart = `${monthFilter}-01`;
+        const monthEnd = dateToStr(new Date(y, m, 0));
+        // Paginated — a wide enough range takes this past PostgREST's silent
+        // 1000-row cap, which would drop payments from the totals with
         // nothing on screen to show it (see lib/db-chunk.ts).
-        const paysPromise = selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate)));
-        let lq = supabase.from('loans').select('release_date, amount, release_amount, offset_balance, daily_payment, total_payable, term_days, branch_id, area_id').gte('release_date', startDate).lte('release_date', endDate);
+        const paysPromise = selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', monthStart).lte('payment_date', monthEnd)));
+        let lq = supabase.from('loans').select('release_date, amount, release_amount, area_id').gte('release_date', monthStart).lte('release_date', monthEnd);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
         const [pays, { data: loans }] = await Promise.all([paysPromise, lq]);
 
-        const byDate: Record<string, { cash: number; offset: number; firstPayment: number; deduction: number }> = {};
-        const ensure = (d: string) => (byDate[d] ??= { cash: 0, offset: 0, firstPayment: 0, deduction: 0 });
-        (pays ?? []).forEach((p: any) => { ensure(p.payment_date).cash += Number(p.amount_paid) || 0; });
-        (loans ?? []).forEach((l: any) => {
-          if (!l.release_date) return;
-          const row = ensure(l.release_date);
-          row.offset += Number(l.offset_balance) || 0;
-          // Same auto-computed daily rate the rest of the app uses for the
-          // day-one payment when no custom daily_payment is stored. Shown as
-          // the scheduled figure the Loan Agreement quotes.
-          row.firstPayment += Number(l.daily_payment) > 0
-            ? Number(l.daily_payment)
-            : (l.term_days > 0 ? Number(l.total_payable) / l.term_days : 0);
-          // Total Deduction is what was ACTUALLY withheld from the proceeds,
-          // which on real data does not always equal offset + first payment
-          // (renewals in particular release without withholding the day-one
-          // payment). Using the real figure keeps this column truthful.
-          row.deduction += (Number(l.amount) || 0) - (Number(l.release_amount) || 0);
-        });
-        reportData = Object.entries(byDate)
-          .sort((a, b) => b[0].localeCompare(a[0]))
-          .map(([date, v]) => ({
-            Date: date,
-            CashCollected: Math.round(v.cash * 100) / 100,
-            Offset: Math.round(v.offset * 100) / 100,
-            FirstPayment: Math.round(v.firstPayment * 100) / 100,
-            TotalDeduction: Math.round(v.deduction * 100) / 100,
-            TotalCollection: Math.round((v.cash + v.deduction) * 100) / 100,
-          }));
-        break;
-      }
-      // Weekly/Monthly collection are broken down PER AREA (client request),
-      // not just one lump figure per period — so a branch manager can see
-      // which area brought in what over the chosen date range.
-      case 'weekly_collection':
-      case 'monthly_collection': {
-        const isWeekly = reportType === 'weekly_collection';
-        // Paginated for the same reason as daily_collection above.
-        const data = await selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate).order('payment_date')));
         const areaNameById = new Map(areas.map((a: any) => [a.id, a.name]));
         const areaIdByCustomer = new Map(customers.map((c: any) => [c.id, c.area_id]));
-        const grouped: Record<string, { period: string; area: string; amount: number }> = {};
-        (data ?? []).forEach((p: any) => {
-          let period: string;
-          if (isWeekly) {
-            const d = new Date(p.payment_date);
-            const weekStart = new Date(d);
-            weekStart.setDate(d.getDate() - d.getDay());
-            period = weekStart.toISOString().split('T')[0];
-          } else {
-            period = p.payment_date.substring(0, 7);
-          }
+        const byKey: Record<string, { date: string; area: string; cash: number; deduction: number }> = {};
+        const ensure = (date: string, area: string) => (byKey[`${date}|${area}`] ??= { date, area, cash: 0, deduction: 0 });
+        (pays ?? []).forEach((p: any) => {
           const area = areaNameById.get(areaIdByCustomer.get(p.customer_id)) ?? 'Unassigned';
-          const key = `${period}|${area}`;
-          if (!grouped[key]) grouped[key] = { period, area, amount: 0 };
-          grouped[key].amount += Number(p.amount_paid);
+          ensure(p.payment_date, area).cash += Number(p.amount_paid) || 0;
         });
-        reportData = Object.values(grouped)
-          .sort((a, b) => a.period.localeCompare(b.period) || a.area.localeCompare(b.area))
-          .map(v => (isWeekly
-            ? { Week: v.period, Area: v.area, Amount: v.amount }
-            : { Month: v.period, Area: v.area, Amount: v.amount }));
+        (loans ?? []).forEach((l: any) => {
+          if (!l.release_date) return;
+          const area = areaNameById.get(l.area_id) ?? 'Unassigned';
+          // Total Deduction is what was ACTUALLY withheld from the proceeds
+          // at release (amount - release_amount) — same definition Daily
+          // Collection and Branch Performance already use.
+          ensure(l.release_date, area).deduction += (Number(l.amount) || 0) - (Number(l.release_amount) || 0);
+        });
+
+        reportData = Object.values(byKey)
+          .sort((a, b) => a.date.localeCompare(b.date) || a.area.localeCompare(b.area))
+          .map(v => ({
+            Date: v.date,
+            Area: v.area,
+            TotalCashCollected: Math.round(v.cash * 100) / 100,
+            TotalDeduction: Math.round(v.deduction * 100) / 100,
+            TotalAmountCollected: Math.round((v.cash + v.deduction) * 100) / 100,
+          }));
         break;
       }
 // Client-specified column set: Total Collections, Total Release, Total
@@ -267,7 +238,7 @@ export default function ReportsPage() {
         let lq = supabase.from('loans').select('amount, interest_amount, service_fee, offset_balance, daily_payment, total_payable, term_days, release_amount, branch_id, area_id, branches(name), areas(name)').gte('release_date', startDate).lte('release_date', endDate);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
-        // Paginated for the same reason as daily_collection above.
+        // Paginated for the same reason as monthly_collection above.
         const paysPromise = selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', startDate).lte('payment_date', endDate)));
         const [{ data: loans }, pays] = await Promise.all([lq, paysPromise]);
 
@@ -367,6 +338,7 @@ export default function ReportsPage() {
             DaysOverdue: r.daysOverdue,
             OverdueAmount: r.amount,
             OverdueRate: rate(byArea[r.area].overdue, byArea[r.area].receivable),
+            TotalReceivable: byArea[r.area].receivable,
           }))
           .sort((a: any, b: any) => b.OverdueAmount - a.OverdueAmount);
         break;
@@ -446,7 +418,7 @@ export default function ReportsPage() {
 
     setData(reportData);
     setCheckedRows(new Set());
-    const total = reportData.reduce((s, r) => s + (r.Amount ?? r.TotalCollection ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.AmountReleased ?? r.Customers ?? 0), 0);
+    const total = reportData.reduce((s, r) => s + (r.TotalAmountCollected ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.AmountReleased ?? r.Customers ?? 0), 0);
     setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0, overdueRate: overallOverdueRate });
     setLoading(false);
   }
@@ -465,7 +437,7 @@ export default function ReportsPage() {
   const areaLabel = isFieldCollector
     ? (myArea?.name ?? '—')
     : (areaFilter === 'all' ? 'All Areas' : (areas.find(a => a.id === areaFilter)?.name ?? '—'));
-  const periodLabel = reportType === 'monthly_release'
+  const periodLabel = reportType === 'monthly_release' || reportType === 'monthly_collection'
     ? new Date(`${monthFilter}-01`).toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
     : `${formatDate(startDate)} – ${formatDate(endDate)}`;
 
@@ -522,17 +494,16 @@ export default function ReportsPage() {
     setPrinting(false);
   }
 
-  // Weekly/Monthly rows now carry BOTH a period and an Area, so the label has
+  // Monthly Collection rows carry BOTH a Date and an Area, so the label has
   // to combine them — keying off Area alone would print the same bar name
-  // once per period and make the chart unreadable.
+  // once per day and make the chart unreadable.
   const chartData = data.slice(0, 10).map((d, i) => {
-    const period = d.Month ?? d.Week;
-    const name = period
-      ? (d.Area ? `${period} · ${d.Area}` : period)
+    const name = (d.Date && d.Area)
+      ? `${d.Date} · ${d.Area}`
       : (d.Branch ?? d.Area ?? d.Name ?? d.Date ?? `Row ${i + 1}`);
     return {
       name,
-      value: d.TotalCollections ?? d.TotalCollection ?? d.Amount ?? d.OverdueAmount ?? d.Customers ?? d.Balance ?? d.AmountReleased ?? 0,
+      value: d.TotalAmountCollected ?? d.TotalCollections ?? d.OverdueAmount ?? d.Customers ?? d.Balance ?? d.AmountReleased ?? 0,
     };
   });
 
@@ -595,8 +566,6 @@ export default function ReportsPage() {
               <Select value={reportType} onValueChange={setReportType}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="daily_collection">Daily Collection</SelectItem>
-                  <SelectItem value="weekly_collection">Weekly Collection (per Area)</SelectItem>
                   <SelectItem value="monthly_collection">Monthly Collection (per Area)</SelectItem>
                   <SelectItem value="branch_performance">{isFieldCollector ? 'Release (My Area)' : 'Branch Performance'}</SelectItem>
                   <SelectItem value="monthly_release">Monthly Release</SelectItem>
@@ -606,7 +575,7 @@ export default function ReportsPage() {
                 </SelectContent>
               </Select>
             </div>
-            {reportType === 'monthly_release' ? (
+            {reportType === 'monthly_release' || reportType === 'monthly_collection' ? (
               <div className="space-y-2 flex-1">
                 <Label>Month</Label>
                 <Input type="month" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} />
