@@ -30,6 +30,7 @@ import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye } from 'lucide-react';
 import { SPECIAL_LOAN_TYPES, SPECIAL_LOAN_LABELS } from '@/lib/special-loans';
+import { getPeriodRange } from '@/lib/payroll-period';
 import { DocumentScaler } from '@/components/document-scaler';
 
 const pvCell: React.CSSProperties = { border: '1px solid #000', padding: '5px 8px' };
@@ -42,22 +43,8 @@ function payrollDeductionsTotal(p: any): number {
     + Number(p.special_deduction || 0);
 }
 
-// Semi-monthly payroll, paid on the 1st and the 16th of each month, each
-// covering the cutoff that just ended before that pay date:
-// - "1" (paid the 1st) covers the 16th of the PREVIOUS month through that
-//   month's actual last day.
-// - "16" (paid the 16th) covers the 1st–15th of the SAME month.
 function pad(n: number) { return String(n).padStart(2, '0'); }
 function toDateStr(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
-function getPeriodRange(payDateStr: string, period: string) {
-  const payDate = new Date(payDateStr);
-  const year = payDate.getFullYear();
-  const month = payDate.getMonth();
-  if (period === '1') {
-    return { start: toDateStr(new Date(year, month - 1, 16)), end: toDateStr(new Date(year, month, 0)) };
-  }
-  return { start: toDateStr(new Date(year, month, 1)), end: toDateStr(new Date(year, month, 15)) };
-}
 // Working days exclude Sundays, matching the "collection days" convention
 // used elsewhere in the app for daily-payment schedules.
 function countWorkingDays(startStr: string, endStr: string) {
@@ -618,6 +605,35 @@ export default function PayrollPage() {
       return;
     }
 
+    // One payslip per employee per cutoff (Kat, Oct 2026). Generating again
+    // used to delete and re-create the pending rows but re-insert for EVERY
+    // employee, so anyone already approved ('paid') got a second payslip for
+    // the same cutoff. Now only employees with no payslip yet for this
+    // cutoff are generated; to recompute someone, delete their payslip first.
+    // Matched by cutoff, not exact pay date: the cutoff depends only on the
+    // period and the pay date's month (getPeriodRange), and pay dates for
+    // the same cutoff do vary (e.g. a "16" run paid on the 17th).
+    const payMonthStart = `${payDate.slice(0, 7)}-01`;
+    const payMonthEnd = toDateStr(new Date(Number(payDate.slice(0, 4)), Number(payDate.slice(5, 7)), 0));
+    const { data: existingRows, error: existingError } = await supabase
+      .from('payroll')
+      .select('employee_id')
+      .eq('period', period)
+      .gte('pay_date', payMonthStart)
+      .lte('pay_date', payMonthEnd);
+    if (existingError) {
+      toast({ title: 'Error', description: existingError.message, variant: 'destructive' });
+      setGenerating(false);
+      return;
+    }
+    const alreadyGenerated = new Set((existingRows ?? []).map((r: any) => r.employee_id));
+    const toGenerate = employees.filter(e => !alreadyGenerated.has(e.id));
+    if (toGenerate.length === 0) {
+      toast({ title: 'Already generated', description: 'Every active employee already has a payslip for this cutoff. Delete a payslip first if it needs to be recomputed.', variant: 'destructive' });
+      setGenerating(false);
+      return;
+    }
+
     // Admin-configurable in Settings -> Deductions: each is either a
     // percentage of the cutoff's expected basic pay or a flat peso amount,
     // and can differ between the 1st and 16th cutoffs (defaults match what
@@ -740,15 +756,8 @@ export default function PayrollPage() {
       if (!previousNetPayByEmployee.has(p.employee_id)) previousNetPayByEmployee.set(p.employee_id, Number(p.net_pay));
     }
 
-    // Re-generating the same period/pay date used to insert a second,
-    // duplicate row per employee on every click instead of replacing the
-    // numbers — clear out the still-pending rows for this exact period
-    // first so "Generate Payroll" is safe to click again. Already-approved
-    // ("paid") rows are left untouched.
-    await supabase.from('payroll').delete().eq('period', period).eq('pay_date', payDate).eq('status', 'pending');
-
     const totalWorkingDays = countWorkingDays(start, end);
-    const records = employees.map(e => {
+    const records = toGenerate.map(e => {
       const presentDays = (att ?? []).filter(a => a.employee_id === e.id && (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted').length;
       const isMonthly = e.pay_type === 'monthly';
       // A fixed-monthly employee (e.g. Branch Manager) is paid half their
@@ -860,7 +869,9 @@ export default function PayrollPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Success', description: `Payroll generated for ${records.length} employees` });
+      const skippedCount = employees.length - toGenerate.length;
+      const skipped = skippedCount > 0 ? ` (${skippedCount} already had a payslip for this cutoff and were skipped)` : '';
+      toast({ title: 'Success', description: `Payroll generated for ${records.length} employees${skipped}` });
       load();
     }
     setGenerating(false);

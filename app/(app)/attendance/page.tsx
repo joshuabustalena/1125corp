@@ -22,6 +22,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatDate, formatTime, formatDuration, formatCurrency, exportToCSV, formatCustomerName } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { logAudit } from '@/lib/audit-log';
+import { getPeriodRange, cutoffStartForDate } from '@/lib/payroll-period';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays, WifiOff, CloudUpload, Trash2 } from 'lucide-react';
@@ -61,6 +62,11 @@ export default function AttendancePage() {
   // Administrator sign-off (see canActOnRecord below).
   const canReview = isAdmin || isBranchManager;
   const [records, setRecords] = useState<any[]>([]);
+  // Employees whose payroll for the shown date's cutoff is already generated.
+  // Their review status is frozen for a Branch Manager (Kat, Oct 2026): the
+  // payslip was computed from it, so flipping it afterwards (e.g. accepting a
+  // day that was rejected) would leave payroll and attendance disagreeing.
+  const [payrollLockedIds, setPayrollLockedIds] = useState<Set<string>>(new Set());
   const [branchEmployeeIds, setBranchEmployeeIds] = useState<string[] | null>(null);
   const [employees, setEmployees] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -224,9 +230,23 @@ export default function AttendancePage() {
       const ids = filteredEmployeeIds();
       if (ids) query = query.in('employee_id', ids.length > 0 ? ids : ['00000000-0000-0000-0000-000000000000']);
     }
-    const { data } = await query.limit(200);
+    // A cutoff's payroll is paid in the same month (the "16" run) or the
+    // next one (the "1" run), so this window always contains it; the exact
+    // match is then done with getPeriodRange, same as payroll itself.
+    const cutoffStart = cutoffStartForDate(dateFilter);
+    const payWindowEnd = new Date(`${dateFilter}T00:00:00`);
+    payWindowEnd.setDate(payWindowEnd.getDate() + 45);
+    const [{ data }, { data: payrollRows }] = await Promise.all([
+      query.limit(200),
+      supabase.from('payroll').select('employee_id, period, pay_date').gte('pay_date', `${dateFilter.slice(0, 7)}-01`).lte('pay_date', toDateStr(payWindowEnd)),
+    ]);
     if (seq !== loadSeq.current) return; // a newer load() already started — discard this stale response
     setRecords(data ?? []);
+    setPayrollLockedIds(new Set(
+      (payrollRows ?? [])
+        .filter((p: any) => getPeriodRange(p.pay_date, p.period).start === cutoffStart)
+        .map((p: any) => p.employee_id),
+    ));
     setLoading(false);
   }
 
@@ -843,12 +863,20 @@ export default function AttendancePage() {
       toast({ title: 'Cannot approve yet', description: 'This record is missing a Time In or Time Out. It can only be Accepted once both are present.', variant: 'destructive' });
       return;
     }
+    const payrollLocked = !!record && payrollLockedIds.has(record.employee_id);
+    if (payrollLocked && !isAdmin) {
+      toast({ title: 'Payroll already generated', description: 'This cutoff\'s payroll is already generated, so this attendance can no longer be changed. Ask an Administrator.', variant: 'destructive' });
+      return;
+    }
     const { error } = await supabase.from('attendance').update({ review_status: reviewStatus }).eq('id', id);
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
       return;
     }
     setRecords(prev => prev.map(r => r.id === id ? { ...r, review_status: reviewStatus } : r));
+    if (payrollLocked) {
+      toast({ title: 'Payroll not updated', description: 'This cutoff\'s payroll was already generated. If the payslip is still pending, delete it and generate again for this change to count.' });
+    }
     logAudit({ action: reviewStatus === 'accepted' ? 'approve' : 'reject', entityType: 'attendance', entityId: id, userId: profile?.id ?? null });
     if (record) {
       notifyProfile(record.employees?.profile_id, {
@@ -884,6 +912,7 @@ export default function AttendancePage() {
   function canActOnRecord(r: any) {
     if (isAdmin) return true;
     if (!isBranchManager) return false;
+    if (payrollLockedIds.has(r.employee_id)) return false;
     // A Branch Manager reviews everyone else in their branch, but never
     // their own attendance — self-approval would let them accept/reject
     // their own record (and the late/undertime deduction riding on it).
@@ -1199,7 +1228,11 @@ export default function AttendancePage() {
                         <XCircle className="w-3.5 h-3.5 mr-1.5 text-destructive" />Reject
                       </Button>
                     )}
-                    {isBranchManager && !canActOnRecord(r) && r.review_status === 'pending' && (
+                    {isBranchManager && payrollLockedIds.has(r.employee_id) ? (
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />Payroll generated — locked
+                      </span>
+                    ) : isBranchManager && !canActOnRecord(r) && r.review_status === 'pending' && (
                       <span className="text-xs text-muted-foreground flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5" />Waiting for Admin approval
                       </span>
@@ -1348,7 +1381,9 @@ export default function AttendancePage() {
                               <XCircle className="w-4 h-4 text-destructive" />
                             </Button>
                           )}
-                          {isBranchManager && !canActOnRecord(r) && r.review_status === 'pending' && (
+                          {isBranchManager && payrollLockedIds.has(r.employee_id) ? (
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">Payroll generated — locked</span>
+                          ) : isBranchManager && !canActOnRecord(r) && r.review_status === 'pending' && (
                             <span className="text-xs text-muted-foreground whitespace-nowrap">Waiting for Admin approval</span>
                           )}
                           {isAdmin && (
