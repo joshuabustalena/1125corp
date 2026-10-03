@@ -104,6 +104,10 @@ export default function PayrollPage() {
   // cutoff — this narrows it down to one employee's own salary-slip
   // history without having to scroll/search the combined table.
   const [recordsEmployeeFilter, setRecordsEmployeeFilter] = useState('all');
+  const [recordsStatusFilter, setRecordsStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
+  // Keyed by the cutoff's first day (getPeriodRange start) rather than the
+  // pay date, since one cutoff can be paid on slightly different dates.
+  const [recordsCutoffFilter, setRecordsCutoffFilter] = useState('all');
   const [employees, setEmployees] = useState<any[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -354,9 +358,29 @@ export default function PayrollPage() {
   // Only the raw `basic_salary` figure from each cutoff counts; incentives,
   // birthday bonus, leave pay, and other allowances are excluded.
   const payrollYears = Array.from(new Set(payroll.map(p => String(new Date(p.pay_date).getFullYear())))).sort((a, b) => Number(b) - Number(a));
-  const filteredPayroll = voucherOnly
-    ? myPayslipRows
-    : (recordsEmployeeFilter === 'all' ? payroll : payroll.filter(p => p.employee_id === recordsEmployeeFilter));
+  const recordsSource = voucherOnly ? myPayslipRows : payroll;
+  const cutoffStartOf = (p: any) => getPeriodRange(p.pay_date, p.period).start;
+  const cutoffMap = new Map<string, { start: string; end: string; payDate: string }>();
+  for (const p of recordsSource) {
+    const r = getPeriodRange(p.pay_date, p.period);
+    if (!cutoffMap.has(r.start)) cutoffMap.set(r.start, { ...r, payDate: p.pay_date });
+  }
+  const cutoffOptions = Array.from(cutoffMap.values()).sort((a, b) => b.start.localeCompare(a.start));
+  // Status counts honour the employee + cutoff filters so each tab's number
+  // matches what clicking it shows.
+  const payrollBeforeStatus = recordsSource.filter((p: any) =>
+    (voucherOnly || recordsEmployeeFilter === 'all' || p.employee_id === recordsEmployeeFilter) &&
+    (recordsCutoffFilter === 'all' || cutoffStartOf(p) === recordsCutoffFilter)
+  );
+  const statusCounts = {
+    all: payrollBeforeStatus.length,
+    pending: payrollBeforeStatus.filter((p: any) => p.status === 'pending').length,
+    paid: payrollBeforeStatus.filter((p: any) => p.status === 'paid').length,
+  };
+  const filteredPayroll = recordsStatusFilter === 'all'
+    ? payrollBeforeStatus
+    : payrollBeforeStatus.filter((p: any) => p.status === recordsStatusFilter);
+  const recordsFiltered = recordsEmployeeFilter !== 'all' || recordsCutoffFilter !== 'all' || recordsStatusFilter !== 'all';
   const payrollEmployeeOptions = Array.from(
     new Map(payroll.map(p => [p.employee_id, formatCustomerName(p.employees?.first_name, p.employees?.last_name) || 'Unknown'])).entries()
   ).sort((a, b) => a[1].localeCompare(b[1]));
@@ -1766,23 +1790,51 @@ export default function PayrollPage() {
 
       {/* Payroll table */}
       <Card className="glass-card border-border">
-        <CardHeader>
-          {/* A self-service viewer only ever has their own rows, so an
-              "Employee" filter offering "All Employees" and their own name is
-              just noise. */}
-          {canManagePayroll && (
-          <div className="space-y-2 max-w-xs">
-            <Label>Employee</Label>
-            <Select value={recordsEmployeeFilter} onValueChange={setRecordsEmployeeFilter}>
-              <SelectTrigger><SelectValue placeholder="All Employees" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Employees</SelectItem>
-                {payrollEmployeeOptions.map(([id, name]) => (
-                  <SelectItem key={id} value={id}>{name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-col sm:flex-row gap-3">
+            {/* A self-service viewer only ever has their own rows, so an
+                "Employee" filter offering "All Employees" and their own name
+                is just noise. */}
+            {canManagePayroll && (
+            <div className="space-y-2 w-full sm:max-w-xs">
+              <Label>Employee</Label>
+              <Select value={recordsEmployeeFilter} onValueChange={setRecordsEmployeeFilter}>
+                <SelectTrigger><SelectValue placeholder="All Employees" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Employees</SelectItem>
+                  {payrollEmployeeOptions.map(([id, name]) => (
+                    <SelectItem key={id} value={id}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            )}
+            <div className="space-y-2 w-full sm:max-w-sm">
+              <Label>Cutoff</Label>
+              <Select value={recordsCutoffFilter} onValueChange={setRecordsCutoffFilter}>
+                <SelectTrigger><SelectValue placeholder="All Cutoffs" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Cutoffs</SelectItem>
+                  {cutoffOptions.map(c => (
+                    <SelectItem key={c.start} value={c.start}>
+                      {formatDate(c.start)} – {formatDate(c.end)} (paid {formatDate(c.payDate)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+          {/* Self-service payslips are always 'paid' (pending drafts are never
+              shown to the employee), so status tabs only make sense for
+              whoever manages payroll. */}
+          {canManagePayroll && (
+            <Tabs value={recordsStatusFilter} onValueChange={(v) => setRecordsStatusFilter(v as 'all' | 'pending' | 'paid')}>
+              <TabsList>
+                <TabsTrigger value="all">All ({statusCounts.all})</TabsTrigger>
+                <TabsTrigger value="pending">Pending ({statusCounts.pending})</TabsTrigger>
+                <TabsTrigger value="paid">Paid ({statusCounts.paid})</TabsTrigger>
+              </TabsList>
+            </Tabs>
           )}
         </CardHeader>
         <CardContent className="p-0">
@@ -1795,9 +1847,11 @@ export default function PayrollPage() {
                   broken page — their payslips just aren't approved yet, so say
                   that instead of the manager-facing "No payroll records". */}
               <p className="text-sm text-muted-foreground">
-                {!canManagePayroll
-                  ? "You don't have any approved payslips yet. They'll show up here once an Administrator approves them."
-                  : recordsEmployeeFilter === 'all' ? 'No payroll records' : 'No payroll records for this employee'}
+                {recordsFiltered
+                  ? 'No payroll records match these filters'
+                  : !canManagePayroll
+                    ? "You don't have any approved payslips yet. They'll show up here once an Administrator approves them."
+                    : 'No payroll records'}
               </p>
             </div>
           ) : (
