@@ -89,10 +89,13 @@ export default function ReportsPage() {
   // request: "buong September, makikita nila kung sino-sino yung narelease".
   const [monthFilter, setMonthFilter] = useState(todayStr().substring(0, 7));
   const [data, setData] = useState<any[]>([]);
-  // Per-row tick-off for manual review (e.g. cross-checking each Monthly
-  // Release line against a physical record) — local to this screen only,
-  // not saved anywhere, so it resets with every new Generate.
+  // Monthly Release's "Docs Returned" tick-off, saved per loan
+  // (loans.documents_returned) so it survives refreshes and other devices.
+  // rowLoanIds[i] is the loan behind data[i]; it's only filled for Monthly
+  // Release, the one report whose rows are individual loans.
   const [checkedRows, setCheckedRows] = useState<Set<number>>(new Set());
+  const [rowLoanIds, setRowLoanIds] = useState<string[]>([]);
+  const [savingRows, setSavingRows] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ total: 0, count: 0, average: 0, overdueRate: 0 });
   const [branches, setBranches] = useState<any[]>([]);
@@ -175,6 +178,8 @@ export default function ReportsPage() {
     // Only the Overdue report sets this; every other report leaves it 0 so
     // the rate card stays hidden.
     let overallOverdueRate = 0;
+    let loanIds: string[] = [];
+    const returnedRows = new Set<number>();
 
     switch (reportType) {
       // Collection is reported per day split into what actually came in as
@@ -355,18 +360,22 @@ export default function ReportsPage() {
         // after deductions) — the two differ whenever a renewal's offset
         // balance or day-one payment gets withheld from what's handed over.
         //
-        // Only 'active' loans (Sep 30) — a loan released this month can
-        // since have moved on (renewed into a new loan, paid off, written
-        // off), and this report tracks what's still actually outstanding
-        // from that month's releases, not a historical log of every peso
-        // that ever went out.
-        let q = supabase.from('loans').select('release_date, amount, branch_id, area_id, customers(first_name, last_name)')
-          .eq('status', 'active')
+        // Every loan actually released this month, whatever happened to it
+        // since. Kat (Oct 3): a customer who renews within the same month
+        // must show BOTH loans — filtering to 'active' dropped the original
+        // the moment it flipped to 'renewed'. Only statuses that mean the
+        // loan was never released are excluded (pending/approved/declined).
+        let q = supabase.from('loans').select('id, release_date, amount, branch_id, area_id, documents_returned, customers(first_name, last_name)')
+          .in('status', ['active', 'renewed', 'paid', 'written_off'])
           .gte('release_date', monthStart).lte('release_date', monthEnd).order('release_date');
         if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
-        const { data } = await q;
-        reportData = (data ?? []).map((l: any) => ({
+        const { data, error } = await q;
+        if (error) toast({ title: 'Could not load report', description: error.message, variant: 'destructive' });
+        const loans = data ?? [];
+        loanIds = loans.map((l: any) => l.id);
+        loans.forEach((l: any, i: number) => { if (l.documents_returned) returnedRows.add(i); });
+        reportData = loans.map((l: any) => ({
           Date: l.release_date,
           Name: formatCustomerName(l.customers?.first_name, l.customers?.last_name),
           AmountReleased: Number(l.amount) || 0,
@@ -417,7 +426,9 @@ export default function ReportsPage() {
     }
 
     setData(reportData);
-    setCheckedRows(new Set());
+    setRowLoanIds(loanIds);
+    setCheckedRows(returnedRows);
+    setSavingRows(new Set());
     const total = reportData.reduce((s, r) => s + (r.TotalAmountCollected ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.AmountReleased ?? r.Customers ?? 0), 0);
     setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0, overdueRate: overallOverdueRate });
     setLoading(false);
@@ -425,7 +436,10 @@ export default function ReportsPage() {
 
   function handleExport() {
     if (data.length === 0) return;
-    exportToCSV(data, `${reportType}.csv`);
+    const rows = rowLoanIds.length === data.length
+      ? data.map((r, i) => ({ ...r, DocsReturned: checkedRows.has(i) ? 'Yes' : 'No' }))
+      : data;
+    exportToCSV(rows, `${reportType}.csv`);
     toast({ title: 'Success', description: 'Report exported' });
   }
 
@@ -451,6 +465,35 @@ export default function ReportsPage() {
   }
   if (printPages.length === 0) printPages.push([]);
   const printColumns = data.length > 0 ? Object.keys(data[0]) : [];
+  const showReturnedColumn = data.length > 0 && rowLoanIds.length === data.length;
+
+  async function toggleReturned(i: number, returned: boolean) {
+    const loanId = rowLoanIds[i];
+    if (!loanId) return;
+    const setRow = (on: boolean) => setCheckedRows(prev => {
+      const next = new Set(prev);
+      if (on) next.add(i); else next.delete(i);
+      return next;
+    });
+    setRow(returned);
+    setSavingRows(prev => new Set(prev).add(i));
+    const { data: updated, error } = await supabase
+      .from('loans')
+      .update({
+        documents_returned: returned,
+        documents_returned_at: returned ? new Date().toISOString() : null,
+        documents_returned_by: returned ? profile?.id ?? null : null,
+      })
+      .eq('id', loanId)
+      .select('id');
+    setSavingRows(prev => { const next = new Set(prev); next.delete(i); return next; });
+    // An RLS-blocked update can come back with no error and no rows, so an
+    // empty result counts as a failure too.
+    if (error || !updated?.length) {
+      setRow(!returned);
+      toast({ title: 'Not saved', description: error?.message ?? 'You do not have permission to update this loan.', variant: 'destructive' });
+    }
+  }
 
   function formatCell(key: string, val: unknown): string {
     if (key === 'OverdueRate' && typeof val === 'number') return `${val}%`;
@@ -644,7 +687,7 @@ export default function ReportsPage() {
 
       {/* Data table */}
       <Card className="glass-card border-border">
-        <CardHeader><CardTitle>Report Data</CardTitle><CardDescription>{data.length} records</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Report Data</CardTitle><CardDescription>{data.length} records{showReturnedColumn && ` · ${checkedRows.size} of ${data.length} docs returned`}</CardDescription></CardHeader>
         <CardContent>
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
@@ -656,7 +699,7 @@ export default function ReportsPage() {
                 <TableHeader>
                   <TableRow>
                     {Object.keys(data[0]).map(key => <TableHead key={key}>{columnLabel(key)}</TableHead>)}
-                    <TableHead className="w-10"></TableHead>
+                    {showReturnedColumn && <TableHead className="w-28 text-center">Docs Returned</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -671,16 +714,16 @@ export default function ReportsPage() {
                               : String(val ?? '')}
                         </TableCell>
                       ))}
-                      <TableCell>
-                        <Checkbox
-                          checked={checkedRows.has(i)}
-                          onCheckedChange={(checked) => setCheckedRows((prev) => {
-                            const next = new Set(prev);
-                            if (checked === true) next.add(i); else next.delete(i);
-                            return next;
-                          })}
-                        />
-                      </TableCell>
+                      {showReturnedColumn && (
+                        <TableCell className="text-center">
+                          <Checkbox
+                            checked={checkedRows.has(i)}
+                            disabled={savingRows.has(i)}
+                            onCheckedChange={(checked) => toggleReturned(i, checked === true)}
+                            aria-label="Documents returned"
+                          />
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>
@@ -763,11 +806,9 @@ export default function ReportsPage() {
                       {printColumns.map(key => (
                         <th key={key} style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #000' }}>{columnLabel(key)}</th>
                       ))}
-                      {/* Blank tick-off box per row, matching the on-screen
-                          Checkbox column — this is a static image capture,
-                          so it's a drawn empty square for a physical/paper
-                          check mark, not an interactive control. */}
-                      <th style={{ width: 28, border: '1px solid #000' }}></th>
+                      {showReturnedColumn && (
+                        <th style={{ width: 70, padding: '6px 4px', border: '1px solid #000', textAlign: 'center', fontSize: 10 }}>Docs Returned</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -782,16 +823,18 @@ export default function ReportsPage() {
                           {printColumns.map(key => (
                             <td key={key} style={{ padding: '5px 8px', border: '1px solid #000' }}>{formatCell(key, row[key])}</td>
                           ))}
-                          <td style={{ border: '1px solid #000', textAlign: 'center' }}>
-                            {/* Filled solid instead of a check-mark glyph —
-                                the Unicode ✓ character didn't render
-                                reliably through html2canvas's capture. */}
-                            <span style={{
-                              display: 'inline-block', width: 12, height: 12,
-                              border: '1.5px solid #000',
-                              backgroundColor: isChecked ? '#000' : 'transparent',
-                            }} />
-                          </td>
+                          {showReturnedColumn && (
+                            <td style={{ border: '1px solid #000', textAlign: 'center' }}>
+                              {/* Filled solid instead of a check-mark glyph —
+                                  the Unicode ✓ character didn't render
+                                  reliably through html2canvas's capture. */}
+                              <span style={{
+                                display: 'inline-block', width: 12, height: 12,
+                                border: '1.5px solid #000',
+                                backgroundColor: isChecked ? '#000' : 'transparent',
+                              }} />
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
