@@ -57,6 +57,13 @@ DECLARE
   v_missing text[] := '{}';
   v_entry_id uuid;
 BEGIN
+  -- SECURITY DEFINER bypasses RLS, so the caller is checked here: only the
+  -- roles the app lets disburse (canDisburse on the loan page). COALESCE
+  -- keeps a NULL role (no signed-in user) from slipping past the check.
+  IF NOT COALESCE(is_admin() OR current_role_name() = 'Cashier', false) THEN
+    RAISE EXCEPTION 'Only an Administrator or Cashier can post a disbursement journal entry';
+  END IF;
+
   -- Idempotent: a disbursement only ever has one ledger entry. If one
   -- already exists (this call landed once already, and the caller is
   -- retrying after a client-side timeout), return it as-is instead of
@@ -114,4 +121,6 @@ BEGIN
 END;
 $$;
 
+-- New functions are executable by PUBLIC (including anon) unless revoked.
+REVOKE ALL ON FUNCTION post_disbursement_ledger_entry(uuid, text, date, text, text, uuid, uuid, text, text, text, text, numeric, numeric, numeric, numeric, numeric) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION post_disbursement_ledger_entry(uuid, text, date, text, text, uuid, uuid, text, text, text, text, numeric, numeric, numeric, numeric, numeric) TO authenticated;

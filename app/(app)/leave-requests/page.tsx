@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/page-header';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
@@ -21,10 +21,10 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
-import { formatDate, formatCustomerName } from '@/lib/format';
+import { formatDate, formatCustomerName, exportToCSV } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { logAudit } from '@/lib/audit-log';
-import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search, Trash2, RotateCcw } from 'lucide-react';
+import { CalendarClock, Plus, Loader2, CheckCircle, XCircle, Search, Trash2, RotateCcw, Download } from 'lucide-react';
 
 // 5 regular leave terms, plus a separate Special Leave category (solo
 // parent, VAWC, etc.) with its own +7-day allowance — additive on top of
@@ -61,15 +61,15 @@ export default function LeaveRequestsPage() {
   const [deleting, setDeleting] = useState(false);
   const [resetLeavesOpen, setResetLeavesOpen] = useState(false);
   const [resettingLeaves, setResettingLeaves] = useState(false);
+  const [balanceSearch, setBalanceSearch] = useState('');
 
   useEffect(() => {
     if (!profile) return;
     load();
-    if (canApprove) loadEmployees();
   }, [profile]);
 
   async function loadEmployees() {
-    let q = supabase.from('employees').select('id, first_name, last_name, paid_leaves_used, special_leaves_used, position, branch_id').eq('status', 'active').order('last_name').order('first_name');
+    let q = supabase.from('employees').select('id, first_name, last_name, paid_leaves_used, special_leaves_used, position, branch_id, branches(name)').eq('status', 'active').order('last_name').order('first_name');
     // A Branch Manager can only request/track leave on behalf of their own branch's staff.
     if (isBranchManager && profile?.branch_id) q = q.eq('branch_id', profile.branch_id);
     const { data } = await q;
@@ -78,6 +78,10 @@ export default function LeaveRequestsPage() {
 
   async function load() {
     setLoading(true);
+    // Every approve/delete/reset ends in load(), so refreshing the employee
+    // list here keeps the balances table (and the request form's "remaining
+    // after this request" hint) current instead of frozen at page open.
+    if (canApprove) loadEmployees();
     const [{ data: emp }, { data: setting }, { data: specialSetting }] = await Promise.all([
       supabase.from('employees').select('id, paid_leaves_used, special_leaves_used, position, branch_id').eq('profile_id', profile?.id ?? '').maybeSingle(),
       supabase.from('settings').select('value').eq('key', 'paid_leaves_annual').maybeSingle(),
@@ -100,6 +104,19 @@ export default function LeaveRequestsPage() {
       : (data ?? []);
     setRequests(scoped);
     setLoading(false);
+  }
+
+  // Atomic, server-side change to the employee's used-days counter (see
+  // supabase/add_adjust_leave_balance.sql). A plain UPDATE from here only
+  // ever worked for Administrators, so Branch Manager approvals silently
+  // never deducted anything.
+  async function adjustLeaveBalance(employeeId: string, leaveType: string, days: number) {
+    const { error } = await supabase.rpc('adjust_leave_balance', {
+      p_employee_id: employeeId,
+      p_bucket: leaveType === SPECIAL_LEAVE_TYPE ? 'special' : 'paid',
+      p_days: days,
+    });
+    return error;
   }
 
   function canApproveRequest(r: any): boolean {
@@ -147,10 +164,9 @@ export default function LeaveRequestsPage() {
     }
 
     const targetEmployee = employees.find(e => e.id === targetEmployeeId) ?? myEmployee;
+    let balanceError: { message: string } | null = null;
     if (autoApprove) {
-      const field = form.leave_type === SPECIAL_LEAVE_TYPE ? 'special_leaves_used' : 'paid_leaves_used';
-      const current = form.leave_type === SPECIAL_LEAVE_TYPE ? (targetEmployee?.special_leaves_used ?? 0) : (targetEmployee?.paid_leaves_used ?? 0);
-      await supabase.from('employees').update({ [field]: current + days }).eq('id', targetEmployeeId);
+      balanceError = await adjustLeaveBalance(targetEmployeeId, form.leave_type, days);
     } else {
       const employeeName = (targetEmployee as any)?.first_name ? `${(targetEmployee as any).first_name} ${(targetEmployee as any).last_name}` : (profile?.full_name ?? 'An employee');
       notifyRoles(['branch_manager', 'administrator'], {
@@ -161,7 +177,13 @@ export default function LeaveRequestsPage() {
       }, (targetEmployee as any)?.branch_id);
     }
 
-    toast({ title: 'Success', description: autoApprove ? 'Leave request added and approved' : 'Leave request submitted' });
+    // Only one toast shows at a time, so a balance failure replaces the
+    // success message rather than following it.
+    if (balanceError) {
+      toast({ title: 'Leave added, but balance not updated', description: balanceError.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: autoApprove ? 'Leave request added and approved' : 'Leave request submitted' });
+    }
     setDialogOpen(false);
     load();
     setSaving(false);
@@ -179,12 +201,9 @@ export default function LeaveRequestsPage() {
       return;
     }
 
-    if (status === 'approved') {
-      const field = request.leave_type === SPECIAL_LEAVE_TYPE ? 'special_leaves_used' : 'paid_leaves_used';
-      const { data: emp } = await supabase.from('employees').select(field).eq('id', request.employee_id).maybeSingle();
-      const current = (emp as any)?.[field] ?? 0;
-      await supabase.from('employees').update({ [field]: current + request.days }).eq('id', request.employee_id);
-    }
+    const balanceError = status === 'approved'
+      ? await adjustLeaveBalance(request.employee_id, request.leave_type, Number(request.days) || 0)
+      : null;
 
     notifyProfile(request.employees?.profile_id, {
       type: 'leave_request_reviewed',
@@ -194,7 +213,11 @@ export default function LeaveRequestsPage() {
       recipientName: `${request.employees?.first_name ?? ''} ${request.employees?.last_name ?? ''}`.trim(),
     });
 
-    toast({ title: 'Success', description: `Leave request ${status}` });
+    if (balanceError) {
+      toast({ title: 'Approved, but balance not updated', description: balanceError.message, variant: 'destructive' });
+    } else {
+      toast({ title: 'Success', description: `Leave request ${status}` });
+    }
     logAudit({ action: status === 'approved' ? 'approve' : 'reject', entityType: 'leave_requests', entityId: request.id, userId: profile?.id ?? null });
     load();
   }
@@ -208,10 +231,14 @@ export default function LeaveRequestsPage() {
     if (!deleteTarget) return;
     setDeleting(true);
     if (deleteTarget.status === 'approved') {
-      const field = deleteTarget.leave_type === SPECIAL_LEAVE_TYPE ? 'special_leaves_used' : 'paid_leaves_used';
-      const { data: emp } = await supabase.from('employees').select(field).eq('id', deleteTarget.employee_id).maybeSingle();
-      const current = (emp as any)?.[field] ?? 0;
-      await supabase.from('employees').update({ [field]: Math.max(0, current - deleteTarget.days) }).eq('id', deleteTarget.employee_id);
+      // Restore first and stop if it fails — deleting the request anyway
+      // would leave those days deducted with no record of why.
+      const balanceError = await adjustLeaveBalance(deleteTarget.employee_id, deleteTarget.leave_type, -(Number(deleteTarget.days) || 0));
+      if (balanceError) {
+        toast({ title: 'Not deleted', description: `Could not restore the leave balance: ${balanceError.message}`, variant: 'destructive' });
+        setDeleting(false);
+        return;
+      }
     }
     const { error } = await supabase.from('leave_requests').delete().eq('id', deleteTarget.id);
     if (error) {
@@ -248,6 +275,44 @@ export default function LeaveRequestsPage() {
   const balance = annualLeaves - (myEmployee?.paid_leaves_used ?? 0);
   const specialBalance = specialLeavesAnnual - (myEmployee?.special_leaves_used ?? 0);
   const statusVariant = (s: string) => s === 'approved' ? 'default' : s === 'rejected' ? 'destructive' : 'outline';
+
+  // Leave balance monitoring (Kat, Oct 2026): every active employee's
+  // allowance, used and remaining days in one table, plus days still waiting
+  // on approval — which haven't touched the balance yet but will if approved.
+  const pendingDaysByEmployee = new Map<string, number>();
+  for (const r of requests) {
+    if (r.status !== 'pending') continue;
+    const key = `${r.employee_id}|${r.leave_type === SPECIAL_LEAVE_TYPE ? 'special' : 'paid'}`;
+    pendingDaysByEmployee.set(key, (pendingDaysByEmployee.get(key) ?? 0) + (Number(r.days) || 0));
+  }
+  const balanceRows = employees
+    .filter(e => !balanceSearch || `${e.first_name} ${e.last_name}`.toLowerCase().includes(balanceSearch.toLowerCase()))
+    .map(e => {
+      const paidUsed = Number(e.paid_leaves_used) || 0;
+      const specialUsed = Number(e.special_leaves_used) || 0;
+      return {
+        id: e.id,
+        name: formatCustomerName(e.first_name, e.last_name),
+        branch: e.branches?.name ?? '—',
+        position: e.position ?? '—',
+        paidUsed,
+        paidRemaining: annualLeaves - paidUsed,
+        paidPending: pendingDaysByEmployee.get(`${e.id}|paid`) ?? 0,
+        specialUsed,
+        specialRemaining: specialLeavesAnnual - specialUsed,
+        specialPending: pendingDaysByEmployee.get(`${e.id}|special`) ?? 0,
+      };
+    });
+
+  function handleExportBalances() {
+    exportToCSV(balanceRows.map(b => ({
+      Employee: b.name, Branch: b.branch, Position: b.position,
+      PaidLeaveAllowance: annualLeaves, PaidLeaveUsed: b.paidUsed, PaidLeaveRemaining: b.paidRemaining, PaidLeavePending: b.paidPending,
+      SpecialLeaveAllowance: specialLeavesAnnual, SpecialLeaveUsed: b.specialUsed, SpecialLeaveRemaining: b.specialRemaining, SpecialLeavePending: b.specialPending,
+    })), 'leave-balances.csv');
+  }
+
+  const remainingClass = (n: number) => (n <= 0 ? 'text-destructive font-semibold' : 'text-success font-semibold');
 
   const filteredRequests = requests.filter(r => {
     const name = `${r.employees?.first_name ?? ''} ${r.employees?.last_name ?? ''}`.toLowerCase();
@@ -287,6 +352,93 @@ export default function LeaveRequestsPage() {
             <StatCard title="Special Leave Remaining" value={specialBalance.toString()} icon={<CalendarClock className="w-5 h-5" />} variant={specialBalance > 0 ? 'success' : 'danger'} />
           </div>
         </>
+      )}
+
+      {canApprove && (
+        <Card className="glass-card border-border">
+          <CardHeader className="space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+              <div>
+                <CardTitle>Leave Balances</CardTitle>
+                <CardDescription>
+                  {isBranchManager ? 'Your branch' : 'All active employees'} · {annualLeaves} paid leave day{annualLeaves !== 1 ? 's' : ''} and {specialLeavesAnnual} special leave day{specialLeavesAnnual !== 1 ? 's' : ''} per year
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={handleExportBalances} disabled={balanceRows.length === 0}>
+                <Download className="w-4 h-4 mr-2" />Export
+              </Button>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search employee..." value={balanceSearch} onChange={(e) => setBalanceSearch(e.target.value)} className="pl-10" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {balanceRows.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No employees found</p>
+            ) : (
+              <>
+                {/* Mobile card list */}
+                <div className="md:hidden divide-y divide-border max-h-[28rem] overflow-y-auto">
+                  {balanceRows.map(b => (
+                    <div key={b.id} className="p-4">
+                      <p className="font-medium text-sm">{b.name}</p>
+                      <p className="text-xs text-muted-foreground">{b.position} · {b.branch}</p>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Paid Leave</p>
+                          <p><span className={remainingClass(b.paidRemaining)}>{b.paidRemaining} left</span> · {b.paidUsed} used</p>
+                          {b.paidPending > 0 && <p className="text-xs text-warning">{b.paidPending} pending</p>}
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Special Leave</p>
+                          <p><span className={remainingClass(b.specialRemaining)}>{b.specialRemaining} left</span> · {b.specialUsed} used</p>
+                          {b.specialPending > 0 && <p className="text-xs text-warning">{b.specialPending} pending</p>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="hidden md:block max-h-[28rem] overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Employee</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead className="text-center">Paid Used</TableHead>
+                        <TableHead className="text-center">Paid Remaining</TableHead>
+                        <TableHead className="text-center">Special Used</TableHead>
+                        <TableHead className="text-center">Special Remaining</TableHead>
+                        <TableHead className="text-center">Pending</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {balanceRows.map(b => (
+                        <TableRow key={b.id}>
+                          <TableCell className="text-sm">
+                            <p className="font-medium">{b.name}</p>
+                            <p className="text-xs text-muted-foreground">{b.position}</p>
+                          </TableCell>
+                          <TableCell className="text-sm">{b.branch}</TableCell>
+                          <TableCell className="text-sm text-center">{b.paidUsed} / {annualLeaves}</TableCell>
+                          <TableCell className={`text-sm text-center ${remainingClass(b.paidRemaining)}`}>{b.paidRemaining}</TableCell>
+                          <TableCell className="text-sm text-center">{b.specialUsed} / {specialLeavesAnnual}</TableCell>
+                          <TableCell className={`text-sm text-center ${remainingClass(b.specialRemaining)}`}>{b.specialRemaining}</TableCell>
+                          <TableCell className="text-sm text-center">
+                            {b.paidPending + b.specialPending > 0
+                              ? <span className="text-warning">{b.paidPending + b.specialPending} day{b.paidPending + b.specialPending !== 1 ? 's' : ''}</span>
+                              : '—'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       <Card className="glass-card border-border">
