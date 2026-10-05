@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -52,8 +52,16 @@ export default function JournalEntriesPage() {
   // enough automated postings pushed it off the list. Search + pagination
   // fix both.
   const [search, setSearch] = useState('');
+  // Entry-date range for backtracking a specific day or period (Kat, Oct
+  // 2026) instead of paging back through every posting since.
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  // Search fires one request per keystroke with no debounce; a slower
+  // earlier response must not overwrite a newer one (same guard as the
+  // Loans and Audit Logs pages).
+  const loadRequestId = useRef(0);
 
   useEffect(() => {
     supabase.from('branches').select('id, name').eq('status', 'active').order('name').then(({ data }) => setBranches(data ?? []));
@@ -66,10 +74,11 @@ export default function JournalEntriesPage() {
     if (!profile) return;
     setPage(0);
     load(0);
-  }, [profile, branchFilter, search]);
+  }, [profile, branchFilter, search, dateFrom, dateTo]);
 
   async function load(pageArg?: number) {
     const p = pageArg ?? page;
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     // Every branch now keeps its own Chart of Accounts — a non-admin only
     // gets their own branch's accounts plus shared/company-wide ones (no
@@ -84,6 +93,8 @@ export default function JournalEntriesPage() {
     // there's a next page. Cheaper than an exact count on every page turn.
     let entriesQuery = supabase.from('journal_entries').select('*, branches(name), journal_entry_lines(*, chart_of_accounts(code, name, account_type))').order('entry_date', { ascending: false }).order('created_at', { ascending: false }).range(p * PAGE_SIZE, p * PAGE_SIZE + PAGE_SIZE);
     if (search) entriesQuery = entriesQuery.or(`entry_number.ilike.%${search}%,description.ilike.%${search}%,reference.ilike.%${search}%`);
+    if (dateFrom) entriesQuery = entriesQuery.gte('entry_date', dateFrom);
+    if (dateTo) entriesQuery = entriesQuery.lte('entry_date', dateTo);
     if (!isAdmin) {
       // A non-admin sees only their own branch plus shared/company-wide
       // entries, with no way to switch — the same lock the Dashboard and
@@ -100,6 +111,7 @@ export default function JournalEntriesPage() {
       acctsQuery,
       entriesQuery,
     ]);
+    if (requestId !== loadRequestId.current) return;
     setAccounts(accts ?? []);
     const rows = ents ?? [];
     setHasMore(rows.length > PAGE_SIZE);
@@ -259,19 +271,35 @@ export default function JournalEntriesPage() {
               className="pl-10"
             />
           </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mt-3">
+            <div className="flex items-center gap-2 flex-1">
+              <label htmlFor="je-date-from" className="text-xs text-muted-foreground whitespace-nowrap">From</label>
+              <Input id="je-date-from" type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => setDateFrom(e.target.value)} className="flex-1" />
+            </div>
+            <div className="flex items-center gap-2 flex-1">
+              <label htmlFor="je-date-to" className="text-xs text-muted-foreground whitespace-nowrap">To</label>
+              <Input id="je-date-to" type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} className="flex-1" />
+            </div>
+            {(dateFrom || dateTo) && (
+              <Button variant="ghost" size="sm" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear dates</Button>
+            )}
+          </div>
         </CardContent>
       </Card>
 
       <Card className="glass-card border-border">
         <CardHeader>
           <CardTitle>Journal Entries</CardTitle>
-          <CardDescription>Page {page + 1} · newest first</CardDescription>
+          <CardDescription>
+            Page {page + 1} · newest first
+            {(dateFrom || dateTo) && ` · ${dateFrom ? formatDate(dateFrom) : 'beginning'} – ${dateTo ? formatDate(dateTo) : 'latest'}`}
+          </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
           ) : entries.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">No journal entries {search ? 'match your search' : 'yet'}</p>
+            <p className="text-sm text-muted-foreground text-center py-8">No journal entries {search || dateFrom || dateTo ? 'match these filters' : 'yet'}</p>
           ) : (
             <div className="divide-y divide-border">
               {entries.map(entry => (
