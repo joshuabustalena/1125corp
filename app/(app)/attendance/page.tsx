@@ -1103,6 +1103,7 @@ export default function AttendancePage() {
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="inactive">Inactive</SelectItem>
                   <SelectItem value="resigned">Resigned</SelectItem>
+                  <SelectItem value="terminated">Terminated</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -28,7 +28,7 @@ import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/d
 import { buildPrintHtml } from '@/lib/print-document';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
-import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye } from 'lucide-react';
+import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye, Banknote } from 'lucide-react';
 import { SPECIAL_LOAN_TYPES, SPECIAL_LOAN_LABELS } from '@/lib/special-loans';
 import { getPeriodRange } from '@/lib/payroll-period';
 import { DocumentScaler } from '@/components/document-scaler';
@@ -131,6 +131,14 @@ export default function PayrollPage() {
   const [thirteenthAdjustments, setThirteenthAdjustments] = useState<Record<string, { deductionFromEarnings: string; totalDeduction: string; additionalBasicSalary: string }>>({});
   const [breakdownEmployeeId, setBreakdownEmployeeId] = useState<string | null>(null);
   const [thirteenthVouchers, setThirteenthVouchers] = useState<any[]>([]);
+  // 13th month already paid out with final pay to a resigned/terminated
+  // employee (Kat, Oct 2026) — the voucher for it is made manually; this
+  // record keeps them out of the regular June/December voucher.
+  const [thirteenthDisbursements, setThirteenthDisbursements] = useState<any[]>([]);
+  const [disburseTarget, setDisburseTarget] = useState<{ employee_id: string; name: string; netPay: number } | null>(null);
+  const [disburseNotes, setDisburseNotes] = useState('');
+  const [disbursing, setDisbursing] = useState(false);
+  const [undoDisburseTarget, setUndoDisburseTarget] = useState<any | null>(null);
   const [thirteenthCashierName, setThirteenthCashierName] = useState('');
   const [thirteenthAdminName, setThirteenthAdminName] = useState('');
   const [generatingThirteenthVoucher, setGeneratingThirteenthVoucher] = useState(false);
@@ -199,8 +207,12 @@ export default function PayrollPage() {
   }, [profile]);
 
   async function loadThirteenthVouchers() {
-    const { data } = await supabase.from('thirteenth_month_vouchers').select('*').order('year', { ascending: false }).order('created_at', { ascending: false }).limit(30);
+    const [{ data }, { data: disbursed }] = await Promise.all([
+      supabase.from('thirteenth_month_vouchers').select('*').order('year', { ascending: false }).order('created_at', { ascending: false }).limit(30),
+      supabase.from('thirteenth_month_disbursements').select('*, disbursed_by_profile:profiles!disbursed_by(full_name)'),
+    ]);
     setThirteenthVouchers(data ?? []);
+    setThirteenthDisbursements(disbursed ?? []);
   }
 
   async function loadEmployees() {
@@ -256,7 +268,7 @@ export default function PayrollPage() {
       if (!selfResolved) return;
       if (!selfEmployeeId) { setPayroll([]); setLoading(false); return; }
     }
-    let payrollQuery = supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, branches(name))').order('pay_date', { ascending: false });
+    let payrollQuery = supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, status, branches(name))').order('pay_date', { ascending: false });
     if (!canManagePayroll && !voucherOnly && selfEmployeeId) {
       // Own records only, and only once an Administrator has actually
       // approved them — approvePayroll() is what flips a row to 'paid', so a
@@ -1074,11 +1086,72 @@ export default function PayrollPage() {
       Year: thirteenthYear, Cycle: thirteenthCycle,
       TotalEarnings: r.totalEarnings, AdditionalBasicSalary: r.additionalBasicSalary, DeductionFromEarnings: r.deductionFromEarnings,
       DividedBy12: r.dividedBy12, TotalDeduction: r.totalDeduction, NetPay: r.netPay,
+      PaidWithFinalPay: disbursedThisCycle.has(r.employee_id)
+        ? `${formatDate(disbursedThisCycle.get(r.employee_id).disbursed_at)} (${disbursedThisCycle.get(r.employee_id).amount})`
+        : '',
     })), `13th-month-pay-${thirteenthYear}-${thirteenthCycle}.csv`);
   }
 
   const thirteenthMonthRows = getThirteenthMonthRows(thirteenthYear, thirteenthCycle);
-  const thirteenthNetPayTotal = thirteenthMonthRows.reduce((sum, r) => sum + r.netPay, 0);
+  const disbursedThisCycle = new Map<string, any>(
+    thirteenthDisbursements
+      .filter((d: any) => String(d.year) === thirteenthYear && d.cycle === thirteenthCycle)
+      .map((d: any) => [d.employee_id, d])
+  );
+  // Already paid with final pay, so left out of this cycle's voucher and
+  // its total (they still show in the table above, marked as paid).
+  const thirteenthVoucherRows = thirteenthMonthRows.filter(r => !disbursedThisCycle.has(r.employee_id));
+  const thirteenthNetPayTotal = thirteenthVoucherRows.reduce((sum, r) => sum + r.netPay, 0);
+  const isSeparated = (status: string | null | undefined) => status === 'resigned' || status === 'terminated';
+  // An employee already on a generated voucher for this cycle has been paid
+  // through it — disbursing again with final pay would pay them twice.
+  const voucherNumberByEmployee = new Map<string, string>();
+  for (const v of thirteenthVouchers) {
+    if (String(v.year) !== thirteenthYear || v.cycle !== thirteenthCycle) continue;
+    for (const l of (v.lines ?? []) as any[]) {
+      if (l.employee_id && !voucherNumberByEmployee.has(l.employee_id)) voucherNumberByEmployee.set(l.employee_id, v.voucher_number);
+    }
+  }
+  const canDisburseThirteenth = (r: any) =>
+    isSeparated(r.employee?.status) && !disbursedThisCycle.has(r.employee_id) && !voucherNumberByEmployee.has(r.employee_id);
+
+  async function handleDisburseThirteenth() {
+    if (!disburseTarget) return;
+    setDisbursing(true);
+    const { error } = await supabase.from('thirteenth_month_disbursements').insert({
+      employee_id: disburseTarget.employee_id,
+      year: Number(thirteenthYear),
+      cycle: thirteenthCycle,
+      amount: Math.round(disburseTarget.netPay * 100) / 100,
+      notes: disburseNotes.trim() || null,
+      disbursed_by: profile?.id ?? null,
+    });
+    setDisbursing(false);
+    if (error) {
+      toast({
+        title: 'Not disbursed',
+        description: error.code === '23505' ? 'This employee’s 13th month for this cycle is already marked as paid.' : error.message,
+        variant: 'destructive',
+      });
+      return;
+    }
+    toast({ title: '13th month disbursed', description: `${disburseTarget.name} — ${formatCurrency(disburseTarget.netPay)}. Prepare the voucher manually; this employee is now left out of the ${thirteenthCycleLabel} voucher.` });
+    setDisburseTarget(null);
+    setDisburseNotes('');
+    loadThirteenthVouchers();
+  }
+
+  async function handleUndoDisburseThirteenth() {
+    if (!undoDisburseTarget) return;
+    const { data, error } = await supabase.from('thirteenth_month_disbursements').delete().eq('id', undoDisburseTarget.id).select('id');
+    if (error || !data?.length) {
+      toast({ title: 'Not undone', description: error?.message ?? 'Only an Administrator can undo this.', variant: 'destructive' });
+    } else {
+      toast({ title: 'Disbursement undone', description: 'This employee is back in this cycle’s 13th Month Voucher.' });
+    }
+    setUndoDisburseTarget(null);
+    loadThirteenthVouchers();
+  }
   const thirteenthCycleLabel = thirteenthCycle === 'partial' ? `Partial (Dec ${Number(thirteenthYear) - 1} - May ${thirteenthYear})` : `Full (Jun - Nov ${thirteenthYear})`;
 
   // Same live-vs-history swap as the Payroll Voucher above — printed*
@@ -1087,7 +1160,7 @@ export default function PayrollPage() {
   const printedThirteenth = historyThirteenthVoucher;
   const printedThirteenthLines: { key: string; name: string; net_pay: number }[] = printedThirteenth
     ? (printedThirteenth.lines ?? []).map((l: any) => ({ key: l.employee_id, name: l.name, net_pay: Number(l.net_pay) || 0 }))
-    : thirteenthMonthRows.map(r => ({ key: r.employee_id, name: `${r.employee?.first_name ?? ''} ${r.employee?.last_name ?? ''}`, net_pay: r.netPay }));
+    : thirteenthVoucherRows.map(r => ({ key: r.employee_id, name: `${r.employee?.first_name ?? ''} ${r.employee?.last_name ?? ''}`, net_pay: r.netPay }));
   const printedThirteenthTotal = printedThirteenth ? Number(printedThirteenth.total_net_pay) || 0 : thirteenthNetPayTotal;
   const printedThirteenthCashierName = printedThirteenth ? (printedThirteenth.cashier_name ?? '') : thirteenthCashierName;
   const printedThirteenthAdminName = printedThirteenth ? (printedThirteenth.admin_name ?? '') : thirteenthAdminName;
@@ -1183,9 +1256,9 @@ export default function PayrollPage() {
   }
 
   async function handleGenerateThirteenthVoucher() {
-    if (thirteenthMonthRows.length === 0) return;
+    if (thirteenthVoucherRows.length === 0) return;
     setGeneratingThirteenthVoucher(true);
-    const lines = thirteenthMonthRows.map(r => ({
+    const lines = thirteenthVoucherRows.map(r => ({
       employee_id: r.employee_id,
       name: `${r.employee?.first_name ?? ''} ${r.employee?.last_name ?? ''}`,
       net_pay: r.netPay,
@@ -2156,20 +2229,40 @@ export default function PayrollPage() {
             <>
               {/* Mobile card list */}
               <div className="md:hidden divide-y divide-border">
-                {thirteenthMonthRows.map(r => (
-                  <div key={r.employee_id} className="p-4">
-                    <p className="font-medium text-sm">{r.employee?.first_name} {r.employee?.last_name}</p>
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                      <div><p className="text-xs text-muted-foreground">Total Earnings</p><p>{formatCurrency(r.totalEarnings)}</p></div>
-                      <div><p className="text-xs text-muted-foreground">Net Pay</p><p className="font-bold">{formatCurrency(r.netPay)}</p></div>
+                {thirteenthMonthRows.map(r => {
+                  const paid = disbursedThisCycle.get(r.employee_id);
+                  return (
+                    <div key={r.employee_id} className="p-4">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-medium text-sm">{r.employee?.first_name} {r.employee?.last_name}</p>
+                        {isSeparated(r.employee?.status) && <Badge variant="outline" className="capitalize">{r.employee?.status}</Badge>}
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                        <div><p className="text-xs text-muted-foreground">Total Earnings</p><p>{formatCurrency(r.totalEarnings)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">Net Pay</p><p className="font-bold">{formatCurrency(r.netPay)}</p></div>
+                      </div>
+                      {paid && (
+                        <p className="mt-2 text-xs text-success">Paid with final pay · {formatDate(paid.disbursed_at)} · {formatCurrency(Number(paid.amount))}</p>
+                      )}
+                      {!paid && isSeparated(r.employee?.status) && voucherNumberByEmployee.has(r.employee_id) && (
+                        <p className="mt-2 text-xs text-muted-foreground">Already on voucher {voucherNumberByEmployee.get(r.employee_id)}</p>
+                      )}
+                      <div className="mt-3 flex justify-end gap-1 flex-wrap">
+                        {canDisburseThirteenth(r) && (
+                          <Button variant="outline" size="sm" onClick={() => { setDisburseNotes(''); setDisburseTarget({ employee_id: r.employee_id, name: `${r.employee?.first_name ?? ''} ${r.employee?.last_name ?? ''}`.trim(), netPay: r.netPay }); }}>
+                            <Banknote className="w-3.5 h-3.5 mr-1.5" />Disburse
+                          </Button>
+                        )}
+                        {paid && isAdmin && (
+                          <Button variant="ghost" size="sm" onClick={() => setUndoDisburseTarget(paid)}>Undo</Button>
+                        )}
+                        <Button variant="outline" size="sm" onClick={() => setBreakdownEmployeeId(r.employee_id)}>
+                          <ListTree className="w-3.5 h-3.5 mr-1.5" />Breakdown
+                        </Button>
+                      </div>
                     </div>
-                    <div className="mt-3 flex justify-end">
-                      <Button variant="outline" size="sm" onClick={() => setBreakdownEmployeeId(r.employee_id)}>
-                        <ListTree className="w-3.5 h-3.5 mr-1.5" />Breakdown
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <Table className="hidden md:table">
@@ -2184,20 +2277,44 @@ export default function PayrollPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {thirteenthMonthRows.map(r => (
-                    <TableRow key={r.employee_id} className="hover:bg-secondary/50">
-                      <TableCell className="text-sm font-medium">{r.employee?.first_name} {r.employee?.last_name}</TableCell>
-                      <TableCell className="text-sm">{formatCurrency(r.totalEarnings)}</TableCell>
-                      <TableCell className="text-sm">{formatCurrency(r.dividedBy12)}</TableCell>
-                      <TableCell className="text-sm text-destructive">{r.totalDeduction > 0 ? formatCurrency(r.totalDeduction) : '—'}</TableCell>
-                      <TableCell className="text-sm font-bold">{formatCurrency(r.netPay)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" onClick={() => setBreakdownEmployeeId(r.employee_id)} title="View breakdown / edit adjustments">
-                          <ListTree className="w-4 h-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {thirteenthMonthRows.map(r => {
+                    const paid = disbursedThisCycle.get(r.employee_id);
+                    return (
+                      <TableRow key={r.employee_id} className="hover:bg-secondary/50">
+                        <TableCell className="text-sm font-medium">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {r.employee?.first_name} {r.employee?.last_name}
+                            {isSeparated(r.employee?.status) && <Badge variant="outline" className="capitalize">{r.employee?.status}</Badge>}
+                          </div>
+                          {paid && (
+                            <p className="text-xs font-normal text-success">Paid with final pay · {formatDate(paid.disbursed_at)} · {formatCurrency(Number(paid.amount))}</p>
+                          )}
+                          {!paid && isSeparated(r.employee?.status) && voucherNumberByEmployee.has(r.employee_id) && (
+                            <p className="text-xs font-normal text-muted-foreground">Already on voucher {voucherNumberByEmployee.get(r.employee_id)}</p>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm">{formatCurrency(r.totalEarnings)}</TableCell>
+                        <TableCell className="text-sm">{formatCurrency(r.dividedBy12)}</TableCell>
+                        <TableCell className="text-sm text-destructive">{r.totalDeduction > 0 ? formatCurrency(r.totalDeduction) : '—'}</TableCell>
+                        <TableCell className="text-sm font-bold">{formatCurrency(r.netPay)}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end items-center gap-1">
+                            {canDisburseThirteenth(r) && (
+                              <Button variant="outline" size="sm" onClick={() => { setDisburseNotes(''); setDisburseTarget({ employee_id: r.employee_id, name: `${r.employee?.first_name ?? ''} ${r.employee?.last_name ?? ''}`.trim(), netPay: r.netPay }); }}>
+                                <Banknote className="w-3.5 h-3.5 mr-1.5" />Disburse
+                              </Button>
+                            )}
+                            {paid && isAdmin && (
+                              <Button variant="ghost" size="sm" onClick={() => setUndoDisburseTarget(paid)}>Undo</Button>
+                            )}
+                            <Button variant="ghost" size="icon" onClick={() => setBreakdownEmployeeId(r.employee_id)} title="View breakdown / edit adjustments">
+                              <ListTree className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </>
@@ -2217,17 +2334,22 @@ export default function PayrollPage() {
             <div className="space-y-2"><Label className="text-xs">Approved by (Admin)</Label><Input value={thirteenthAdminName} onChange={(e) => setThirteenthAdminName(e.target.value)} /></div>
           </div>
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Grand Total: <span className="font-semibold text-foreground">{formatCurrency(thirteenthNetPayTotal)}</span></p>
+            <div>
+              <p className="text-sm text-muted-foreground">Grand Total: <span className="font-semibold text-foreground">{formatCurrency(thirteenthNetPayTotal)}</span></p>
+              {disbursedThisCycle.size > 0 && (
+                <p className="text-xs text-muted-foreground">{disbursedThisCycle.size} employee{disbursedThisCycle.size !== 1 ? 's' : ''} already paid with final pay — not included</p>
+              )}
+            </div>
             <div className="flex gap-2">
-              <Button type="button" variant="outline" onClick={() => setThirteenthVoucherPreviewOpen(true)} disabled={thirteenthMonthRows.length === 0}>
+              <Button type="button" variant="outline" onClick={() => setThirteenthVoucherPreviewOpen(true)} disabled={thirteenthVoucherRows.length === 0}>
                 <Eye className="w-4 h-4 mr-2" />
                 Preview
               </Button>
-              <Button type="button" variant="outline" onClick={() => handleDownloadThirteenthVoucherPdf()} disabled={downloadingThirteenthVoucher || thirteenthMonthRows.length === 0}>
+              <Button type="button" variant="outline" onClick={() => handleDownloadThirteenthVoucherPdf()} disabled={downloadingThirteenthVoucher || thirteenthVoucherRows.length === 0}>
                 {downloadingThirteenthVoucher ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
                 Download PDF
               </Button>
-              <Button type="button" onClick={handleGenerateThirteenthVoucher} disabled={generatingThirteenthVoucher || thirteenthMonthRows.length === 0}>
+              <Button type="button" onClick={handleGenerateThirteenthVoucher} disabled={generatingThirteenthVoucher || thirteenthVoucherRows.length === 0}>
                 {generatingThirteenthVoucher && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Generate
               </Button>
@@ -2322,6 +2444,54 @@ export default function PayrollPage() {
       )}
       </TabsContent>
       </Tabs>
+
+      {/* 13th month with final pay — records the payout only; the voucher
+          for it is prepared manually (Kat's note on the request). */}
+      <Dialog open={!!disburseTarget} onOpenChange={(open) => { if (!open && !disbursing) setDisburseTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disburse 13th Month with Final Pay</DialogTitle>
+            <DialogDescription>
+              {disburseTarget?.name} — {thirteenthCycleLabel}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-lg bg-secondary/40 p-3 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">13th month net pay</span>
+              <span className="text-lg font-bold">{formatCurrency(disburseTarget?.netPay ?? 0)}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Saves this amount as paid and leaves the employee out of the {thirteenthCycleLabel} 13th Month Voucher. No voucher or journal entry is created here — prepare the voucher manually.
+            </p>
+            <div className="space-y-2">
+              <Label className="text-xs">Notes (optional)</Label>
+              <Input value={disburseNotes} onChange={(e) => setDisburseNotes(e.target.value)} placeholder="e.g. manual voucher #, final pay date" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDisburseTarget(null)} disabled={disbursing}>Cancel</Button>
+            <Button onClick={handleDisburseThirteenth} disabled={disbursing || !disburseTarget || disburseTarget.netPay <= 0}>
+              {disbursing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Mark as Paid
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!undoDisburseTarget} onOpenChange={(open) => !open && setUndoDisburseTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Undo 13th Month Disbursement</DialogTitle>
+            <DialogDescription>
+              Removes the record of {formatCurrency(Number(undoDisburseTarget?.amount ?? 0))} paid on {undoDisburseTarget ? formatDate(undoDisburseTarget.disbursed_at) : ''}. The employee goes back into this cycle&apos;s 13th Month Voucher. Any manual voucher already made is not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUndoDisburseTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleUndoDisburseThirteenth}>Undo</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent>
