@@ -7,6 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
+  Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table';
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
@@ -109,10 +112,27 @@ function daysAgo(n: number): Date {
   return d;
 }
 
+// One row of the per-area dashboard (Kat, Oct 2026). Each figure uses the
+// same definition as the matching card/report, just grouped by area:
+// collections by the paying customer's area (as Monthly Collection report),
+// release/receivable/overdue by the loan's area (as Monthly Release and
+// Overdue reports).
+type AreaSummaryRow = {
+  areaId: string;
+  name: string;
+  monthlyRelease: number;
+  todayCollection: number;
+  weeklyCollection: number;
+  monthlyCollection: number;
+  receivable: number;
+  overdueAmount: number;
+  overdueRate: number;
+};
+
 export default function DashboardPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
-  // Overdue by Area (below) is deliberately narrower than the rest of this
+  // Area Summary (below) is deliberately narrower than the rest of this
   // dashboard — Kat's Sep 8 request named exactly these three: each
   // collector (their own area only), the branch manager, and admin. Cashier
   // and Accounting, who otherwise see this whole page, do not get this card.
@@ -125,7 +145,7 @@ export default function DashboardPage() {
   const [dailyData, setDailyData] = useState<{ name: string; collections: number; revenue: number }[]>([]);
   const [loanStatusData, setLoanStatusData] = useState<{ name: string; value: number; color: string }[]>([]);
   const [areaData, setAreaData] = useState<{ name: string; customers: number }[]>([]);
-  const [areaOverdueData, setAreaOverdueData] = useState<{ areaId: string; name: string; overdueAmount: number; overdueRate: number }[]>([]);
+  const [areaSummary, setAreaSummary] = useState<AreaSummaryRow[]>([]);
   const [cashFlowData, setCashFlowData] = useState<{ name: string; inflow: number; outflow: number }[]>([]);
   const [attendanceData, setAttendanceData] = useState<{ name: string; value: number; color: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -163,6 +183,7 @@ export default function DashboardPage() {
       const today = toDateStr(now);
       const yesterday = toDateStr(daysAgo(1));
       const monthStart = toDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
+      const monthEnd = toDateStr(new Date(now.getFullYear(), now.getMonth() + 1, 0));
       const lastMonthStart = toDateStr(new Date(now.getFullYear(), now.getMonth() - 1, 1));
       const lastMonthEnd = toDateStr(new Date(now.getFullYear(), now.getMonth(), 0));
       const sevenDaysAgo = toDateStr(daysAgo(6));
@@ -225,18 +246,19 @@ export default function DashboardPage() {
         recentPays, upcoming, paymentsWeek, journalWeek,
         customersByArea, paymentsFourWeeks, disbursedFourWeeks, gasVouchersFourWeeks, cashVouchersFourWeeks,
         attendanceMonth, employees, attendanceToday, payrollMonth, cashLines, releaseVouchersToday,
+        releasesMonth, areaList,
       ] = await Promise.all([
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true })),
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
         selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('id, remaining_balance, due_date, total_payable, term_days, release_date, area_id, areas(name)').eq('status', 'active'))),
         selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('status'))),
-        scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', today)),
+        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id, area_id)').gte('payment_date', today))),
         scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').eq('payment_date', yesterday)),
-        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', monthStart))),
+        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id, area_id)').gte('payment_date', monthStart))),
         selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, customers!inner(branch_id)').gte('payment_date', lastMonthStart).lte('payment_date', lastMonthEnd))),
         scopeByCustomerIds(supabase.from('payments').select('*, customers!inner(branch_id), customers(first_name, last_name), loans(loan_number)').order('created_at', { ascending: false }).limit(5)),
         scopeByBranch(supabase.from('loans').select('*, customers(first_name, last_name)').eq('status', 'active').order('due_date', { ascending: true }).limit(5)),
-        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', sevenDaysAgo))),
+        selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id, area_id)').gte('payment_date', sevenDaysAgo))),
         supabase.from('journal_entries').select('entry_date, journal_entry_lines(credit, chart_of_accounts(account_type))').gte('entry_date', sevenDaysAgo),
         selectAllRows<any>(() => scopeByBranch(supabase.from('customers').select('area_id, areas(name)').eq('status', 'active'))),
         selectAllRows<any>(() => scopeByCustomerIds(supabase.from('payments').select('amount_paid, payment_date, customers!inner(branch_id)').gte('payment_date', fourWeeksAgo))),
@@ -262,6 +284,10 @@ export default function DashboardPage() {
             })
           : Promise.resolve([] as any[]),
         scopeByLoanBranch(supabase.from('cash_vouchers').select('amount, loans!inner(branch_id)').eq('voucher_date', today)),
+        // Same set and amount as the Monthly Release report: every loan
+        // released this month (principal), whatever its status since.
+        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('amount, area_id').in('status', ['active', 'renewed', 'paid', 'written_off']).gte('release_date', monthStart).lte('release_date', monthEnd))),
+        scopeByBranch(supabase.from('areas').select('id, name, branches(name)')),
       ]);
 
       const cashByBucket: Record<string, number> = {};
@@ -295,14 +321,48 @@ export default function DashboardPage() {
         entry.overdue += exposure.amount;
         areaTotals.set(areaId, entry);
       }
-      const areaOverdueRows = Array.from(areaTotals.entries())
-        .map(([areaId, v]) => ({
-          areaId,
-          name: v.name,
-          overdueAmount: v.overdue,
-          overdueRate: v.receivable > 0 ? (v.overdue / v.receivable) * 100 : 0,
-        }))
-        .sort((a, b) => b.overdueAmount - a.overdueAmount);
+      // Per-area dashboard: the overdue/receivable totals above plus this
+      // month's releases and today's/7-day/this-month collections, each
+      // grouped by area. Every area that shows up in any of them gets a row.
+      // Area names repeat across branches (both have an "Area 1"), so the
+      // all-branches view labels each row with its branch too.
+      const areaNameById = new Map<string, string>(((areaList.data ?? []) as any[]).map(a => [
+        a.id,
+        branchFilter === 'all' && a.branches?.name ? `${a.name} · ${String(a.branches.name).replace(/\s+Branch$/i, '')}` : a.name,
+      ]));
+      const areaBranchById = new Map<string, string>(((areaList.data ?? []) as any[]).map(a => [a.id, a.branches?.name ?? '']));
+      const summaryByArea = new Map<string, AreaSummaryRow>();
+      const rowFor = (areaId: string | null | undefined): AreaSummaryRow => {
+        const key = areaId ?? 'unassigned';
+        let row = summaryByArea.get(key);
+        if (!row) {
+          row = {
+            areaId: key,
+            name: areaId ? (areaNameById.get(areaId) ?? areaTotals.get(areaId)?.name ?? 'Unknown area') : 'Unassigned',
+            monthlyRelease: 0, todayCollection: 0, weeklyCollection: 0, monthlyCollection: 0,
+            receivable: 0, overdueAmount: 0, overdueRate: 0,
+          };
+          summaryByArea.set(key, row);
+        }
+        return row;
+      };
+      for (const [areaId, v] of Array.from(areaTotals.entries())) {
+        const row = rowFor(areaId === 'unassigned' ? null : areaId);
+        row.receivable = v.receivable;
+        row.overdueAmount = v.overdue;
+        row.overdueRate = v.receivable > 0 ? (v.overdue / v.receivable) * 100 : 0;
+      }
+      for (const l of releasesMonth as any[]) rowFor(l.area_id).monthlyRelease += Number(l.amount) || 0;
+      for (const p of paymentsToday as any[]) rowFor(p.customers?.area_id).todayCollection += Number(p.amount_paid) || 0;
+      for (const p of paymentsWeek as any[]) rowFor(p.customers?.area_id).weeklyCollection += Number(p.amount_paid) || 0;
+      for (const p of paymentsMonth as any[]) rowFor(p.customers?.area_id).monthlyCollection += Number(p.amount_paid) || 0;
+      // Grouped by branch first, then area number; Unassigned always last.
+      const areaSummaryRows = Array.from(summaryByArea.values()).sort((a, b) => {
+        if (a.areaId === 'unassigned') return 1;
+        if (b.areaId === 'unassigned') return -1;
+        return (areaBranchById.get(a.areaId) ?? '').localeCompare(areaBranchById.get(b.areaId) ?? '')
+          || a.name.localeCompare(b.name, undefined, { numeric: true });
+      });
       // Overdue Rate = portfolio at risk — the share of the whole
       // receivable that's currently overdue OR falling behind schedule,
       // not just a share of loan count (which "Overdue Loans" already
@@ -338,7 +398,7 @@ export default function DashboardPage() {
         overdueLoans: overdue.length,
         overdueAmount,
         overdueRate,
-        todayCollections: (paymentsToday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
+        todayCollections: (paymentsToday as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         weeklyCollections: (paymentsWeek as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
         monthlyCollections,
@@ -403,7 +463,7 @@ export default function DashboardPage() {
           .sort((a, b) => b.customers - a.customers)
           .slice(0, 6)
       );
-      setAreaOverdueData(areaOverdueRows);
+      setAreaSummary(areaSummaryRows);
 
       // Cash Flow — last 4 calendar weeks, oldest first. Inflow = collections;
       // outflow = loan disbursements + gas/cash voucher expenses.
@@ -739,37 +799,101 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* Overdue by Area — Kat's Sep 8 request. Visible only to each
+      {/* Area Summary — started as Overdue by Area (Kat, Sep 8), widened
+          to a per-area dashboard (Oct 2026). Visible only to each
           collector (their own area, filtered below), the branch manager,
           and admin; Cashier/Accounting don't get this card even though they
           see the rest of this page. */}
       {canSeeAreaOverdue && (() => {
         const rows = isFieldCollector
-          ? areaOverdueData.filter(a => a.areaId === myAreaId)
-          : areaOverdueData;
+          ? areaSummary.filter(a => a.areaId === myAreaId)
+          : areaSummary;
+        const sum = (k: keyof AreaSummaryRow) => rows.reduce((s, r) => s + (r[k] as number), 0);
+        const totalReceivable = sum('receivable');
+        const totalOverdue = sum('overdueAmount');
         return (
           <Card className="glass-card border-border animate-slide-up">
             <CardHeader>
-              <CardTitle>Overdue by Area</CardTitle>
-              <CardDescription>Overdue amount and rate for each area{isFieldCollector ? ' (your area)' : ''}</CardDescription>
+              <CardTitle>Area Summary</CardTitle>
+              <CardDescription>
+                Each area&apos;s release, collections, receivable and overdue{isFieldCollector ? ' (your area)' : ''} · this month, today, last 7 days
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               {rows.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10 text-center">
-                  <p className="text-sm text-muted-foreground">No active loans to report on yet</p>
+                  <p className="text-sm text-muted-foreground">No area activity to report on yet</p>
                 </div>
               ) : (
-                <div className="divide-y divide-border">
-                  {rows.map(a => (
-                    <div key={a.areaId} className="flex items-center justify-between px-4 py-3">
-                      <p className="text-sm font-medium">{a.name}</p>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold">{formatCurrency(a.overdueAmount)}</p>
-                        <p className="text-xs text-muted-foreground">{a.overdueRate.toFixed(1)}% overdue</p>
+                <>
+                  {/* Mobile: one card per area */}
+                  <div className="md:hidden divide-y divide-border">
+                    {rows.map(a => (
+                      <div key={a.areaId} className="p-4">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-semibold">{a.name}</p>
+                          <p className={`text-xs font-medium ${a.overdueRate > 10 ? 'text-destructive' : 'text-muted-foreground'}`}>{a.overdueRate.toFixed(1)}% overdue</p>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                          <div><p className="text-muted-foreground">Monthly Release</p><p className="text-sm font-medium">{formatCurrency(a.monthlyRelease)}</p></div>
+                          <div><p className="text-muted-foreground">Daily Collection</p><p className="text-sm font-medium">{formatCurrency(a.todayCollection)}</p></div>
+                          <div><p className="text-muted-foreground">Weekly Collection</p><p className="text-sm font-medium">{formatCurrency(a.weeklyCollection)}</p></div>
+                          <div><p className="text-muted-foreground">Monthly Collection</p><p className="text-sm font-medium">{formatCurrency(a.monthlyCollection)}</p></div>
+                          <div><p className="text-muted-foreground">Total Receivable</p><p className="text-sm font-medium">{formatCurrency(a.receivable)}</p></div>
+                          <div><p className="text-muted-foreground">Overdue Amount</p><p className="text-sm font-medium">{formatCurrency(a.overdueAmount)}</p></div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+
+                  <div className="hidden md:block overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Area</TableHead>
+                          <TableHead className="text-right">Monthly Release</TableHead>
+                          <TableHead className="text-right">Daily Collection</TableHead>
+                          <TableHead className="text-right">Weekly Collection</TableHead>
+                          <TableHead className="text-right">Monthly Collection</TableHead>
+                          <TableHead className="text-right">Total Receivable</TableHead>
+                          <TableHead className="text-right">Overdue Rate</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rows.map(a => (
+                          <TableRow key={a.areaId}>
+                            <TableCell className="text-sm font-medium">{a.name}</TableCell>
+                            <TableCell className="text-sm text-right">{formatCurrency(a.monthlyRelease)}</TableCell>
+                            <TableCell className="text-sm text-right">{formatCurrency(a.todayCollection)}</TableCell>
+                            <TableCell className="text-sm text-right">{formatCurrency(a.weeklyCollection)}</TableCell>
+                            <TableCell className="text-sm text-right">{formatCurrency(a.monthlyCollection)}</TableCell>
+                            <TableCell className="text-sm text-right">{formatCurrency(a.receivable)}</TableCell>
+                            <TableCell className="text-sm text-right">
+                              <span className={a.overdueRate > 10 ? 'text-destructive font-semibold' : 'font-medium'}>{a.overdueRate.toFixed(1)}%</span>
+                              <p className="text-xs text-muted-foreground">{formatCurrency(a.overdueAmount)}</p>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                      {rows.length > 1 && (
+                        <TableFooter>
+                          <TableRow>
+                            <TableCell className="text-sm font-semibold">Total</TableCell>
+                            <TableCell className="text-sm text-right font-semibold">{formatCurrency(sum('monthlyRelease'))}</TableCell>
+                            <TableCell className="text-sm text-right font-semibold">{formatCurrency(sum('todayCollection'))}</TableCell>
+                            <TableCell className="text-sm text-right font-semibold">{formatCurrency(sum('weeklyCollection'))}</TableCell>
+                            <TableCell className="text-sm text-right font-semibold">{formatCurrency(sum('monthlyCollection'))}</TableCell>
+                            <TableCell className="text-sm text-right font-semibold">{formatCurrency(totalReceivable)}</TableCell>
+                            <TableCell className="text-sm text-right">
+                              <span className="font-semibold">{(totalReceivable > 0 ? (totalOverdue / totalReceivable) * 100 : 0).toFixed(1)}%</span>
+                              <p className="text-xs text-muted-foreground">{formatCurrency(totalOverdue)}</p>
+                            </TableCell>
+                          </TableRow>
+                        </TableFooter>
+                      )}
+                    </Table>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
