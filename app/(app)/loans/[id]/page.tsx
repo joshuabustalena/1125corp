@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { isReadOnly } from '@/lib/permissions';
+import { ADMIN_STAFF_ROLE, isReadOnly } from '@/lib/permissions';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -56,6 +56,8 @@ export default function LoanDetailPage() {
   // loans_read (Admin Staff): can view the loan and post a payment against
   // it, but not renew or re-apply.
   const loansReadOnly = isReadOnly(profile?.permissions, 'loans');
+  // Admin Staff runs Write-Off alongside the Administrator (Kat, Oct 2026).
+  const canWriteOff = isAdmin || profile?.role_name === ADMIN_STAFF_ROLE;
   const [loan, setLoan] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [chainLoans, setChainLoans] = useState<any[]>([]);
@@ -1197,7 +1199,7 @@ export default function LoanDetailPage() {
           <History className="w-4 h-4 mr-2" />
           Past Loans
         </Button>
-        {isAdmin && (loan.status === 'active' || loan.status === 'overdue') && (
+        {canWriteOff && (loan.status === 'active' || loan.status === 'overdue') && (
           <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => { setWriteOffOpen(true); setWriteOffReason('deceased'); setWriteOffNotes(''); }}>
             <Ban className="w-4 h-4 mr-2" />
             Write Off
