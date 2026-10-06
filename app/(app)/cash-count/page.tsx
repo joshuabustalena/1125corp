@@ -259,7 +259,6 @@ export default function CashCountPage() {
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
-  const [pendingRemittanceIds, setPendingRemittanceIds] = useState<string[]>([]);
   const printRef = useRef<HTMLDivElement>(null);
   // History row being viewed/downloaded/printed — see handleHistoryAction.
   // Rendered into its own hidden portal (historyPrintRef) rather than
@@ -343,19 +342,18 @@ export default function CashCountPage() {
     const { data: collectors } = await supabase.from('collectors').select('id').eq('branch_id', branchId);
     const collectorIds = (collectors ?? []).map(c => c.id);
 
-    // Expected Cash = whatever's still sitting as "pending" remittances for
-    // this branch, up through the count date — not just today's, since an
-    // unreconciled remittance from an earlier day should still be expected
-    // until a count actually sweeps it up. Submitting a count marks these
-    // as "received" so they aren't counted again on a later day.
+    // Expected Cash = what this branch's collectors remitted to the cashier
+    // on the count date. It used to read "pending" remittances across days,
+    // but remittances has no status column, so that query always failed and
+    // the card showed ₱0 on every count (Oct 2026). Variance below is
+    // checked against the ledger, not this figure.
     const [{ data: rems }, { data: hist }] = await Promise.all([
       collectorIds.length > 0
-        ? supabase.from('remittances').select('id, amount').eq('status', 'pending').lte('remittance_date', date).in('collector_id', collectorIds)
+        ? supabase.from('remittances').select('amount').eq('remittance_date', date).in('collector_id', collectorIds)
         : Promise.resolve({ data: [] as any[] }),
       supabase.from('cash_counts').select('*').eq('branch_id', branchId).order('count_date', { ascending: false }).limit(30),
     ]);
 
-    setPendingRemittanceIds((rems ?? []).map((r: any) => r.id));
     setExpected((rems ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0));
     setHistory(hist ?? []);
     setLoading(false);
@@ -511,8 +509,8 @@ export default function CashCountPage() {
   // be there — Cash in Vault's running balance (endingBalance, same figure
   // printed as "Ending Cash Balance" on the sheet) PLUS Petty Cash Fund's
   // own running balance (pcfEndingBalance, a separate Chart of Accounts
-  // entry — see loadLockedFields) — not against "Expected Cash" (pending
-  // remittances not yet reconciled), a different, usually much smaller
+  // entry — see loadLockedFields) — not against "Expected Cash" (the day's
+  // collector remittances), a different, usually much smaller
   // number that made Variance read as roughly the entire counted total on
   // days with nothing pending, "balanced" or not (Kat's Sep 11 report:
   // Vault Total already equalled the Vault ledger balance on most days,
@@ -603,11 +601,6 @@ export default function CashCountPage() {
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      // This count just reconciled these remittances — mark them received
-      // so they don't get counted as "pending" (and re-expected) again.
-      if (pendingRemittanceIds.length > 0) {
-        await supabase.from('remittances').update({ status: 'received', received_by: profile?.id ?? null }).in('id', pendingRemittanceIds);
-      }
       toast({ title: 'Success', description: 'Cash count recorded' });
       resetForm();
       loadData();
@@ -741,7 +734,7 @@ export default function CashCountPage() {
       </PageHeader>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <StatCard title="Expected Cash" value={formatCurrency(expected)} icon={<TrendingUp className="w-5 h-5" />} subtitle="Total pending remittances not yet reconciled" />
+        <StatCard title="Expected Cash" value={formatCurrency(expected)} icon={<TrendingUp className="w-5 h-5" />} subtitle="Collector remittances received on this date" />
         <StatCard
           title="Variance"
           value={countedTotal > 0 ? formatCurrency(vaultVariance + pcfVariance) : '—'}
