@@ -15,6 +15,7 @@ import {
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { ADMIN_STAFF_ROLE } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { Plus, Loader2, TrendingUp, Scale } from 'lucide-react';
@@ -23,7 +24,7 @@ export default function ShareholdersPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
-  const canManageShareholders = isAdmin || profile?.role_name === 'Accounting';
+  const canManageShareholders = isAdmin || profile?.role_name === 'Accounting' || profile?.role_name === ADMIN_STAFF_ROLE;
   const [shareholders, setShareholders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);

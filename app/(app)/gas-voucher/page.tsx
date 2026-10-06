@@ -251,7 +251,7 @@ export default function GasVoucherPage() {
       // otherwise the ledger line just quietly never appears.
       toast({
         title: 'Ledger entry not posted',
-        description: `Hindi mahanap sa Chart of Accounts ang account(s) ${gasVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
+        description: `Account(s) ${gasVoucherLedger.missingCodes.join(', ')} not found in the Chart of Accounts, so this transaction was not recorded in the journal. Please fix the Chart of Accounts.`,
         variant: 'destructive',
       });
     }

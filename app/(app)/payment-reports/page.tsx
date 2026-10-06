@@ -16,6 +16,7 @@ import {
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName, todayStr } from '@/lib/format';
 import { selectAllRows } from '@/lib/db-chunk';
@@ -24,7 +25,8 @@ import { FileDown, Download, Loader2, TrendingUp, Receipt } from 'lucide-react';
 export default function PaymentReportsPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
-  const isAdmin = profile?.role_name === 'Administrator';
+  // Branch scope only (Admin Staff sees both branches, like Administrator).
+  const allBranches = seesAllBranches(profile?.role_name);
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -48,11 +50,11 @@ export default function PaymentReportsPage() {
   // Administrators keep the free Branch filter dropdown.
   useEffect(() => {
     if (!profile) return;
-    if (!isAdmin && profile.branch_id) {
+    if (!allBranches && profile.branch_id) {
       setBranchFilter(profile.branch_id);
     }
     setBranchResolved(true);
-  }, [profile, isAdmin]);
+  }, [profile, allBranches]);
 
   // Wait for both the branch lock AND the customers list (needed to resolve
   // which customer IDs belong to that branch) before running the report —
@@ -256,7 +258,7 @@ export default function PaymentReportsPage() {
             </div>
             <div className="space-y-2">
               <Label>Branch</Label>
-              {isAdmin ? (
+              {allBranches ? (
                 <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); setCustomerFilter('all'); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>

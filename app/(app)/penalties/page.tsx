@@ -18,11 +18,16 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
+import { useAuth } from '@/lib/auth-context';
+import { isReadOnly } from '@/lib/permissions';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
 import { AlertCircle, Plus, Download, Loader2, Trash2 } from 'lucide-react';
 
 export default function PenaltiesPage() {
   const { toast } = useToast();
+  const { profile } = useAuth();
+  // penalties_read (Admin Staff): list and export only.
+  const readOnly = isReadOnly(profile?.permissions, 'penalties');
   const [penalties, setPenalties] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
@@ -106,7 +111,7 @@ export default function PenaltiesPage() {
     <div className="space-y-6">
       <PageHeader title="Penalty Management" description="Manually apply and manage customer penalties">
         <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
-        <Button size="sm" onClick={() => setDialogOpen(true)}><Plus className="w-4 h-4 mr-2" />Apply Penalty</Button>
+        {!readOnly && <Button size="sm" onClick={() => setDialogOpen(true)}><Plus className="w-4 h-4 mr-2" />Apply Penalty</Button>}
       </PageHeader>
 
       <Card className="glass-card border-border">
@@ -136,11 +141,13 @@ export default function PenaltiesPage() {
                     <span className="text-xs text-muted-foreground">{formatDate(p.applied_at)}</span>
                   </div>
                   {p.reason && <p className="mt-2 text-sm text-muted-foreground">{p.reason}</p>}
-                  <div className="mt-3 flex items-center justify-end">
-                    <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(p)}>
-                      <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
-                    </Button>
-                  </div>
+                  {!readOnly && (
+                    <div className="mt-3 flex items-center justify-end">
+                      <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(p)}>
+                        <Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -167,9 +174,11 @@ export default function PenaltiesPage() {
                     <TableCell className="text-sm text-muted-foreground">{p.reason ?? '—'}</TableCell>
                     <TableCell className="text-sm">{formatDate(p.applied_at)}</TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(p)}>
-                        <Trash2 className="w-4 h-4 text-destructive" />
-                      </Button>
+                      {!readOnly && (
+                        <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(p)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

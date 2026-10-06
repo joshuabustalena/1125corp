@@ -20,7 +20,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
-import { hasPermission } from '@/lib/permissions';
+import { hasPermission, isReadOnly } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV, numberToWordsPeso, formatCustomerName, todayStr } from '@/lib/format';
 import { getNextVoucherNumber } from '@/lib/voucher-numbers';
@@ -84,7 +84,12 @@ export default function PayrollPage() {
   // 'payroll' permission, so everything that generates, edits, deletes or
   // discloses other people's pay stays hidden and their query is pinned to
   // their own employee record.
-  const canManagePayroll = hasPermission(profile?.permissions, 'payroll');
+  // payroll_read (Admin Staff) opens every employee's payslips without any
+  // of the generate/adjust/approve/delete tooling. hasPermission() also
+  // accepts '<key>_read', so management must rule the read-only key out.
+  const payrollReadOnly = isReadOnly(profile?.permissions, 'payroll');
+  const canManagePayroll = hasPermission(profile?.permissions, 'payroll') && !payrollReadOnly;
+  const canViewAllPayroll = canManagePayroll || payrollReadOnly;
   // A Cashier without the 'payroll' permission gets a narrow carve-out:
   // Payroll Voucher generation for their OWN branch only — no Records tab,
   // no 13th Month tab, no approve/edit tooling. Same role-based (not
@@ -244,7 +249,7 @@ export default function PayrollPage() {
   }
 
   useEffect(() => {
-    if (canManagePayroll) { setSelfResolved(true); return; }
+    if (canViewAllPayroll) { setSelfResolved(true); return; }
     if (!profile) return;
     (async () => {
       let { data } = await supabase.from('employees').select('id').eq('profile_id', profile.id).maybeSingle();
@@ -254,7 +259,7 @@ export default function PayrollPage() {
       setSelfEmployeeId(data?.id ?? null);
       setSelfResolved(true);
     })();
-  }, [profile, canManagePayroll]);
+  }, [profile, canViewAllPayroll]);
 
   async function load() {
     setLoading(true);
@@ -264,12 +269,12 @@ export default function PayrollPage() {
     // OWN payslips here, they're reading their BRANCH's paid rows to build
     // a voucher, so selfEmployeeId (which may not even resolve — a Cashier
     // isn't necessarily also an `employees` row) is irrelevant to them.
-    if (!canManagePayroll && !voucherOnly) {
+    if (!canViewAllPayroll && !voucherOnly) {
       if (!selfResolved) return;
       if (!selfEmployeeId) { setPayroll([]); setLoading(false); return; }
     }
     let payrollQuery = supabase.from('payroll').select('*, employees(first_name, last_name, position, department, branch_id, salary, pay_type, status, branches(name))').order('pay_date', { ascending: false });
-    if (!canManagePayroll && !voucherOnly && selfEmployeeId) {
+    if (!canViewAllPayroll && !voucherOnly && selfEmployeeId) {
       // Own records only, and only once an Administrator has actually
       // approved them — approvePayroll() is what flips a row to 'paid', so a
       // still-'pending' payslip is a draft whose deductions can still change.
@@ -1337,7 +1342,7 @@ export default function PayrollPage() {
       // otherwise the ledger line just quietly never appears.
       toast({
         title: 'Ledger entry not posted',
-        description: `Hindi mahanap sa Chart of Accounts ang account(s) ${thirteenthLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
+        description: `Account(s) ${thirteenthLedger.missingCodes.join(', ')} not found in the Chart of Accounts, so this transaction was not recorded in the journal. Please fix the Chart of Accounts.`,
         variant: 'destructive',
       });
     }
@@ -1673,7 +1678,7 @@ export default function PayrollPage() {
     } else if (payrollVoucherLedger.missingCodes.length > 0) {
       toast({
         title: 'Ledger entry not posted',
-        description: `Hindi mahanap sa Chart of Accounts ang account(s) ${payrollVoucherLedger.missingCodes.join(', ')}. Hindi naitala sa journal ang transaksyong ito — pakiayos ang Chart of Accounts.`,
+        description: `Account(s) ${payrollVoucherLedger.missingCodes.join(', ')} not found in the Chart of Accounts, so this transaction was not recorded in the journal. Please fix the Chart of Accounts.`,
         variant: 'destructive',
       });
     }
@@ -1783,7 +1788,7 @@ export default function PayrollPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Payroll" description={canManagePayroll ? 'Generate and manage employee payroll' : 'Your approved payslips'}>
+      <PageHeader title="Payroll" description={canManagePayroll ? 'Generate and manage employee payroll' : canViewAllPayroll ? "Every employee's payslips (view only)" : 'Your approved payslips'}>
         {activeTab === 'records' && (
           <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-4 h-4 mr-2" />Export</Button>
         )}
@@ -1868,7 +1873,7 @@ export default function PayrollPage() {
             {/* A self-service viewer only ever has their own rows, so an
                 "Employee" filter offering "All Employees" and their own name
                 is just noise. */}
-            {canManagePayroll && (
+            {canViewAllPayroll && (
             <div className="space-y-2 w-full sm:max-w-xs">
               <Label>Employee</Label>
               <Select value={recordsEmployeeFilter} onValueChange={setRecordsEmployeeFilter}>
@@ -1900,7 +1905,7 @@ export default function PayrollPage() {
           {/* Self-service payslips are always 'paid' (pending drafts are never
               shown to the employee), so status tabs only make sense for
               whoever manages payroll. */}
-          {canManagePayroll && (
+          {canViewAllPayroll && (
             <Tabs value={recordsStatusFilter} onValueChange={(v) => setRecordsStatusFilter(v as 'all' | 'pending' | 'paid')}>
               <TabsList>
                 <TabsTrigger value="all">All ({statusCounts.all})</TabsTrigger>
@@ -1922,7 +1927,7 @@ export default function PayrollPage() {
               <p className="text-sm text-muted-foreground">
                 {recordsFiltered
                   ? 'No payroll records match these filters'
-                  : !canManagePayroll
+                  : !canViewAllPayroll
                     ? "You don't have any approved payslips yet. They'll show up here once an Administrator approves them."
                     : 'No payroll records'}
               </p>

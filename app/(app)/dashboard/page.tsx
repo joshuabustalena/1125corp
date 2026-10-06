@@ -13,6 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import {
   Users, Landmark, AlertCircle, Wallet, TrendingUp, Banknote,
@@ -131,14 +132,15 @@ type AreaSummaryRow = {
 
 export default function DashboardPage() {
   const { profile } = useAuth();
-  const isAdmin = profile?.role_name === 'Administrator';
+  const allBranches = seesAllBranches(profile?.role_name);
   // Area Summary (below) is deliberately narrower than the rest of this
   // dashboard — Kat's Sep 8 request named exactly these three: each
-  // collector (their own area only), the branch manager, and admin. Cashier
+  // collector (their own area only), the branch manager, and admin (plus
+  // Admin Staff, who sees both branches like admin). Cashier
   // and Accounting, who otherwise see this whole page, do not get this card.
   const isBranchManager = profile?.role_name === 'Branch Manager';
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
-  const canSeeAreaOverdue = isAdmin || isBranchManager || isFieldCollector;
+  const canSeeAreaOverdue = allBranches || isBranchManager || isFieldCollector;
   const [stats, setStats] = useState<DashboardStats>(emptyStats);
   const [recentPayments, setRecentPayments] = useState<any[]>([]);
   const [upcomingDues, setUpcomingDues] = useState<any[]>([]);
@@ -171,9 +173,9 @@ export default function DashboardPage() {
   // already used on /reports and /payment-reports.
   useEffect(() => {
     if (!profile) return;
-    if (!isAdmin && profile.branch_id) setBranchFilter(profile.branch_id);
+    if (!allBranches && profile.branch_id) setBranchFilter(profile.branch_id);
     setBranchResolved(true);
-  }, [profile, isAdmin]);
+  }, [profile, allBranches]);
 
   useEffect(() => {
     if (!branchResolved) return;
@@ -516,7 +518,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Dashboard" description="Welcome back to 1125Corp — here's your lending overview">
-        {isAdmin ? (
+        {allBranches ? (
           <Select value={branchFilter} onValueChange={setBranchFilter}>
             <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All Branches" /></SelectTrigger>
             <SelectContent>

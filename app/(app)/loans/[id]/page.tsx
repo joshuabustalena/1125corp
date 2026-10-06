@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { isReadOnly } from '@/lib/permissions';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -52,6 +53,9 @@ export default function LoanDetailPage() {
   const canManageCollateral = profile?.role_name === 'Administrator' || profile?.role_name === 'Cashier';
   const isCashier = profile?.role_name === 'Cashier';
   const isCollector = profile?.role_name === 'Branch Field Collector';
+  // loans_read (Admin Staff): can view the loan and post a payment against
+  // it, but not renew or re-apply.
+  const loansReadOnly = isReadOnly(profile?.permissions, 'loans');
   const [loan, setLoan] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [chainLoans, setChainLoans] = useState<any[]>([]);
@@ -1107,7 +1111,7 @@ export default function LoanDetailPage() {
             </Button>
           </Link>
         )}
-        {!isCashier && loan.status !== 'renewed' && loan.status !== 'written_off' && (
+        {!isCashier && !loansReadOnly && loan.status !== 'renewed' && loan.status !== 'written_off' && (
           <Button size="sm" variant="outline" onClick={openRenew} disabled={!canRenew}>
             <RefreshCw className="w-4 h-4 mr-2" />
             Renew Loan
@@ -1177,7 +1181,7 @@ export default function LoanDetailPage() {
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-        {loan.status === 'declined' && !loan.reapplied && !isCashier && (
+        {loan.status === 'declined' && !loan.reapplied && !isCashier && !loansReadOnly && (
           <Button size="sm" onClick={handleReapply} disabled={reapplying}>
             {reapplying ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
             Re-apply

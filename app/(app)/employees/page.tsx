@@ -23,9 +23,9 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, getInitials, exportToCSV, formatCustomerName } from '@/lib/format';
-import { ASSIGNABLE_PERMISSIONS, effectivePermissions, nonAssignablePermissions } from '@/lib/permissions';
+import { ASSIGNABLE_PERMISSIONS, effectivePermissions, isReadOnly, nonAssignablePermissions } from '@/lib/permissions';
 import { Checkbox } from '@/components/ui/checkbox';
-import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, CheckCircle2, Circle, ArrowRightLeft } from 'lucide-react';
+import { UserCog, Plus, Search, Download, Pencil, Trash2, Loader2, Eye, CheckCircle2, Circle, ArrowRightLeft, FileText } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 const EMPLOYEE_DOCUMENT_TYPES = [
@@ -44,6 +44,9 @@ export default function EmployeesPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  // employees_read (Admin Staff): view employees and upload/replace their
+  // documents, but never change their details, access, or delete them.
+  const readOnly = isReadOnly(profile?.permissions, 'employees');
   const [employees, setEmployees] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
@@ -192,7 +195,7 @@ export default function EmployeesPage() {
       sss_number: e.sss_number ?? '', philhealth_number: e.philhealth_number ?? '', pagibig_number: e.pagibig_number ?? '', tin_number: e.tin_number ?? '',
       contact_person_name: e.contact_person_name ?? '', contact_person_relationship: e.contact_person_relationship ?? '', contact_person_phone: e.contact_person_phone ?? '',
     });
-    setActiveEmpTab('info');
+    setActiveEmpTab(readOnly ? 'documents' : 'info');
     setPendingEmpDocs({});
     loadEmployeeDocs(e.id);
     setDialogOpen(true);
@@ -220,6 +223,7 @@ export default function EmployeesPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (readOnly) return;
     if (!form.birth_date) {
       toast({ title: 'Error', description: 'Birth date is required (used for birthday leave/pay)', variant: 'destructive' });
       return;
@@ -244,9 +248,29 @@ export default function EmployeesPage() {
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
+        // Position is the account's role (new accounts are created with it),
+        // but changing it on an existing employee never reached their login,
+        // so e.g. a Cashier moved to Admin Staff kept Cashier access.
+        // Never touches your own login or an Administrator's — with one
+        // Administrator account, demoting it would be unrecoverable from the UI.
+        let roleError: string | null = null;
+        if (editing.profile_id && editing.profile_id !== profile?.id && payload.position && payload.position !== editing.position) {
+          const [{ data: role }, { data: target }] = await Promise.all([
+            supabase.from('roles').select('id').eq('name', payload.position).maybeSingle(),
+            supabase.from('profiles').select('roles(name)').eq('id', editing.profile_id).maybeSingle(),
+          ]);
+          if (role && (target as any)?.roles?.name !== 'Administrator') {
+            const { error: updateRoleError } = await supabase.from('profiles').update({ role_id: role.id }).eq('id', editing.profile_id);
+            if (updateRoleError) roleError = updateRoleError.message;
+          }
+        }
         if (editing.profile_id) await syncCollectorRecord(editing.profile_id, payload);
         await saveAccessOverride(editing.profile_id ?? null);
-        toast({ title: 'Success', description: 'Employee updated' });
+        if (roleError) {
+          toast({ title: 'Employee updated, but login role not changed', description: roleError, variant: 'destructive' });
+        } else {
+          toast({ title: 'Success', description: 'Employee updated' });
+        }
         setDialogOpen(false);
         load();
       }
@@ -307,12 +331,15 @@ export default function EmployeesPage() {
       return;
     }
     const { data: urlData } = supabase.storage.from('employee-documents').getPublicUrl(path);
-    await supabase.from('employee_documents').insert({
+    const { error: insertError } = await supabase.from('employee_documents').insert({
       employee_id: employeeId,
       document_type: docType,
       file_name: file.name,
       file_url: urlData.publicUrl,
     });
+    if (insertError) {
+      toast({ title: 'Upload not saved', description: insertError.message, variant: 'destructive' });
+    }
   }
 
   // For a brand-new employee (no id yet), the file is just held in state
@@ -582,11 +609,17 @@ export default function EmployeesPage() {
                       <div className="col-span-2"><p className="text-xs text-muted-foreground">Rate</p><p className="font-medium">{formatCurrency(e.salary)}{e.pay_type === 'monthly' ? '/mo' : '/day'}</p></div>
                     </div>
                     <div className="mt-3 flex items-center justify-end gap-1" onClick={(e2) => e2.stopPropagation()}>
-                      <Button variant="outline" size="sm" onClick={() => openEdit(e)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                      {readOnly ? (
+                        <Button variant="outline" size="sm" onClick={() => openEdit(e)}><FileText className="w-3.5 h-3.5 mr-1.5" />Documents</Button>
+                      ) : (
+                        <Button variant="outline" size="sm" onClick={() => openEdit(e)}><Pencil className="w-3.5 h-3.5 mr-1.5" />Edit</Button>
+                      )}
                       {isAdmin && e.position === 'Branch Field Collector' && (
                         <Button variant="outline" size="sm" onClick={() => openTransfer(e)}><ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />Transfer</Button>
                       )}
-                      <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(e)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
+                      {!readOnly && (
+                        <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(e)}><Trash2 className="w-3.5 h-3.5 mr-1.5" />Delete</Button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -624,11 +657,17 @@ export default function EmployeesPage() {
                       <TableCell className="text-right">
                         <div className="flex justify-end" onClick={(e2) => e2.stopPropagation()}>
                           <Button variant="ghost" size="icon" onClick={() => router.push(`/employees/${e.id}`)}><Eye className="w-4 h-4" /></Button>
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(e)}><Pencil className="w-4 h-4" /></Button>
+                          {readOnly ? (
+                            <Button variant="ghost" size="icon" onClick={() => openEdit(e)} title="Documents"><FileText className="w-4 h-4" /></Button>
+                          ) : (
+                            <Button variant="ghost" size="icon" onClick={() => openEdit(e)}><Pencil className="w-4 h-4" /></Button>
+                          )}
                           {isAdmin && e.position === 'Branch Field Collector' && (
                             <Button variant="ghost" size="icon" onClick={() => openTransfer(e)} title="Transfer customers to another collector"><ArrowRightLeft className="w-4 h-4" /></Button>
                           )}
-                          <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(e)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                          {!readOnly && (
+                            <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(e)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -650,16 +689,22 @@ export default function EmployeesPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
-            <DialogTitle>{editing ? 'Edit Employee' : 'Add Employee'}</DialogTitle>
-            <DialogDescription>{editing ? 'Update employee information' : 'Register a new employee'}</DialogDescription>
+            <DialogTitle>{readOnly ? 'Employee Documents' : editing ? 'Edit Employee' : 'Add Employee'}</DialogTitle>
+            <DialogDescription>
+              {readOnly
+                ? `${editing?.first_name ?? ''} ${editing?.last_name ?? ''} — upload or replace documents`
+                : editing ? 'Update employee information' : 'Register a new employee'}
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 gap-4">
           <Tabs value={activeEmpTab} onValueChange={(v) => setActiveEmpTab(v as 'info' | 'documents' | 'access')} className="flex flex-col flex-1 min-h-0">
-            <TabsList className="grid grid-cols-3 w-full shrink-0">
-              <TabsTrigger value="info">Info</TabsTrigger>
-              <TabsTrigger value="documents">Documents</TabsTrigger>
-              <TabsTrigger value="access">Access</TabsTrigger>
-            </TabsList>
+            {!readOnly && (
+              <TabsList className="grid grid-cols-3 w-full shrink-0">
+                <TabsTrigger value="info">Info</TabsTrigger>
+                <TabsTrigger value="documents">Documents</TabsTrigger>
+                <TabsTrigger value="access">Access</TabsTrigger>
+              </TabsList>
+            )}
 
             <TabsContent value="info" className="space-y-4 pt-2 flex-1 min-h-0 overflow-y-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -761,15 +806,15 @@ export default function EmployeesPage() {
             <TabsContent value="access" className="space-y-3 pt-2 flex-1 min-h-0 overflow-y-auto">
               {!editing ? (
                 <p className="text-sm text-muted-foreground">
-                  I-save muna ang employee (at ang login account niya) bago i-set ang access. Sa ngayon, susundin muna ang default ng kanyang position.
+                  Save the employee (and their login account) first before setting access. Until then, the default access for their position applies.
                 </p>
               ) : editing.profile_id === profile?.id ? (
                 <p className="text-sm text-muted-foreground">
-                  Hindi mo pwedeng baguhin ang sarili mong access dito. Kung maalis mo ang Employees sa sarili mo, wala nang paraan para maibalik ito mula sa app.
+                  You can&apos;t change your own access here. If you removed Employees from your own account, there would be no way to restore it from the app.
                 </p>
               ) : !editing.profile_id ? (
                 <p className="text-sm text-muted-foreground">
-                  Walang login account ang employee na ito, kaya wala pang access na maitatakda. Gumawa muna ng account para sa kanya.
+                  This employee has no login account, so there is no access to set yet. Create an account for them first.
                 </p>
               ) : accessLoading ? (
                 <div className="flex items-center justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
@@ -777,7 +822,7 @@ export default function EmployeesPage() {
                 <>
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs text-muted-foreground">
-                      Naka-check = pwedeng buksan ang tab na iyon.
+                      Checked = this account can open that tab.
                     </p>
                     <Button
                       type="button"
@@ -844,7 +889,7 @@ export default function EmployeesPage() {
                       >
                         {uploadingEmpDocType === dt.type ? <Loader2 className="w-4 h-4 animate-spin" /> : hasDoc ? 'Replace' : 'Upload'}
                       </Button>
-                      {doc && (
+                      {doc && !readOnly && (
                         <Button type="button" variant="ghost" size="icon" onClick={() => handleDeleteEmpDoc(doc)}>
                           <Trash2 className="w-4 h-4 text-destructive" />
                         </Button>
@@ -860,8 +905,10 @@ export default function EmployeesPage() {
           </Tabs>
 
             <DialogFooter className="shrink-0">
-              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}{editing ? 'Update' : 'Add'} Employee</Button>
+              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>{readOnly ? 'Close' : 'Cancel'}</Button>
+              {!readOnly && (
+                <Button type="submit" disabled={saving}>{saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}{editing ? 'Update' : 'Add'} Employee</Button>
+              )}
             </DialogFooter>
           </form>
         </DialogContent>

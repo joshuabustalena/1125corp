@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { isReadOnly, seesAllBranches } from '@/lib/permissions';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -69,6 +70,11 @@ export default function LoansPage() {
   // would actually let submit one. Branch Proxy Collector and Branch Manager
   // were already allowed at that layer; this button just hadn't caught up.
   const canCreateLoan = isAdmin || ['Branch Field Collector', 'Branch Proxy Collector', 'Branch Manager'].includes(profile?.role_name ?? '');
+  // Branch scope only (Admin Staff sees both branches); Administrator-only
+  // actions keep checking isAdmin.
+  const allBranches = seesAllBranches(profile?.role_name);
+  // loans_read (Admin Staff): view only — no new loan, re-apply or edits.
+  const readOnly = isReadOnly(profile?.permissions, 'loans');
   const [myCollector, setMyCollector] = useState<{ id: string; branch_id: string | null; area_id: string | null } | null>(null);
   // Bumped on every loadLoans() call and checked when it resolves — the
   // Search box has no debounce, so typing a name fires one request per
@@ -191,7 +197,7 @@ export default function LoansPage() {
       // collector_id.
       customerQuery = customerQuery.eq('area_id', myCollector.area_id ?? '00000000-0000-0000-0000-000000000000');
       areaQuery = areaQuery.eq('id', myCollector.area_id ?? '00000000-0000-0000-0000-000000000000');
-    } else if (!isAdmin) {
+    } else if (!allBranches) {
       customerQuery = customerQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
       areaQuery = areaQuery.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     } else if (branchFilter !== 'all') {
@@ -243,7 +249,7 @@ export default function LoansPage() {
     }
     if (isCollector) {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
-    } else if (!isAdmin) {
+    } else if (!allBranches) {
       query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     } else if (branchFilter !== 'all') {
       query = query.eq('branch_id', branchFilter);
@@ -605,7 +611,7 @@ export default function LoansPage() {
               className="pl-10"
             />
           </div>
-          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${allBranches ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Customer</Label>
               <Select value={customerFilter} onValueChange={(v) => { setCustomerFilter(v); setPage(1); }}>
@@ -631,7 +637,7 @@ export default function LoansPage() {
                 </SelectContent>
               </Select>
             </div>
-            {isAdmin && (
+            {allBranches && (
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Branch</Label>
                 <Select
@@ -703,7 +709,7 @@ export default function LoansPage() {
                       )}
                     </div>
                     <div className="mt-3 flex items-center justify-end gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
-                      {l.status === 'declined' && !l.reapplied && profile?.role_name !== 'Cashier' && (
+                      {l.status === 'declined' && !l.reapplied && profile?.role_name !== 'Cashier' && !readOnly && (
                         <Button variant="outline" size="sm" disabled={reapplyingId === l.id} onClick={() => handleReapply(l)}>
                           {reapplyingId === l.id ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Re-apply'}
                         </Button>
@@ -758,7 +764,7 @@ export default function LoansPage() {
                       </TableCell>
                       <TableCell className="text-sm">{l.areas?.name ?? '—'}</TableCell>
                       <TableCell className="text-right">
-                        {l.status === 'declined' && !l.reapplied && profile?.role_name !== 'Cashier' && (
+                        {l.status === 'declined' && !l.reapplied && profile?.role_name !== 'Cashier' && !readOnly && (
                           <Button
                             variant="outline"
                             size="sm"

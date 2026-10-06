@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { isReadOnly } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName } from '@/lib/format';
 import { notifyRoles } from '@/lib/notify';
@@ -34,6 +35,9 @@ export default function EmployeeLoansPage() {
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
   const isAdmin = profile?.role_name === 'Administrator';
   const isBranchManager = profile?.role_name === 'Branch Manager';
+  // employee_loans_read (Admin Staff): sees every employee's loans across
+  // both branches, approves/edits nothing; can still apply for their own.
+  const viewAll = isReadOnly(profile?.permissions, 'employee_loans');
   const [loans, setLoans] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [myEmployee, setMyEmployee] = useState<{ id: string; position?: string | null; branch_id?: string | null; special_loan_access?: boolean } | null>(null);
@@ -87,7 +91,7 @@ export default function EmployeeLoansPage() {
     let q = supabase.from('employee_special_loans').select('*, employees(first_name, last_name, branch_id)').order('created_at', { ascending: false });
     const { data } = await q;
     let scoped = data ?? [];
-    if (!canApprove) {
+    if (!canApprove && !viewAll) {
       // Same self-scoping the "Employee Loans" tab already applies (see
       // load() above) — an employee with access to this page saw every
       // other employee's SSS/Pag-IBIG/Service Vehicle/Uniform/Cash Shortage
@@ -195,7 +199,7 @@ export default function EmployeeLoansPage() {
     if (!canApprove) {
       const { data: emp } = await supabase.from('employees').select('id, position, branch_id, special_loan_access').eq('profile_id', profile?.id ?? '').maybeSingle();
       setMyEmployee(emp);
-      empId = emp?.id ?? '00000000-0000-0000-0000-000000000000';
+      if (!viewAll) empId = emp?.id ?? '00000000-0000-0000-0000-000000000000';
     }
     let q = supabase.from('employee_loans').select('*, employees(first_name, last_name, position, branch_id)').order('created_at', { ascending: false });
     if (empId) q = q.eq('employee_id', empId);
@@ -494,9 +498,9 @@ export default function EmployeeLoansPage() {
           sees the tab exists. "Access" is the Admin-only checklist that
           grants that per-employee. */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'employee' | 'special' | 'access')}>
-        <TabsList className="w-full sm:w-auto" style={{ display: 'grid', gridTemplateColumns: `repeat(${1 + (canApprove || myEmployee?.special_loan_access ? 1 : 0) + (isAdmin ? 1 : 0)}, minmax(0, 1fr))` }}>
+        <TabsList className="w-full sm:w-auto" style={{ display: 'grid', gridTemplateColumns: `repeat(${1 + (canApprove || viewAll || myEmployee?.special_loan_access ? 1 : 0) + (isAdmin ? 1 : 0)}, minmax(0, 1fr))` }}>
           <TabsTrigger value="employee">Employee Loans</TabsTrigger>
-          {(canApprove || myEmployee?.special_loan_access) && (
+          {(canApprove || viewAll || myEmployee?.special_loan_access) && (
             <TabsTrigger value="special"><Wallet className="w-4 h-4 mr-1.5" />Special Loans</TabsTrigger>
           )}
           {isAdmin && (

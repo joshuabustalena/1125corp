@@ -22,6 +22,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatDate, formatTime, formatDuration, formatCurrency, exportToCSV, formatCustomerName } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
 import { logAudit } from '@/lib/audit-log';
+import { ADMIN_STAFF_ROLE } from '@/lib/permissions';
 import { getPeriodRange, cutoffStartForDate } from '@/lib/payroll-period';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
@@ -218,7 +219,7 @@ export default function AttendancePage() {
   async function load() {
     const seq = ++loadSeq.current;
     setLoading(true);
-    let query = supabase.from('attendance').select('*, employees(first_name, last_name, profile_id)').eq('date', dateFilter).order('date', { ascending: false });
+    let query = supabase.from('attendance').select('*, employees(first_name, last_name, profile_id, position)').eq('date', dateFilter).order('date', { ascending: false });
     if (isBranchManager) {
       const ids = branchEmployeeIds ?? [];
       query = query.in('employee_id', ids.length > 0 ? ids : ['00000000-0000-0000-0000-000000000000']);
@@ -863,6 +864,10 @@ export default function AttendancePage() {
       toast({ title: 'Cannot approve yet', description: 'This record is missing a Time In or Time Out. It can only be Accepted once both are present.', variant: 'destructive' });
       return;
     }
+    if (!isAdmin && record?.employees?.position === ADMIN_STAFF_ROLE) {
+      toast({ title: 'Administrator only', description: 'An Admin Staff\'s attendance can only be reviewed by an Administrator.', variant: 'destructive' });
+      return;
+    }
     const payrollLocked = !!record && payrollLockedIds.has(record.employee_id);
     if (payrollLocked && !isAdmin) {
       toast({ title: 'Payroll already generated', description: 'This cutoff\'s payroll is already generated, so this attendance can no longer be changed. Ask an Administrator.', variant: 'destructive' });
@@ -913,6 +918,9 @@ export default function AttendancePage() {
     if (isAdmin) return true;
     if (!isBranchManager) return false;
     if (payrollLockedIds.has(r.employee_id)) return false;
+    // An Admin Staff's attendance is reviewed by an Administrator only
+    // (Kat, Oct 2026) — never by a Branch Manager.
+    if (r.employees?.position === ADMIN_STAFF_ROLE) return false;
     // A Branch Manager reviews everyone else in their branch, but never
     // their own attendance — self-approval would let them accept/reject
     // their own record (and the late/undertime deduction riding on it).

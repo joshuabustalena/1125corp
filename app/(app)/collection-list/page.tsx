@@ -11,6 +11,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
+import { ADMIN_STAFF_ROLE, seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatCustomerName, todayStr } from '@/lib/format';
 import { buildPrintHtml } from '@/lib/print-document';
@@ -47,7 +48,8 @@ export default function CollectionListPage() {
   // code here — the effect below already forces branchId to
   // profile.branch_id for every non-admin role, Branch Manager included.
   const isBranchManager = profile?.role_name === 'Branch Manager';
-  const canAccess = isAdmin || profile?.role_name === 'Cashier' || isFieldCollector || isBranchManager;
+  const canAccess = isAdmin || profile?.role_name === 'Cashier' || profile?.role_name === ADMIN_STAFF_ROLE || isFieldCollector || isBranchManager;
+  const allBranches = seesAllBranches(profile?.role_name);
   const [date, setDate] = useState(todayStr());
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
@@ -74,7 +76,7 @@ export default function CollectionListPage() {
 
   useEffect(() => {
     loadBranches();
-    if (!isAdmin && profile?.branch_id) setBranchId(profile.branch_id);
+    if (!allBranches && profile?.branch_id) setBranchId(profile.branch_id);
     if (isFieldCollector && profile) {
       supabase.from('collectors').select('id').eq('profile_id', profile.id).maybeSingle()
         .then(({ data }) => setMyCollectorId(data?.id ?? null));
@@ -94,7 +96,7 @@ export default function CollectionListPage() {
   async function loadBranches() {
     const { data } = await supabase.from('branches').select('id, name').eq('status', 'active').order('name');
     setBranches(data ?? []);
-    if (data && data.length > 0 && isAdmin && !branchId) setBranchId(data[0].id);
+    if (data && data.length > 0 && allBranches && !branchId) setBranchId(data[0].id);
   }
 
   async function loadCollectors() {
@@ -277,7 +279,7 @@ export default function CollectionListPage() {
     <div className="space-y-6">
       <PageHeader title="Collection List" description="Printable per-collector worksheet to carry in the field">
         <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
-        {isAdmin && (
+        {allBranches && (
           <Select value={branchId} onValueChange={setBranchId}>
             <SelectTrigger className="w-48"><SelectValue placeholder="Select branch" /></SelectTrigger>
             <SelectContent>

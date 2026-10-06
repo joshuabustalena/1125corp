@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
 import { formatCurrency, formatDate, exportToCSV, formatCustomerName, todayStr } from '@/lib/format';
@@ -127,6 +128,9 @@ export default function PaymentsPage() {
   const searchParams = useSearchParams();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  // Branch scope only — Admin Staff posts against either branch; edit and
+  // delete stay Administrator-only (isAdmin).
+  const allBranches = seesAllBranches(profile?.role_name);
   const isCollector = profile?.role_name === 'Branch Field Collector';
   const isCashier = profile?.role_name === 'Cashier';
   const [editTarget, setEditTarget] = useState<any>(null);
@@ -321,7 +325,7 @@ export default function PaymentsPage() {
       .in('status', ['active', 'overdue', 'written_off']);
     if (isCollector) {
       query = query.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
-    } else if (!isAdmin) {
+    } else if (!allBranches) {
       // Everyone below Administrator is pinned to their own branch — a
       // Balanga cashier taking a walk-in must not be able to pick, or post
       // against, a Dinalupihan customer. Collectors are already narrowed by
@@ -454,7 +458,7 @@ export default function PaymentsPage() {
       if (searchLoanIds) q = q.in('loan_id', searchLoanIds);
       if (isCollector) {
         q = q.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
-      } else if (!isAdmin) {
+      } else if (!allBranches) {
         // Same branch lock on the history below the form. Done as an inner
         // join, NOT by collecting the branch's customer ids and passing them
         // to .in(): Balanga alone has 413 customers, which builds a ~15,000
@@ -1297,7 +1301,7 @@ export default function PaymentsPage() {
                 <div className="flex items-center gap-2 text-sm font-medium text-primary mb-1">
                   <Calculator className="w-4 h-4" />
                   New Remaining Balance: {formatCurrency(newBalance)}
-                  {!isOnline && <span className="text-xs text-muted-foreground font-normal">(estimate — hindi pa ito confirmed)</span>}
+                  {!isOnline && <span className="text-xs text-muted-foreground font-normal">(estimate — not yet confirmed)</span>}
                 </div>
               </div>
             )}
@@ -1371,7 +1375,7 @@ export default function PaymentsPage() {
             </DialogDescription>
           </DialogHeader>
           {pendingPayments.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">Wala pang pending na payment.</p>
+            <p className="text-sm text-muted-foreground text-center py-8">No pending payments yet.</p>
           ) : (
             <>
               <div className="space-y-2 max-h-80 overflow-y-auto">

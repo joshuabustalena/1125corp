@@ -18,6 +18,7 @@ import {
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
 import { overdueOrDelayFor } from '@/lib/overdue';
@@ -76,7 +77,7 @@ export default function ReportsPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
-  const isAdmin = profile?.role_name === 'Administrator';
+  const allBranches = seesAllBranches(profile?.role_name);
   // Non-admins see only their own branch's reports — the Branch dropdown is
   // replaced by a fixed badge and every query is scoped to profile.branch_id.
   // branchResolved gates the first generateReport() so it can't fire once
@@ -136,10 +137,10 @@ export default function ReportsPage() {
   // company-wide visibility, the exact opposite of the intended lock.
   useEffect(() => {
     if (!profile) return;
-    if (isAdmin) { setBranchResolved(true); return; }
+    if (allBranches) { setBranchResolved(true); return; }
     setBranchFilter(profile.branch_id || NO_BRANCH);
     setBranchResolved(true);
-  }, [profile, isAdmin]);
+  }, [profile, allBranches]);
 
   useEffect(() => {
     if (!branchResolved || !filtersLoaded) return;
@@ -575,7 +576,7 @@ export default function ReportsPage() {
             <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
               <div className="space-y-2 flex-1">
                 <Label>Branch</Label>
-                {isAdmin ? (
+                {allBranches ? (
                   <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); }}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>

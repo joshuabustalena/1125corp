@@ -28,6 +28,7 @@ import {
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 
 interface Customer {
   id: string;
@@ -75,6 +76,9 @@ export default function CustomersPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
+  // Branch scope only — Admin Staff sees both branches but none of the
+  // Administrator-only actions below.
+  const allBranches = seesAllBranches(profile?.role_name);
   const isCashier = profile?.role_name === 'Cashier';
   const canCreateCustomer = isAdmin || isCashier;
   const isCollector = profile?.role_name === 'Branch Field Collector';
@@ -148,7 +152,7 @@ export default function CustomersPage() {
     if (isCollector && myCollector) {
       branchQuery = branchQuery.eq('id', myCollector.branch_id ?? '00000000-0000-0000-0000-000000000000');
       areaQuery = areaQuery.eq('branch_id', myCollector.branch_id ?? '00000000-0000-0000-0000-000000000000');
-    } else if (!isAdmin && profile?.branch_id) {
+    } else if (!allBranches && profile?.branch_id) {
       branchQuery = branchQuery.eq('id', profile.branch_id);
       areaQuery = areaQuery.eq('branch_id', profile.branch_id);
     }
@@ -176,7 +180,7 @@ export default function CustomersPage() {
       // the ones explicitly linked to their own collector_id — an area can
       // have more than one collector working it.
       query = query.eq('area_id', myCollector?.area_id ?? '00000000-0000-0000-0000-000000000000');
-    } else if (!isAdmin) {
+    } else if (!allBranches) {
       query = query.eq('branch_id', profile?.branch_id ?? '00000000-0000-0000-0000-000000000000');
     } else if (branchFilter !== 'all') {
       query = query.eq('branch_id', branchFilter);
@@ -666,7 +670,7 @@ export default function CustomersPage() {
                 className="pl-10"
               />
             </div>
-            {isAdmin && (
+            {allBranches && (
             <Select value={branchFilter} onValueChange={(v) => { setBranchFilter(v); setAreaFilter('all'); setPage(1); }}>
               <SelectTrigger className="w-full sm:w-48">
                 <SelectValue placeholder="All Branches" />

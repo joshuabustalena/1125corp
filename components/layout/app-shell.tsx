@@ -85,7 +85,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div>
                 <h2 className="text-xl font-bold">Access Denied</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Wala kang access sa page na ito. Kung kailangan mo ito, pakisabi sa Administrator.
+                  You don&apos;t have access to this page. If you need it, please ask an Administrator.
                 </p>
                 {/* Access can now come from a per-account override set on
                     the Access tab of Edit Employee, not only the role — so

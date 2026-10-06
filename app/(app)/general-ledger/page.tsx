@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/page-header';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -19,7 +20,7 @@ import { Loader2, TrendingUp, TrendingDown, Scale } from 'lucide-react';
 
 export default function GeneralLedgerPage() {
   const { profile } = useAuth();
-  const isAdmin = profile?.role_name === 'Administrator';
+  const allBranches = seesAllBranches(profile?.role_name);
 
   // A non-admin's statements cover only their own branch plus shared /
   // company-wide entries — the same lock Journal Entries, Accounting and the
@@ -29,7 +30,7 @@ export default function GeneralLedgerPage() {
   // The ENTRY is filtered, not the account: an account can be shared while
   // the entry that touched it belongs to one branch.
   function scopeToBranch(q: any) {
-    if (isAdmin) return q;
+    if (allBranches) return q;
     return profile?.branch_id
       ? q.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`, { foreignTable: 'journal_entries' })
       : q.is('journal_entries.branch_id', null);
@@ -200,7 +201,7 @@ export default function GeneralLedgerPage() {
     <div className="space-y-6">
       <PageHeader
         title="Financial Statements"
-        description={isAdmin
+        description={allBranches
           ? 'Trial balance, income statement, and balance sheet — all branches'
           : 'Trial balance, income statement, and balance sheet — your branch and shared entries'}
       />

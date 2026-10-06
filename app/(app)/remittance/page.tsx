@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { ADMIN_STAFF_ROLE, seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatCustomerName, generateEntryNumber, todayStr } from '@/lib/format';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
@@ -33,7 +34,8 @@ export default function RemittancePage() {
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
   const isAdmin = profile?.role_name === 'Administrator';
   const isCashier = profile?.role_name === 'Cashier';
-  const canRecordRemittance = isAdmin || isCashier;
+  const canRecordRemittance = isAdmin || isCashier || profile?.role_name === ADMIN_STAFF_ROLE;
+  const allBranches = seesAllBranches(profile?.role_name);
   const [date, setDate] = useState(todayStr());
   const [loading, setLoading] = useState(true);
   const [collectors, setCollectors] = useState<any[]>([]);
@@ -117,7 +119,7 @@ export default function RemittancePage() {
     // user at one branch must not see or collect another branch's collectors
     // (e.g. Dinalupihan staff must only handle Dinalupihan customers).
     // Administrator is unrestricted.
-    else if (!isAdmin && profile?.branch_id) colQuery = colQuery.eq('branch_id', profile.branch_id);
+    else if (!allBranches && profile?.branch_id) colQuery = colQuery.eq('branch_id', profile.branch_id);
 
     // The two cumulative queries are paginated: they read EVERY payment and
     // remittance ever recorded up to this date, and PostgREST silently caps

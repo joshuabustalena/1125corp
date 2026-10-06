@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import { notifyRoles } from '@/lib/notify';
@@ -67,7 +68,9 @@ export default function CreditLimitRequestsPage() {
   async function load() {
     setLoading(true);
     let q = supabase.from('credit_limit_requests').select('*, customers(first_name, last_name, branch_id), requested_by_profile:profiles!requested_by(full_name)').order('created_at', { ascending: false });
-    if (!isAdmin) {
+    // Admin Staff reviews nothing here but sees every request, like an
+    // Administrator; everyone else sees only the ones they filed.
+    if (!seesAllBranches(profile?.role_name)) {
       q = q.eq('requested_by', profile?.id ?? '00000000-0000-0000-0000-000000000000');
     }
     const { data } = await q;

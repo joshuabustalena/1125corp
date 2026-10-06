@@ -18,6 +18,7 @@ import {
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { ADMIN_STAFF_ROLE, seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, todayStr } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
@@ -248,7 +249,8 @@ export default function CashCountPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const isAdmin = profile?.role_name === 'Administrator';
-  const canRecordCount = isAdmin || profile?.role_name === 'Cashier';
+  const canRecordCount = isAdmin || profile?.role_name === 'Cashier' || profile?.role_name === ADMIN_STAFF_ROLE;
+  const allBranches = seesAllBranches(profile?.role_name);
   const [date, setDate] = useState(todayStr());
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
@@ -318,7 +320,7 @@ export default function CashCountPage() {
   const [usedLegacyCashAccount, setUsedLegacyCashAccount] = useState(false);
 
   useEffect(() => {
-    if (isAdmin) {
+    if (allBranches) {
       loadBranches();
     } else if (profile?.branch_id) {
       setBranchId(profile.branch_id);
@@ -728,7 +730,7 @@ export default function CashCountPage() {
     <div className="space-y-6">
       <PageHeader title="Daily Cash Count" description="Cash Count Sheet — count bills/coins in the vault and petty cash fund">
         <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
-        {isAdmin && (
+        {allBranches && (
           <Select value={branchId} onValueChange={setBranchId}>
             <SelectTrigger className="w-48"><SelectValue placeholder="Select branch" /></SelectTrigger>
             <SelectContent>

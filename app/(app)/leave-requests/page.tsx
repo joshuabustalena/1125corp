@@ -20,6 +20,7 @@ import {
 import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
+import { isReadOnly } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatDate, formatCustomerName, exportToCSV } from '@/lib/format';
 import { notifyRoles, notifyProfile } from '@/lib/notify';
@@ -42,6 +43,10 @@ export default function LeaveRequestsPage() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const canApprove = profile?.role_name === 'Administrator' || profile?.role_name === 'Branch Manager';
+  // leave_requests_read (Admin Staff): sees every request and balance across
+  // both branches but approves, deletes and resets nothing; can still file
+  // their own leave like any employee.
+  const canViewAll = canApprove || isReadOnly(profile?.permissions, 'leave_requests');
   const isAdmin = profile?.role_name === 'Administrator';
   const isBranchManager = profile?.role_name === 'Branch Manager';
   const [loading, setLoading] = useState(true);
@@ -81,7 +86,7 @@ export default function LeaveRequestsPage() {
     // Every approve/delete/reset ends in load(), so refreshing the employee
     // list here keeps the balances table (and the request form's "remaining
     // after this request" hint) current instead of frozen at page open.
-    if (canApprove) loadEmployees();
+    if (canViewAll) loadEmployees();
     const [{ data: emp }, { data: setting }, { data: specialSetting }] = await Promise.all([
       supabase.from('employees').select('id, paid_leaves_used, special_leaves_used, position, branch_id').eq('profile_id', profile?.id ?? '').maybeSingle(),
       supabase.from('settings').select('value').eq('key', 'paid_leaves_annual').maybeSingle(),
@@ -92,7 +97,7 @@ export default function LeaveRequestsPage() {
     if (specialSetting?.value) setSpecialLeavesAnnual(Number(specialSetting.value));
 
     let q = supabase.from('leave_requests').select('*, employees(first_name, last_name, position, branch_id, profile_id)').order('created_at', { ascending: false });
-    if (!canApprove) {
+    if (!canViewAll) {
       q = q.eq('employee_id', emp?.id ?? '00000000-0000-0000-0000-000000000000');
     }
     const { data } = await q;
@@ -354,7 +359,7 @@ export default function LeaveRequestsPage() {
         </>
       )}
 
-      {canApprove && (
+      {canViewAll && (
         <Card className="glass-card border-border">
           <CardHeader className="space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
@@ -489,7 +494,7 @@ export default function LeaveRequestsPage() {
                   <div key={r.id} className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        {canApprove && <p className="font-medium text-sm truncate">{r.employees?.first_name} {r.employees?.last_name}</p>}
+                        {canViewAll && <p className="font-medium text-sm truncate">{r.employees?.first_name} {r.employees?.last_name}</p>}
                         <p className="text-sm capitalize">{r.leave_type}</p>
                       </div>
                       <Badge variant={statusVariant(r.status)} className="shrink-0">{r.status}</Badge>
@@ -524,7 +529,7 @@ export default function LeaveRequestsPage() {
               <Table className="hidden md:table">
                 <TableHeader>
                   <TableRow>
-                    {canApprove && <TableHead>Employee</TableHead>}
+                    {canViewAll && <TableHead>Employee</TableHead>}
                     <TableHead>Type</TableHead>
                     <TableHead>Start</TableHead>
                     <TableHead>End</TableHead>
@@ -537,7 +542,7 @@ export default function LeaveRequestsPage() {
                 <TableBody>
                   {filteredRequests.map(r => (
                     <TableRow key={r.id} className="hover:bg-secondary/50">
-                      {canApprove && <TableCell className="text-sm font-medium">{r.employees?.first_name} {r.employees?.last_name}</TableCell>}
+                      {canViewAll && <TableCell className="text-sm font-medium">{r.employees?.first_name} {r.employees?.last_name}</TableCell>}
                       <TableCell className="text-sm capitalize">{r.leave_type}</TableCell>
                       <TableCell className="text-sm">{formatDate(r.start_date)}</TableCell>
                       <TableCell className="text-sm">{formatDate(r.end_date)}</TableCell>

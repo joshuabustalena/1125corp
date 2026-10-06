@@ -129,7 +129,7 @@ export default function SettingsPage() {
     });
     const bad = branches.find(b => !(Number(branchLimits[b.id]) > 0) || !(Number(branchEmpLimits[b.id]) > 0));
     if (bad) {
-      toast({ title: 'Invalid limit', description: `Lagyan ng halagang mas mataas sa 0 ang ${bad.name}.`, variant: 'destructive' });
+      toast({ title: 'Invalid limit', description: `Enter an amount greater than 0 for ${bad.name}.`, variant: 'destructive' });
       setSavingLimits(false);
       return;
     }
@@ -143,7 +143,7 @@ export default function SettingsPage() {
     if (failed?.error) {
       toast({ title: 'Error', description: failed.error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Success', description: rows.length === 0 ? 'Walang binago' : `Na-update ang ${rows.length} branch` });
+      toast({ title: 'Success', description: rows.length === 0 ? 'No changes' : `Updated ${rows.length} branch${rows.length === 1 ? '' : 'es'}` });
       load();
     }
     setSavingLimits(false);
@@ -323,12 +323,12 @@ export default function SettingsPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><Building2 className="w-5 h-5" />Loan Limits per Branch</CardTitle>
               <CardDescription>
-                Bawat bagong branch ay nagsisimula sa ₱30,000 (customer) at ₱15,000 (employee). Ang customer limit ay ang binibigay sa BAGONG customer — hindi nito binabago ang limit ng mga existing.
+                Every new branch starts at ₱30,000 (customer) and ₱15,000 (employee). The customer limit is what a NEW customer is given — it does not change the limit of existing customers.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {branches.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Wala pang branch. Magdagdag muna sa Branches tab.</p>
+                <p className="text-sm text-muted-foreground">No branches yet. Add one in the Branches tab first.</p>
               ) : (
                 <>
                   <div className="overflow-x-auto">
@@ -372,7 +372,7 @@ export default function SettingsPage() {
                     </Table>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Ang Branch Manager ay may sariling allowance na ₱20,000 — kung mas mataas ang branch limit dito, ang branch limit ang masusunod.
+                    A Branch Manager has their own ₱20,000 allowance — if the branch limit here is higher, the branch limit applies.
                   </p>
                   <Button onClick={saveBranchLimits} disabled={savingLimits || !isAdmin}>
                     {savingLimits && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}

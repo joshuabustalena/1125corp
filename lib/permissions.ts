@@ -28,11 +28,15 @@ export const PAGE_PERMISSIONS: Record<string, string | null> = {
   '/attendance': 'attendance',
   '/collector-attendance': 'collector_attendance',
   '/accounting': 'accounting',
-  '/general-ledger': 'general_ledger',
+  // Financial Statements (Trial Balance / Income Statement / Balance Sheet)
+  // and Shareholders have their own key so a role can get them without the
+  // ledger itself (Admin Staff, Oct 2026). 'general_ledger' still covers
+  // them — see hasPermission — so existing roles keep their access.
+  '/general-ledger': 'financial_statements',
   '/journal-entries': 'general_ledger',
   '/account-ledger': 'general_ledger',
   '/chart-of-accounts': 'general_ledger',
-  '/shareholders': 'general_ledger',
+  '/shareholders': 'financial_statements',
   '/cash-count': 'cash_count',
   '/collection-list': 'collection_list',
   '/gas-voucher': 'gas_voucher',
@@ -60,9 +64,30 @@ export function hasPermission(permissions: string[] | null | undefined, required
   if (!permissions || permissions.length === 0) return false;
   if (permissions.includes('*')) return true;
   if (permissions.includes(required)) return true;
-  if (required === 'customers' && permissions.includes('customers_read')) return true;
+  // '<key>_read' opens the same page in view-only form (customers_read was
+  // the first; Admin Staff added loans_read, employees_read and others).
+  if (permissions.includes(`${required}_read`)) return true;
+  if (required === 'financial_statements' && permissions.includes('general_ledger')) return true;
   return false;
 }
+
+// True when the account can open a page only through its '<key>_read'
+// variant — pages use it to hide their create/edit/approve actions.
+export function isReadOnly(permissions: string[] | null | undefined, key: string): boolean {
+  if (!permissions || permissions.includes('*') || permissions.includes(key)) return false;
+  return permissions.includes(`${key}_read`);
+}
+
+// Roles that see every branch instead of being locked to their own.
+// Administrator always has; Admin Staff joined in Oct 2026. Pages use this
+// for branch scope only — Administrator-only actions still check the
+// Administrator role itself.
+export const ALL_BRANCH_ROLES = ['Administrator', 'Admin Staff'];
+export function seesAllBranches(roleName: string | null | undefined): boolean {
+  return !!roleName && ALL_BRANCH_ROLES.includes(roleName);
+}
+
+export const ADMIN_STAFF_ROLE = 'Admin Staff';
 
 
 // ---------------------------------------------------------------------------
@@ -95,7 +120,8 @@ const PERMISSION_LABELS: Record<string, string> = {
   attendance: 'Attendance',
   collector_attendance: 'Collector Attendance',
   accounting: 'Accounting',
-  general_ledger: 'General Ledger, Journal Entries, Chart of Accounts, Financial Statements, Shareholders',
+  general_ledger: 'General Ledger, Journal Entries, Chart of Accounts (includes Financial Statements, Shareholders)',
+  financial_statements: 'Financial Statements, Shareholders',
   cash_count: 'Cash Count',
   collection_list: 'Collection List',
   gas_voucher: 'Gas Voucher',
@@ -143,8 +169,8 @@ export function effectivePermissions(
 
 // Permissions that exist on roles but map to no page, so the Access tab has
 // no checkbox for them — today: 'collections', 'cash_flow', 'expenses' and
-// 'customers_read'. That last one is load-bearing: hasPermission() treats it
-// as standing in for 'customers'. Saving a checkbox selection must carry
+// the '<key>_read' view-only keys (customers_read, loans_read, ...). Those are
+// load-bearing: hasPermission() treats each as opening its page view-only. Saving a checkbox selection must carry
 // these through untouched, or ticking anything at all would quietly strip
 // them from the account.
 export function nonAssignablePermissions(permissions: string[] | null | undefined): string[] {

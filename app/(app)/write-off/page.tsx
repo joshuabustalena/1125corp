@@ -12,6 +12,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { useAuth } from '@/lib/auth-context';
+import { seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import { Ban, Loader2 } from 'lucide-react';
@@ -23,7 +24,7 @@ import { Ban, Loader2 } from 'lucide-react';
 // /loans/[id]. Click a row to open its own detail/payment/finance view.
 export default function WriteOffPage() {
   const { profile } = useAuth();
-  const isAdmin = profile?.role_name === 'Administrator';
+  const allBranches = seesAllBranches(profile?.role_name);
   const [loans, setLoans] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [branchFilter, setBranchFilter] = useState('all');
@@ -44,7 +45,7 @@ export default function WriteOffPage() {
       .select('*, customers(first_name, last_name, phone), branches(name), written_off_by_profile:profiles!written_off_by(full_name)')
       .eq('status', 'written_off')
       .order('written_off_at', { ascending: false });
-    if (!isAdmin && profile?.branch_id) {
+    if (!allBranches && profile?.branch_id) {
       query = query.eq('branch_id', profile.branch_id);
     } else if (branchFilter !== 'all') {
       query = query.eq('branch_id', branchFilter);
@@ -57,7 +58,7 @@ export default function WriteOffPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Write-Off" description="Loans written off — excluded from receivable/overdue everywhere else, still fully tracked here">
-        {isAdmin && (
+        {allBranches && (
           <Select value={branchFilter} onValueChange={setBranchFilter}>
             <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All Branches" /></SelectTrigger>
             <SelectContent>
