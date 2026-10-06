@@ -17,7 +17,20 @@ const RELOAD_GUARD_KEY = 'chunk_reload_guard_v1';
 export function PwaRegister() {
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      if (process.env.NODE_ENV === 'production') {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      } else {
+        // In dev, /_next/static/ files aren't content-hashed (e.g.
+        // chunks/app/(app)/employees/page.js), so sw.js's cache-forever rule
+        // kept serving old code after every edit and mixed it with new code
+        // ("isReadOnly is not a function"). Remove any worker and its caches.
+        navigator.serviceWorker.getRegistrations()
+          .then((registrations) => registrations.forEach((r) => r.unregister()))
+          .catch(() => {});
+        if ('caches' in window) {
+          caches.keys().then((keys) => keys.forEach((k) => caches.delete(k))).catch(() => {});
+        }
+      }
     }
 
     const handleChunkError = (event: ErrorEvent | PromiseRejectionEvent) => {
