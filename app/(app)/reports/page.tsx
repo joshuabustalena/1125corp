@@ -204,7 +204,14 @@ export default function ReportsPage() {
         // 1000-row cap, which would drop payments from the totals with
         // nothing on screen to show it (see lib/db-chunk.ts).
         const paysPromise = selectAllRows<any>(() => scopePaymentsByCustomer(supabase.from('payments').select('amount_paid, payment_date, customer_id, customers!inner(branch_id, area_id)').gte('payment_date', monthStart).lte('payment_date', monthEnd)));
-        let lq = supabase.from('loans').select('release_date, amount, release_amount, area_id').gte('release_date', monthStart).lte('release_date', monthEnd);
+        // Released loans only — same statuses as Monthly Release. Without
+        // this, a pending request filed today for tomorrow (or a declined
+        // one) showed its deduction as already collected (Kat, Oct 8:
+        // ₱550/₱5,130/₱5,160 dated Oct 9 at Balanga were four pending
+        // applications; September also carried ₱101,250 from 11 declined).
+        let lq = supabase.from('loans').select('release_date, amount, release_amount, area_id')
+          .in('status', ['active', 'renewed', 'paid', 'written_off'])
+          .gte('release_date', monthStart).lte('release_date', monthEnd);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
         const [pays, { data: loans }] = await Promise.all([paysPromise, lq]);
@@ -241,7 +248,11 @@ export default function ReportsPage() {
       // Interest, Service Fee, Net Proceeds, Total Deduction — replacing the
       // old generic Loans/TotalAmount/OutstandingBalance shape.
       case 'branch_performance': {
-        let lq = supabase.from('loans').select('amount, interest_amount, service_fee, offset_balance, daily_payment, total_payable, term_days, release_amount, branch_id, area_id, branches(name), areas(name)').gte('release_date', startDate).lte('release_date', endDate);
+        // Released loans only, same as Monthly Release / Monthly Collection —
+        // a pending or declined application isn't a release.
+        let lq = supabase.from('loans').select('amount, interest_amount, service_fee, offset_balance, daily_payment, total_payable, term_days, release_amount, branch_id, area_id, branches(name), areas(name)')
+          .in('status', ['active', 'renewed', 'paid', 'written_off'])
+          .gte('release_date', startDate).lte('release_date', endDate);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
         // Paginated for the same reason as monthly_collection above.
