@@ -209,7 +209,7 @@ export default function ReportsPage() {
         // one) showed its deduction as already collected (Kat, Oct 8:
         // ₱550/₱5,130/₱5,160 dated Oct 9 at Balanga were four pending
         // applications; September also carried ₱101,250 from 11 declined).
-        let lq = supabase.from('loans').select('release_date, amount, release_amount, area_id')
+        let lq = supabase.from('loans').select('release_date, offset_balance, daily_payment, total_payable, term_days, area_id')
           .in('status', ['active', 'renewed', 'paid', 'written_off'])
           .gte('release_date', monthStart).lte('release_date', monthEnd);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
@@ -227,10 +227,16 @@ export default function ReportsPage() {
         (loans ?? []).forEach((l: any) => {
           if (!l.release_date) return;
           const area = areaNameById.get(l.area_id) ?? 'Unassigned';
-          // Total Deduction is what was ACTUALLY withheld from the proceeds
-          // at release (amount - release_amount) — same definition Daily
-          // Collection and Branch Performance already use.
-          ensure(l.release_date, area).deduction += (Number(l.amount) || 0) - (Number(l.release_amount) || 0);
+          // Total Deduction here is what was COLLECTED by withholding it at
+          // release: the day-one first payment plus a renewal's offset
+          // (old loan balance). The service fee is also withheld but is
+          // income, not a collection, so it's left out (Kat, Oct 8: Area 5
+          // showed ₱550 = ₱300 fee + ₱250 first payment; should be ₱250).
+          // Branch Performance keeps amount - release_amount on purpose.
+          const firstPayment = Number(l.daily_payment) > 0
+            ? Number(l.daily_payment)
+            : (l.term_days > 0 ? (Number(l.total_payable) || 0) / l.term_days : 0);
+          ensure(l.release_date, area).deduction += firstPayment + (Number(l.offset_balance) || 0);
         });
 
         reportData = Object.values(byKey)
