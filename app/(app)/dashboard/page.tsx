@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
 import { seesAllBranches } from '@/lib/permissions';
+import { RELEASED_LOAN_STATUSES, collectedAtRelease } from '@/lib/collections';
 import { formatCurrency, formatDate, formatCustomerName } from '@/lib/format';
 import {
   Users, Landmark, AlertCircle, Wallet, TrendingUp, Banknote,
@@ -248,7 +249,7 @@ export default function DashboardPage() {
         recentPays, upcoming, paymentsWeek, journalWeek,
         customersByArea, paymentsFourWeeks, disbursedFourWeeks, gasVouchersFourWeeks, cashVouchersFourWeeks,
         attendanceMonth, employees, attendanceToday, payrollMonth, cashLines, releaseVouchersToday,
-        releasesMonth, areaList,
+        releasedLoans, areaList,
       ] = await Promise.all([
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true })),
         scopeByBranch(supabase.from('customers').select('id', { count: 'exact', head: true }).gte('created_at', monthStart)),
@@ -286,9 +287,11 @@ export default function DashboardPage() {
             })
           : Promise.resolve([] as any[]),
         scopeByLoanBranch(supabase.from('cash_vouchers').select('amount, loans!inner(branch_id)').eq('voucher_date', today)),
-        // Same set and amount as the Monthly Release report: every loan
-        // released this month (principal), whatever its status since.
-        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('amount, area_id').in('status', ['active', 'renewed', 'paid', 'written_off']).gte('release_date', monthStart).lte('release_date', monthEnd))),
+        // Every loan released from last month through this month (same set
+        // as the Monthly Release report). Feeds this month's release figure
+        // and the amount each release collected up front (first payment +
+        // offset), which the collection cards add to cash payments.
+        selectAllRows<any>(() => scopeByBranch(supabase.from('loans').select('amount, area_id, release_date, offset_balance, daily_payment, total_payable, term_days').in('status', RELEASED_LOAN_STATUSES).gte('release_date', lastMonthStart).lte('release_date', monthEnd))),
         scopeByBranch(supabase.from('areas').select('id, name, branches(name)')),
       ]);
 
@@ -354,7 +357,23 @@ export default function DashboardPage() {
         row.overdueAmount = v.overdue;
         row.overdueRate = v.receivable > 0 ? (v.overdue / v.receivable) * 100 : 0;
       }
-      for (const l of releasesMonth as any[]) rowFor(l.area_id).monthlyRelease += Number(l.amount) || 0;
+      // Collections = cash payments + what each release collected up front
+      // (first payment + offset) — the Monthly Collection report's "Total
+      // Amount Collected" (Kat, Oct 10: Balanga showed ₱1,120,900 cash
+      // only; the report's ₱1,221,490 is the right figure).
+      const isDateBetween = (d: string | null | undefined, from: string, to: string) => !!d && d >= from && d <= to;
+      const releaseCollected = (from: string, to: string) => (releasedLoans as any[])
+        .filter(l => isDateBetween(l.release_date, from, to))
+        .reduce((s: number, l: any) => s + collectedAtRelease(l), 0);
+      for (const l of releasedLoans as any[]) {
+        const collected = collectedAtRelease(l);
+        if (isDateBetween(l.release_date, monthStart, monthEnd)) {
+          rowFor(l.area_id).monthlyRelease += Number(l.amount) || 0;
+          rowFor(l.area_id).monthlyCollection += collected;
+        }
+        if (isDateBetween(l.release_date, sevenDaysAgo, today)) rowFor(l.area_id).weeklyCollection += collected;
+        if (l.release_date === today) rowFor(l.area_id).todayCollection += collected;
+      }
       for (const p of paymentsToday as any[]) rowFor(p.customers?.area_id).todayCollection += Number(p.amount_paid) || 0;
       for (const p of paymentsWeek as any[]) rowFor(p.customers?.area_id).weeklyCollection += Number(p.amount_paid) || 0;
       for (const p of paymentsMonth as any[]) rowFor(p.customers?.area_id).monthlyCollection += Number(p.amount_paid) || 0;
@@ -379,8 +398,10 @@ export default function DashboardPage() {
       const paidLoans = statusCounts['paid'] ?? 0;
       const pendingLoans = statusCounts['pending'] ?? 0;
 
-      const monthlyCollections = (paymentsMonth as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
-      const lastMonthCollections = (paymentsLastMonth as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0);
+      const monthlyCollections = (paymentsMonth as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0)
+        + releaseCollected(monthStart, monthEnd);
+      const lastMonthCollections = (paymentsLastMonth as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0)
+        + releaseCollected(lastMonthStart, lastMonthEnd);
 
       const employeeRows = employees.data ?? [];
       const collectorsTotal = employeeRows.filter((e: any) => e.position === 'Branch Field Collector').length;
@@ -400,9 +421,12 @@ export default function DashboardPage() {
         overdueLoans: overdue.length,
         overdueAmount,
         overdueRate,
-        todayCollections: (paymentsToday as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
-        yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
-        weeklyCollections: (paymentsWeek as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0),
+        todayCollections: (paymentsToday as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0)
+          + releaseCollected(today, today),
+        yesterdayCollections: (paymentsYesterday.data ?? []).reduce((s: number, p: any) => s + Number(p.amount_paid), 0)
+          + releaseCollected(yesterday, yesterday),
+        weeklyCollections: (paymentsWeek as any[]).reduce((s: number, p: any) => s + Number(p.amount_paid), 0)
+          + releaseCollected(sevenDaysAgo, today),
         monthlyCollections,
         lastMonthCollections,
         outstandingBalance,
@@ -421,14 +445,19 @@ export default function DashboardPage() {
       setUpcomingDues((upcoming.data ?? []).filter((l: any) => l.due_date));
 
       // Daily Collections & Revenue — last 7 calendar days. Collections =
-      // actual cash received (payments); Revenue = ledger credits to
-      // revenue-type accounts (interest/service fee/etc income) that same
-      // day, so the two lines can genuinely diverge.
+      // cash payments + what that day's releases collected up front (same
+      // as the cards above); Revenue = ledger credits to revenue-type
+      // accounts (interest/service fee/etc income) that same day, so the
+      // two lines can genuinely diverge.
       const dayLabels = Array.from({ length: 7 }, (_, i) => daysAgo(6 - i));
       const paymentsByDay = new Map<string, number>();
       for (const p of (paymentsWeek as any[])) {
         const key = p.payment_date;
         paymentsByDay.set(key, (paymentsByDay.get(key) ?? 0) + Number(p.amount_paid));
+      }
+      for (const l of releasedLoans as any[]) {
+        if (!isDateBetween(l.release_date, sevenDaysAgo, today)) continue;
+        paymentsByDay.set(l.release_date, (paymentsByDay.get(l.release_date) ?? 0) + collectedAtRelease(l));
       }
       const revenueByDay = new Map<string, number>();
       for (const je of (journalWeek.data ?? []) as any[]) {

@@ -19,6 +19,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { seesAllBranches } from '@/lib/permissions';
+import { RELEASED_LOAN_STATUSES, collectedAtRelease } from '@/lib/collections';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
 import { overdueOrDelayFor } from '@/lib/overdue';
@@ -210,7 +211,7 @@ export default function ReportsPage() {
         // ₱550/₱5,130/₱5,160 dated Oct 9 at Balanga were four pending
         // applications; September also carried ₱101,250 from 11 declined).
         let lq = supabase.from('loans').select('release_date, offset_balance, daily_payment, total_payable, term_days, area_id')
-          .in('status', ['active', 'renewed', 'paid', 'written_off'])
+          .in('status', RELEASED_LOAN_STATUSES)
           .gte('release_date', monthStart).lte('release_date', monthEnd);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
@@ -227,16 +228,10 @@ export default function ReportsPage() {
         (loans ?? []).forEach((l: any) => {
           if (!l.release_date) return;
           const area = areaNameById.get(l.area_id) ?? 'Unassigned';
-          // Total Deduction here is what was COLLECTED by withholding it at
-          // release: the day-one first payment plus a renewal's offset
-          // (old loan balance). The service fee is also withheld but is
-          // income, not a collection, so it's left out (Kat, Oct 8: Area 5
+          // First payment + offset, not the service fee (Kat, Oct 8: Area 5
           // showed ₱550 = ₱300 fee + ₱250 first payment; should be ₱250).
           // Branch Performance keeps amount - release_amount on purpose.
-          const firstPayment = Number(l.daily_payment) > 0
-            ? Number(l.daily_payment)
-            : (l.term_days > 0 ? (Number(l.total_payable) || 0) / l.term_days : 0);
-          ensure(l.release_date, area).deduction += firstPayment + (Number(l.offset_balance) || 0);
+          ensure(l.release_date, area).deduction += collectedAtRelease(l);
         });
 
         reportData = Object.values(byKey)
@@ -257,7 +252,7 @@ export default function ReportsPage() {
         // Released loans only, same as Monthly Release / Monthly Collection —
         // a pending or declined application isn't a release.
         let lq = supabase.from('loans').select('amount, interest_amount, service_fee, offset_balance, daily_payment, total_payable, term_days, release_amount, branch_id, area_id, branches(name), areas(name)')
-          .in('status', ['active', 'renewed', 'paid', 'written_off'])
+          .in('status', RELEASED_LOAN_STATUSES)
           .gte('release_date', startDate).lte('release_date', endDate);
         if (areaFilter !== 'all') lq = lq.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') lq = lq.eq('branch_id', branchFilter);
@@ -384,7 +379,7 @@ export default function ReportsPage() {
         // the moment it flipped to 'renewed'. Only statuses that mean the
         // loan was never released are excluded (pending/approved/declined).
         let q = supabase.from('loans').select('id, release_date, amount, branch_id, area_id, documents_returned, customers(first_name, last_name)')
-          .in('status', ['active', 'renewed', 'paid', 'written_off'])
+          .in('status', RELEASED_LOAN_STATUSES)
           .gte('release_date', monthStart).lte('release_date', monthEnd).order('release_date');
         if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
