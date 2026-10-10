@@ -1518,20 +1518,18 @@ export default function PayrollPage() {
     if (!voucherBranchId || eligiblePayrollRows.length === 0) return;
     setGeneratingVoucher(true);
 
-    let sssPayable = 0, philPayable = 0, pagibigPayable = 0, svTotal = 0, uniformTotal = 0, cashShortageTotal = 0, employeeLoanTotal = 0, netPayTotal = 0, incentiveTotal = 0, incentiveRetentionTotal = 0;
+    let sssPayable = 0, sssLoanTotal = 0, philPayable = 0, pagibigPayable = 0, pagibigLoanTotal = 0, specialDeductionTotal = 0, svTotal = 0, uniformTotal = 0, cashShortageTotal = 0, employeeLoanTotal = 0, netPayTotal = 0, incentiveTotal = 0, incentiveRetentionTotal = 0;
     const lines = eligiblePayrollRows.map(p => {
-      // sss_loan/pag_ibig_loan are deliberately left out — the client
-      // confirmed (reference journal entry) these should never appear on
-      // this ledger entry at all, not folded into SSS/PagIBIG Payable.
-      // They're still deducted from the employee's net pay on the payslip
-      // itself, just not booked as part of this company-ledger expense.
-      // special_deduction gets the same treatment, for a different reason:
-      // it's a deliberately general/catch-all category with no single fixed
-      // Chart of Accounts line the way Service Vehicle/Uniform/Cash Shortage
-      // each have one — see supabase/add_special_deduction_type.sql.
+      // sss_loan, pag_ibig_loan and special_deduction each get their own
+      // payable account (Oct 2026). Before that they were deliberately left
+      // off this entry, so earlier vouchers never booked them anywhere — see
+      // supabase/add_pagibig_loan_and_special_deduction_payable_accounts.sql.
       sssPayable += Number(p.sss);
+      sssLoanTotal += Number(p.sss_loan || 0);
       philPayable += Number(p.philhealth);
       pagibigPayable += Number(p.pag_ibig);
+      pagibigLoanTotal += Number(p.pag_ibig_loan || 0);
+      specialDeductionTotal += Number(p.special_deduction || 0);
       svTotal += Number(p.service_vehicle || 0);
       uniformTotal += Number(p.uniform || 0);
       cashShortageTotal += Number(p.cash_shortage || 0);
@@ -1542,17 +1540,15 @@ export default function PayrollPage() {
       return { payroll_id: p.id, employee_id: p.employee_id, name: `${p.employees?.first_name ?? ''} ${p.employees?.last_name ?? ''}`, net_pay: Number(p.net_pay) || 0 };
     });
     // Backed out from the credit side so the entry always balances by
-    // construction, regardless of which deduction types happen to be zero —
-    // dropping sss_loan/pag_ibig_loan from the credits above also shrinks
-    // this figure by the same amount, exactly matching the client's
-    // reference entry (Salaries Expense = sum of every credit line below).
+    // construction, regardless of which deduction types happen to be zero
+    // (Salaries Expense = sum of every credit line below).
     //
     // Incentive is then pulled back OUT of this plug and into its own two
     // lines below (Incentives Expense / Withheld Funds Payable), since
     // netPayTotal already nets "+ incentive - retention" into it — without
     // this adjustment the incentive's net effect would double up: once
     // buried inside Salaries Expense, once again as its own explicit lines.
-    const salariesExpense = netPayTotal + sssPayable + philPayable + pagibigPayable + svTotal + uniformTotal + cashShortageTotal + employeeLoanTotal
+    const salariesExpense = netPayTotal + sssPayable + sssLoanTotal + philPayable + pagibigPayable + pagibigLoanTotal + specialDeductionTotal + svTotal + uniformTotal + cashShortageTotal + employeeLoanTotal
       - incentiveTotal + incentiveRetentionTotal;
 
     const { data: voucher, error } = await supabase.from('payroll_vouchers').insert({
@@ -1599,7 +1595,7 @@ export default function PayrollPage() {
     // above) had already saved for real by this point regardless.
     let payrollVoucherLedger: { ok: boolean; missingCodes: string[] } | null = null;
     try {
-    const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode, salariesCode, incentivesExpenseCode, withheldFundsPayableCode] = await Promise.all([
+    const [svCode, uniformCode, cashShortageCode, employeeLoanCode, cashVaultCode, salariesCode, incentivesExpenseCode, withheldFundsPayableCode, sssLoansPayableCode, pagibigLoansPayableCode, specialDeductionPayableCode] = await Promise.all([
       resolveBranchAccountCode('Service Vehicle', voucherBranchId, branchName),
       resolveBranchAccountCode('Receivable from Uniform', voucherBranchId, branchName),
       resolveBranchAccountCode('Cash Short/Over', voucherBranchId, branchName),
@@ -1631,6 +1627,11 @@ export default function PayrollPage() {
       // branch scoping.
       resolveBranchAccountCode('Incentives Expense', voucherBranchId, branchName),
       resolveBranchAccountCode('Withholded Funds Payable', voucherBranchId, branchName),
+      // Shared accounts (2011/2031/2050), found by the resolver's
+      // company-wide fallback.
+      resolveBranchAccountCode('SSS Loans Payable', voucherBranchId, branchName),
+      resolveBranchAccountCode('PagIBIG Loans Payable', voucherBranchId, branchName),
+      resolveBranchAccountCode('Special Deduction Payable', voucherBranchId, branchName),
     ]);
 
     payrollVoucherLedger = await postJournalEntry({
@@ -1644,8 +1645,11 @@ export default function PayrollPage() {
       lines: [
         { accountCode: salariesCode ?? '', debit: salariesExpense, memo: 'Salaries Expense' },
         { accountCode: '2010', credit: sssPayable, memo: 'SSS Payable' },
+        { accountCode: sssLoansPayableCode ?? '', credit: sssLoanTotal, memo: 'SSS Loans Payable' },
         { accountCode: '2020', credit: philPayable, memo: 'Philhealth Payable' },
         { accountCode: '2030', credit: pagibigPayable, memo: 'PagIBIG Payable' },
+        { accountCode: pagibigLoansPayableCode ?? '', credit: pagibigLoanTotal, memo: 'PagIBIG Loans Payable' },
+        { accountCode: specialDeductionPayableCode ?? '', credit: specialDeductionTotal, memo: 'Special Deduction Payable' },
         { accountCode: svCode ?? '', credit: svTotal, memo: 'Service Vehicle Loan' },
         { accountCode: uniformCode ?? '', credit: uniformTotal, memo: 'Uniform' },
         { accountCode: cashShortageCode ?? '', credit: cashShortageTotal, memo: 'Cash Shortage' },
