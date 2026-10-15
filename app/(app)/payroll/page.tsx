@@ -29,6 +29,7 @@ import { buildPrintHtml } from '@/lib/print-document';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
 import { selectAllRows } from '@/lib/db-chunk';
+import { dailyRateOf, scheduledWorkDates } from '@/lib/work-schedule';
 import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye, Banknote } from 'lucide-react';
 import { SPECIAL_LOAN_TYPES, SPECIAL_LOAN_LABELS } from '@/lib/special-loans';
 import { getPeriodRange } from '@/lib/payroll-period';
@@ -41,7 +42,7 @@ function payrollDeductionsTotal(p: any): number {
   return Number(p.sss) + Number(p.philhealth) + Number(p.pag_ibig) + Number(p.incentive_retention)
     + Number(p.loan_deduction || 0) + Number(p.late_deduction || 0) + Number(p.undertime_deduction || 0) + Number(p.carry_over_deduction || 0)
     + Number(p.sss_loan || 0) + Number(p.pag_ibig_loan || 0) + Number(p.service_vehicle || 0) + Number(p.uniform || 0) + Number(p.cash_shortage || 0)
-    + Number(p.special_deduction || 0);
+    + Number(p.special_deduction || 0) + Number(p.absence_deduction || 0);
 }
 
 function pad(n: number) { return String(n).padStart(2, '0'); }
@@ -56,6 +57,28 @@ function countWorkingDays(startStr: string, endStr: string) {
     if (d.getDay() !== 0) count++;
   }
   return count;
+}
+
+// A fixed-salary employee's scheduled work days in a cutoff, split into
+// approved-leave days (paid, no deduction) and absences (deducted one day's
+// pay each, per Kat Oct 2026). A day they attended, or a holiday, is
+// neither. Used by generation, Days Present and the 13th month.
+function fixedSalaryDays(
+  emp: { position?: string | null },
+  start: string,
+  end: string,
+  attendedDates: Set<string>,
+  leaves: { start_date: string; end_date: string }[],
+  holidayDates: Set<string>,
+): { leaveDates: Set<string>; absentDays: number } {
+  const leaveDates = new Set<string>();
+  let absentDays = 0;
+  for (const d of scheduledWorkDates(start, end, emp)) {
+    if (attendedDates.has(d) || holidayDates.has(d)) continue;
+    if (leaves.some(l => l.start_date <= d && l.end_date >= d)) leaveDates.add(d);
+    else absentDays++;
+  }
+  return { leaveDates, absentDays };
 }
 
 // If the employee's birthday (month/day, any birth year) falls somewhere
@@ -116,6 +139,8 @@ export default function PayrollPage() {
   const [recordsCutoffFilter, setRecordsCutoffFilter] = useState('all');
   const [employees, setEmployees] = useState<any[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
+  const [approvedLeaveRecords, setApprovedLeaveRecords] = useState<any[]>([]);
+  const [holidayDates, setHolidayDates] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [period, setPeriod] = useState('1');
@@ -222,7 +247,7 @@ export default function PayrollPage() {
   }
 
   async function loadEmployees() {
-    const { data } = await supabase.from('employees').select('id, first_name, last_name, salary, pay_type, status, birth_date, branches(name)').eq('status', 'active');
+    const { data } = await supabase.from('employees').select('id, first_name, last_name, position, salary, pay_type, status, birth_date, branches(name)').eq('status', 'active');
     setEmployees(data ?? []);
   }
 
@@ -324,12 +349,18 @@ export default function PayrollPage() {
       // 2026), and the rows it dropped were the newest — Jerry De Jesus's
       // Oct 14–15 — so "Days Present" read 11/13 while the saved pay
       // (computed from its own per-cutoff query) correctly paid 13.
-      const [att, { data: loans }, { data: specialLoans }] = await Promise.all([
+      const [att, leaves, { data: holidays }, { data: loans }, { data: specialLoans }] = await Promise.all([
         selectAllRows<any>(() => supabase.from('attendance').select('employee_id, date, status, review_status').in('employee_id', employeeIds).order('id')),
+        // Fixed-salary Days Present and 13th month need approved leave and
+        // holidays to tell a leave day or holiday from an absence.
+        selectAllRows<any>(() => supabase.from('leave_requests').select('employee_id, start_date, end_date').eq('status', 'approved').in('employee_id', employeeIds).order('id')),
+        supabase.from('holidays').select('holiday_date'),
         supabase.from('employee_loans').select('employee_id, remaining_balance').eq('status', 'active').in('employee_id', employeeIds),
         supabase.from('employee_special_loans').select('employee_id, loan_type, remaining_balance, deduction_amount').eq('status', 'active').in('employee_id', employeeIds),
       ]);
       setAttendanceRecords(att ?? []);
+      setApprovedLeaveRecords(leaves);
+      setHolidayDates(new Set((holidays ?? []).map((h: any) => h.holiday_date)));
       const balances: Record<string, number> = {};
       for (const l of loans ?? []) {
         balances[l.employee_id] = (balances[l.employee_id] ?? 0) + (Number(l.remaining_balance) || 0);
@@ -348,6 +379,7 @@ export default function PayrollPage() {
       setSpecialLoanBalances(specialBalances);
     } else {
       setAttendanceRecords([]);
+      setApprovedLeaveRecords([]);
       setActiveLoanBalances({});
       setSpecialLoanBalances({});
       setSpecialLoanDefaults({});
@@ -355,8 +387,26 @@ export default function PayrollPage() {
     setLoading(false);
   }
 
+  function fixedSalaryDaysOf(p: any) {
+    const { start, end } = getPeriodRange(p.pay_date, p.period);
+    const attended = new Set<string>(attendanceRecords
+      .filter(a => a.employee_id === p.employee_id && a.date >= start && a.date <= end &&
+        (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted')
+      .map(a => a.date));
+    const leaves = approvedLeaveRecords.filter(l => l.employee_id === p.employee_id);
+    return { attended, ...fixedSalaryDays(p.employees ?? {}, start, end, attended, leaves, holidayDates) };
+  }
+
   function daysPresent(p: any) {
     const { start, end } = getPeriodRange(p.pay_date, p.period);
+    // Out of the employee's own scheduled days — Admin Staff work Mon–Fri.
+    const total = scheduledWorkDates(start, end, p.employees).length;
+    if (p.employees?.pay_type === 'monthly') {
+      // Approved leave counts as present for fixed salaries too (Kat, Oct
+      // 2026); worked out live so payslips generated before this show it.
+      const { attended, leaveDates } = fixedSalaryDaysOf(p);
+      return { present: attended.size + leaveDates.size, total, leaveDays: leaveDates.size };
+    }
     const attendancePresent = attendanceRecords.filter(a =>
       a.employee_id === p.employee_id && a.date >= start && a.date <= end &&
       (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted'
@@ -368,7 +418,7 @@ export default function PayrollPage() {
     // attendance tally.
     const birthdayCredit = Number(p.birthday_bonus) > 0 ? 1 : 0;
     const leaveCredit = Number(p.leave_days_credited) || 0;
-    return { present: attendancePresent + birthdayCredit + leaveCredit, total: countWorkingDays(start, end) };
+    return { present: attendancePresent + birthdayCredit + leaveCredit, total, leaveDays: leaveCredit };
   }
 
   // 13th Month Pay, disbursed twice a year rather than once — Partial (paid
@@ -430,14 +480,16 @@ export default function PayrollPage() {
   function thirteenthMonthCutoffBasic(p: any): number {
     const nominal = Number(p.basic_salary) || 0;
     if (p.employees?.pay_type !== 'monthly') return nominal;
-    const { present, total } = daysPresent(p);
-    const absentDays = Math.max(0, total - present);
-    // Same monthly-salary/26-working-days approximation already used for
-    // late/undertime deduction elsewhere (attendance page, confirmCapture).
-    const dailyRateEquivalent = Number(p.employees?.salary || 0) / 26;
+    // Payslips generated since Oct 2026 store their absence deduction
+    // (absent_days is set); older ones are worked out the same way here —
+    // only real absences, not approved leave, holidays or an Admin Staff
+    // Saturday.
+    const absenceDeduction = p.absent_days != null
+      ? Number(p.absence_deduction) || 0
+      : fixedSalaryDaysOf(p).absentDays * dailyRateOf(p.employees ?? {});
     const lateDeduction = Number(p.late_deduction) || 0;
     const undertimeDeduction = Number(p.undertime_deduction) || 0;
-    return Math.max(0, nominal - lateDeduction - undertimeDeduction - (dailyRateEquivalent * absentDays));
+    return Math.max(0, nominal - lateDeduction - undertimeDeduction - absenceDeduction);
   }
 
   function getThirteenthMonthRows(year: string, cycle: 'partial' | 'full') {
@@ -495,7 +547,9 @@ export default function PayrollPage() {
   // rendered via a portal outside the Dialog entirely — so html2canvas
   // never depends on the Dialog's own width/padding math).
   function renderPayslipDoc(target: any, opts: { ref?: React.RefObject<HTMLDivElement>; fixed?: boolean } = {}) {
-    const { present, total } = daysPresent(target);
+    const { present, total, leaveDays } = daysPresent(target);
+    const isFixedSalary = target.employees?.pay_type === 'monthly';
+    const absenceDeduction = Number(target.absence_deduction) || 0;
     const loanDeduction = Number(target.loan_deduction) || 0;
     const lateDeduction = Number(target.late_deduction) || 0;
     const undertimeDeduction = Number(target.undertime_deduction) || 0;
@@ -577,6 +631,14 @@ export default function PayrollPage() {
                 <td style={{ padding: '5px 0', textAlign: 'right', fontWeight: 600, color: '#0B7A3D' }}>{formatCurrency(leavePay)}</td>
               </tr>
             )}
+            {isFixedSalary && leaveDays > 0 && (
+              <tr>
+                <td style={{ padding: '5px 0', color: '#666' }}>
+                  Paid Leave ({leaveDays} day{leaveDays !== 1 ? 's' : ''})
+                </td>
+                <td style={{ padding: '5px 0', textAlign: 'right', color: '#666' }}>Included in Basic Pay</td>
+              </tr>
+            )}
             {holidayPay > 0 && (
               <tr>
                 <td style={{ padding: '5px 0', color: '#666' }}>
@@ -596,6 +658,9 @@ export default function PayrollPage() {
             )}
             {loanBalance > 0 && (
               <tr><td colSpan={2} style={{ padding: '0 0 3px', fontSize: 10, color: '#999', fontStyle: 'italic' }}>Remaining Employee Loan Balance: {formatCurrency(loanBalance)}</td></tr>
+            )}
+            {absenceDeduction > 0 && (
+              <tr><td style={{ padding: '3px 0', color: '#666' }}>Absences ({target.absent_days} day{Number(target.absent_days) !== 1 ? 's' : ''})</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(absenceDeduction)}</td></tr>
             )}
             {lateDeduction > 0 && (
               <tr><td style={{ padding: '3px 0', color: '#666' }}>Late Deduction</td><td style={{ padding: '3px 0', textAlign: 'right' }}>{formatCurrency(lateDeduction)}</td></tr>
@@ -866,13 +931,28 @@ export default function PayrollPage() {
       // physical day is never paid twice (e.g. an employee whose birthday
       // happens to fall on an approved leave day still only gets paid once
       // for that one day).
-      const leaveCreditedDates = isMonthly ? new Set<string>() : leaveCreditedDatesInPeriod(e.id, birthdayDate);
+      //
+      // Fixed salaries: approved leave is credited (shown on the payslip,
+      // no extra pay — the flat half-month already covers it), and any other
+      // scheduled day not worked is an absence, deducted at one day's pay
+      // (salary / 26, or / 20 for Admin Staff) — Kat, Oct 2026.
+      const fixedDays = isMonthly
+        ? fixedSalaryDays(
+            e, start, end,
+            new Set((att ?? []).filter(a => a.employee_id === e.id && (a.status === 'present' || a.status === 'late') && a.review_status === 'accepted').map(a => a.date)),
+            (approvedLeaves ?? []).filter(l => l.employee_id === e.id),
+            new Set((holidaysInPeriod ?? []).map(h => h.holiday_date)),
+          )
+        : null;
+      const leaveCreditedDates = fixedDays ? fixedDays.leaveDates : leaveCreditedDatesInPeriod(e.id, birthdayDate);
       const leaveDaysCredited = leaveCreditedDates.size;
-      const leavePay = leaveDaysCredited * dailyRate;
+      const leavePay = isMonthly ? 0 : leaveDaysCredited * dailyRate;
+      const absentDays = fixedDays?.absentDays ?? 0;
+      const absenceDeduction = Math.min(basicSalary, absentDays * dailyRateOf(e));
 
       const { pay: holidayPay, days: holidayDays } = isMonthly ? { pay: 0, days: 0 } : holidayPayForPeriod(e.id, dailyRate, birthdayDate, leaveCreditedDates);
 
-      const totalDeductions = sss + philhealth + pagIbig + retention + loanDeduction + carryOverDeduction + lateDeduction + undertimeDeduction;
+      const totalDeductions = sss + philhealth + pagIbig + retention + loanDeduction + carryOverDeduction + lateDeduction + undertimeDeduction + absenceDeduction;
       const netPay = basicSalary + incentive + birthdayBonus + leavePay + holidayPay - totalDeductions;
 
       return {
@@ -889,6 +969,8 @@ export default function PayrollPage() {
         loan_deduction: Math.round(loanDeduction * 100) / 100,
         late_deduction: Math.round(lateDeduction * 100) / 100,
         undertime_deduction: Math.round(undertimeDeduction * 100) / 100,
+        absent_days: isMonthly ? absentDays : null,
+        absence_deduction: Math.round(absenceDeduction * 100) / 100,
         carry_over_deduction: Math.round(carryOverDeduction * 100) / 100,
         // SSS/Pag-IBIG loans and the three Special Loans (Service Vehicle,
         // Uniform, Cash Shortage) have no fixed formula or term — the
@@ -1038,7 +1120,8 @@ export default function PayrollPage() {
     const incentiveRetention = Math.round(incentive * 0.25 * 100) / 100;
 
     const totalDeductions = Number(row.sss) + Number(row.philhealth) + Number(row.pag_ibig) + incentiveRetention
-      + Number(row.loan_deduction || 0) + Number(row.late_deduction || 0) + Number(row.carry_over_deduction || 0)
+      + Number(row.loan_deduction || 0) + Number(row.late_deduction || 0) + Number(row.undertime_deduction || 0)
+      + Number(row.absence_deduction || 0) + Number(row.carry_over_deduction || 0)
       + sssLoan + pagIbigLoan + serviceVehicle + uniform + cashShortage + specialDeduction;
     const grossPay = Number(row.basic_salary) + incentive + Number(row.birthday_bonus || 0) + Number(row.leave_pay || 0) + Number(row.holiday_pay || 0);
     const netPay = Math.round((grossPay - totalDeductions) * 100) / 100;
@@ -1082,7 +1165,7 @@ export default function PayrollPage() {
         Period: p.period, PayDate: p.pay_date, DaysPresent: `${present}/${total}`, Basic: p.basic_salary,
         Overtime: p.overtime_pay, Incentive: p.incentive, SSS: p.sss,
         PhilHealth: p.philhealth, PagIBIG: p.pag_ibig, Retention: p.incentive_retention,
-        LoanDeduction: p.loan_deduction ?? 0, LateDeduction: p.late_deduction ?? 0, UndertimeDeduction: p.undertime_deduction ?? 0, CarryOverDeduction: p.carry_over_deduction ?? 0,
+        LoanDeduction: p.loan_deduction ?? 0, LateDeduction: p.late_deduction ?? 0, UndertimeDeduction: p.undertime_deduction ?? 0, AbsentDays: p.absent_days ?? 0, AbsenceDeduction: p.absence_deduction ?? 0, CarryOverDeduction: p.carry_over_deduction ?? 0,
         SSSLoan: p.sss_loan ?? 0, PagIBIGLoan: p.pag_ibig_loan ?? 0, ServiceVehicle: p.service_vehicle ?? 0, Uniform: p.uniform ?? 0, CashShortage: p.cash_shortage ?? 0, SpecialDeduction: p.special_deduction ?? 0,
         NetPay: p.net_pay, Status: p.status,
       };

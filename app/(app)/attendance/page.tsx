@@ -26,6 +26,7 @@ import { ADMIN_STAFF_ROLE } from '@/lib/permissions';
 import { getPeriodRange, cutoffStartForDate } from '@/lib/payroll-period';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
+import { dailyRateOf } from '@/lib/work-schedule';
 import { ClipboardCheck, Camera, Download, Loader2, Clock, MapPin, RotateCcw, Check, X, ImageOff, Search, CheckCircle, XCircle, ChevronLeft, ChevronRight, CalendarDays, WifiOff, CloudUpload, Trash2 } from 'lucide-react';
 import {
   getPendingAttendance, queuePendingAttendance, updatePendingAttendance, removePendingAttendance,
@@ -593,12 +594,11 @@ export default function AttendancePage() {
       // value afterwards from the attendance table's Deduction column.
       let lateDeduction = 0;
       if (lateMinutes > 0) {
-        const { data: emp } = await supabase.from('employees').select('salary, pay_type').eq('id', selectedEmployee).maybeSingle();
+        const { data: emp } = await supabase.from('employees').select('salary, pay_type, position').eq('id', selectedEmployee).maybeSingle();
         if (emp) {
-          // Fixed-monthly employees (e.g. Branch Manager) have no stored
-          // daily rate — approximate one from ~26 working days/month
-          // (Mon–Sat) purely for this calculation.
-          const dailyRate = emp.pay_type === 'monthly' ? Number(emp.salary) / 26 : Number(emp.salary);
+          // Fixed-monthly employees have no stored daily rate — salary / 26
+          // (Mon–Sat), or / 20 for Admin Staff (Mon–Fri).
+          const dailyRate = dailyRateOf(emp);
           lateDeduction = Math.round((dailyRate / 2) * 100) / 100;
         }
       }
@@ -658,9 +658,9 @@ export default function AttendancePage() {
         const undertimeHours = Math.min(8, Math.max(0, 8 - hoursWorked));
         undertimeMinutes = Math.round(undertimeHours * 60);
         if (undertimeHours > 0) {
-          const { data: emp } = await supabase.from('employees').select('salary, pay_type').eq('id', checkoutRecord.employee_id).maybeSingle();
+          const { data: emp } = await supabase.from('employees').select('salary, pay_type, position').eq('id', checkoutRecord.employee_id).maybeSingle();
           if (emp) {
-            const dailyRate = emp.pay_type === 'monthly' ? Number(emp.salary) / 26 : Number(emp.salary);
+            const dailyRate = dailyRateOf(emp);
             undertimeDeduction = Math.round((dailyRate / 8) * undertimeHours * 100) / 100;
           }
         }
@@ -785,10 +785,10 @@ export default function AttendancePage() {
       // Fetched unconditionally (not just when late) — branch_id is also
       // needed below so the review notification reaches that employee's own
       // Branch Manager instead of broadcasting to every branch.
-      const { data: emp } = await supabase.from('employees').select('salary, pay_type, branch_id').eq('id', item.employeeId).maybeSingle();
+      const { data: emp } = await supabase.from('employees').select('salary, pay_type, position, branch_id').eq('id', item.employeeId).maybeSingle();
       let lateDeduction = 0;
       if (lateMinutes > 0 && emp) {
-        const dailyRate = emp.pay_type === 'monthly' ? Number(emp.salary) / 26 : Number(emp.salary);
+        const dailyRate = dailyRateOf(emp);
         lateDeduction = Math.round((dailyRate / 2) * 100) / 100;
       }
 
