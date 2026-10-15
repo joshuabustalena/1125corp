@@ -28,6 +28,7 @@ import { COMPANY_NAME, COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/d
 import { buildPrintHtml } from '@/lib/print-document';
 import { postJournalEntry } from '@/lib/ledger';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
+import { selectAllRows } from '@/lib/db-chunk';
 import { ScrollText, Download, Loader2, Calculator, CheckCircle, Trash2, Receipt, Printer, Gift, ListTree, Pencil, FileSpreadsheet, Eye, Banknote } from 'lucide-react';
 import { SPECIAL_LOAN_TYPES, SPECIAL_LOAN_LABELS } from '@/lib/special-loans';
 import { getPeriodRange } from '@/lib/payroll-period';
@@ -319,8 +320,12 @@ export default function PayrollPage() {
     // generated payslip before anyone confirmed it actually happened.
     const employeeIds = Array.from(new Set((data ?? []).map(p => p.employee_id)));
     if (employeeIds.length > 0) {
-      const [{ data: att }, { data: loans }, { data: specialLoans }] = await Promise.all([
-        supabase.from('attendance').select('employee_id, date, status, review_status').in('employee_id', employeeIds),
+      // Paged: attendance passed PostgREST's 1000-row cap (1,048 rows, Oct
+      // 2026), and the rows it dropped were the newest — Jerry De Jesus's
+      // Oct 14–15 — so "Days Present" read 11/13 while the saved pay
+      // (computed from its own per-cutoff query) correctly paid 13.
+      const [att, { data: loans }, { data: specialLoans }] = await Promise.all([
+        selectAllRows<any>(() => supabase.from('attendance').select('employee_id, date, status, review_status').in('employee_id', employeeIds).order('id')),
         supabase.from('employee_loans').select('employee_id, remaining_balance').eq('status', 'active').in('employee_id', employeeIds),
         supabase.from('employee_special_loans').select('employee_id, loan_type, remaining_balance, deduction_amount').eq('status', 'active').in('employee_id', employeeIds),
       ]);
