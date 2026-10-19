@@ -23,6 +23,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, todayStr } from '@/lib/format';
 import { COMPANY_NAME_DISPLAY, getDocumentBranding } from '@/lib/document-branding';
 import { resolveBranchAccountCode } from '@/lib/branch-accounts';
+import { selectAllRows } from '@/lib/db-chunk';
 import { Banknote, Loader2, TrendingUp, Scale, Download, Printer } from 'lucide-react';
 
 // Bill and coin denominations exactly as counted on the paper Cash Count
@@ -416,10 +417,15 @@ export default function CashCountPage() {
     setCashRelease(String(releaseTotal));
 
     if (cashAccount) {
-      const { data: lines } = await supabase
+      // Paged: Balanga's Cash in Vault passed PostgREST's 1000-row cap
+      // (1,129 lines, Oct 2026). The newest lines were the ones dropped, so
+      // Beginning and Ending read the same ₱1,545 every day (Kat, Oct 19).
+      const vaultAccountId = cashAccount.id;
+      const lines = await selectAllRows<any>(() => supabase
         .from('journal_entry_lines')
         .select('debit, credit, journal_entries(entry_date, branch_id)')
-        .eq('account_id', cashAccount.id);
+        .eq('account_id', vaultAccountId)
+        .order('id'));
       const prevDay = prevDateStr(date);
       let beginning = 0, ending = 0, todayDebits = 0, todayCredits = 0;
       for (const l of (lines ?? []) as any[]) {
@@ -463,10 +469,12 @@ export default function CashCountPage() {
       pcfAccount = data;
     }
     if (pcfAccount) {
-      const { data: pcfLines } = await supabase
+      const pcfAccountId = pcfAccount.id;
+      const pcfLines = await selectAllRows<any>(() => supabase
         .from('journal_entry_lines')
         .select('debit, credit, journal_entries(entry_date, branch_id)')
-        .eq('account_id', pcfAccount.id);
+        .eq('account_id', pcfAccountId)
+        .order('id'));
       let pcfEnding = 0;
       for (const l of (pcfLines ?? []) as any[]) {
         const entryBranchId = l.journal_entries?.branch_id;

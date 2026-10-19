@@ -669,6 +669,16 @@ export default function LoanDetailPage() {
       payload.total_payable = details.totalPayable;
       payload.release_amount = Math.max(0, details.releaseAmount - offsetBalance - firstPayment);
       payload.remaining_balance = Math.max(0, details.totalPayable - firstPayment);
+    } else if ((Number(approveDailyPayment) || 0) !== (Number(loan.daily_payment) || 0)) {
+      // Same amount, different daily payment: the first payment withheld at
+      // release changes, so cash released and the balance left change with
+      // it. Skipping this left the collector's original figure on the cash
+      // voucher (LN-2026-909451, Oct 19: daily 450 → 500, voucher ₱50 over).
+      const totalPayable = Number(loan.total_payable) || 0;
+      const autoDaily = Number(loan.term_days) > 0 ? totalPayable / Number(loan.term_days) : 0;
+      const firstPayment = Number(approveDailyPayment) > 0 ? Number(approveDailyPayment) : autoDaily;
+      payload.release_amount = Math.max(0, Number(loan.amount) - (Number(loan.service_fee) || 0) - (Number(loan.offset_balance) || 0) - firstPayment);
+      payload.remaining_balance = Math.max(0, totalPayable - firstPayment);
     }
     const { error } = await supabase.from('loans').update(payload).eq('id', loan.id);
     if (error) {
