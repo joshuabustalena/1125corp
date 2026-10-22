@@ -34,7 +34,7 @@ export function Sidebar({ collapsed, onToggle, onNavigate, widthClassName, showC
       <div className="relative z-10 flex flex-col h-full">
         {/* Logo */}
         <div className="h-16 flex items-center px-4 border-b border-white/10 shrink-0">
-          <Link href="/dashboard" className="flex items-center gap-3 min-w-0" onClick={onNavigate}>
+          <Link prefetch={false} href="/dashboard" className="flex items-center gap-3 min-w-0" onClick={onNavigate}>
             <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shrink-0 overflow-hidden">
               <Image src="/image/1125_Corp_Logo.png" alt="1125Corp" width={40} height={40} className="object-contain" />
             </div>
@@ -66,7 +66,7 @@ export function Sidebar({ collapsed, onToggle, onNavigate, widthClassName, showC
                   const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
                   const Icon = item.icon;
                   return (
-                    <Link
+                    <Link prefetch={false}
                       key={item.href}
                       href={item.href}
                       title={collapsed ? item.label : undefined}

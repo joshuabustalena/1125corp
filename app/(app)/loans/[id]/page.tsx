@@ -1108,7 +1108,7 @@ export default function LoanDetailPage() {
           Back
         </Button>
         {successorLoan && (
-          <Link href={`/loans/${successorLoan.id}`}>
+          <Link prefetch={false} href={`/loans/${successorLoan.id}`}>
             <Button size="sm">
               <ArrowRight className="w-4 h-4 mr-2" />
               View Renewed Loan ({successorLoan.loan_number})
@@ -1116,7 +1116,7 @@ export default function LoanDetailPage() {
           </Link>
         )}
         {!isCashier && (loan.status === 'active' || loan.status === 'overdue') && (
-          <Link href={`/payments?loan=${loan.id}`}>
+          <Link prefetch={false} href={`/payments?loan=${loan.id}`}>
             <Button size="sm">
               <Plus className="w-4 h-4 mr-2" />
               Post Payment
@@ -1168,7 +1168,7 @@ export default function LoanDetailPage() {
             <DropdownMenuContent align="end">
               {loan.disbursed_at && (
                 <DropdownMenuItem asChild>
-                  <Link href={`/loans/${loan.id}/voucher`}>
+                  <Link prefetch={false} href={`/loans/${loan.id}/voucher`}>
                     <Banknote className="w-4 h-4 mr-2" />
                     View Voucher
                   </Link>
@@ -1176,7 +1176,7 @@ export default function LoanDetailPage() {
               )}
               {loan.approved_at && (
                 <DropdownMenuItem asChild>
-                  <Link href={`/loans/${loan.id}/agreement`}>
+                  <Link prefetch={false} href={`/loans/${loan.id}/agreement`}>
                     <FileText className="w-4 h-4 mr-2" />
                     View Agreement
                   </Link>
@@ -1184,7 +1184,7 @@ export default function LoanDetailPage() {
               )}
               {loan.approved_at && (
                 <DropdownMenuItem asChild>
-                  <Link href={`/loans/${loan.id}/undertaking`}>
+                  <Link prefetch={false} href={`/loans/${loan.id}/undertaking`}>
                     <FileText className="w-4 h-4 mr-2" />
                     View Undertaking
                   </Link>
@@ -1216,7 +1216,7 @@ export default function LoanDetailPage() {
           </Button>
         )}
         {loan.status === 'written_off' && (
-          <Link href={`/write-off/${loan.id}`}>
+          <Link prefetch={false} href={`/write-off/${loan.id}`}>
             <Button size="sm" variant="outline">
               <Ban className="w-4 h-4 mr-2" />
               View in Write-Off

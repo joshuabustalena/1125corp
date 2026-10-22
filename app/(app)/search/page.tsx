@@ -53,7 +53,7 @@ export default function SearchPage() {
                 <div className="flex items-center gap-2 mb-3"><Users className="w-5 h-5 text-primary" /><h3 className="font-semibold">Customers ({results.customers.length})</h3></div>
                 <div className="space-y-2">
                   {results.customers.map(c => (
-                    <Link key={c.id} href={`/customers/${c.id}`} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors">
+                    <Link prefetch={false} key={c.id} href={`/customers/${c.id}`} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors">
                       <div><p className="text-sm font-medium">{formatCustomerName(c.first_name, c.last_name)}</p><p className="text-xs text-muted-foreground">{c.phone ?? c.email ?? ''}</p></div>
                       <Badge variant={c.status === 'active' ? 'default' : 'secondary'}>{c.status}</Badge>
                     </Link>
@@ -69,7 +69,7 @@ export default function SearchPage() {
                 <div className="flex items-center gap-2 mb-3"><Landmark className="w-5 h-5 text-primary" /><h3 className="font-semibold">Loans ({results.loans.length})</h3></div>
                 <div className="space-y-2">
                   {results.loans.map(l => (
-                    <Link key={l.id} href={`/loans/${l.id}`} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors">
+                    <Link prefetch={false} key={l.id} href={`/loans/${l.id}`} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors">
                       <div><p className="text-sm font-medium">{l.loan_number}</p><p className="text-xs text-muted-foreground">{formatCustomerName(l.customers?.first_name, l.customers?.last_name)}</p></div>
                       <div className="flex items-center gap-2"><span className="text-sm">{formatCurrency(l.amount)}</span><Badge variant="outline">{l.status}</Badge></div>
                     </Link>

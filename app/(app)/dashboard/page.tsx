@@ -564,7 +564,7 @@ export default function DashboardPage() {
           <Download className="w-4 h-4 mr-2" />
           Export
         </Button>
-        <Link href="/loans">
+        <Link prefetch={false} href="/loans">
           <Button size="sm">
             New Loan
             <ArrowRight className="w-4 h-4 ml-2" />
@@ -940,7 +940,7 @@ export default function DashboardPage() {
                 <CardTitle>Recent Payments</CardTitle>
                 <CardDescription>Latest collection transactions</CardDescription>
               </div>
-              <Link href="/payments">
+              <Link prefetch={false} href="/payments">
                 <Button variant="ghost" size="sm">
                   View all
                   <ArrowRight className="w-4 h-4 ml-1" />
@@ -985,7 +985,7 @@ export default function DashboardPage() {
                 <CardTitle>Upcoming Due Dates</CardTitle>
                 <CardDescription>Loans due soon</CardDescription>
               </div>
-              <Link href="/loans">
+              <Link prefetch={false} href="/loans">
                 <Button variant="ghost" size="sm">
                   View all
                   <ArrowRight className="w-4 h-4 ml-1" />

@@ -257,7 +257,7 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
             )}
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/notifications" className="w-full text-center text-sm text-primary">
+              <Link prefetch={false} href="/notifications" className="w-full text-center text-sm text-primary">
                 View all notifications
               </Link>
             </DropdownMenuItem>
@@ -292,14 +292,14 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/profile" className="cursor-pointer">
+              <Link prefetch={false} href="/profile" className="cursor-pointer">
                 <User className="w-4 h-4 mr-2" />
                 My Profile
               </Link>
             </DropdownMenuItem>
             {hasPermission(profile?.permissions, 'settings') && (
               <DropdownMenuItem asChild>
-                <Link href="/settings" className="cursor-pointer">
+                <Link prefetch={false} href="/settings" className="cursor-pointer">
                   <SettingsIcon className="w-4 h-4 mr-2" />
                   Settings
                 </Link>

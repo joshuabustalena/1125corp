@@ -72,7 +72,7 @@ export default function CustomerDetailPage() {
           <ArrowLeft className="w-4 h-4 mr-2" />
           Back
         </Button>
-        <Link href={`/loans?customer=${customer.id}`}>
+        <Link prefetch={false} href={`/loans?customer=${customer.id}`}>
           <Button size="sm">
             <Plus className="w-4 h-4 mr-2" />
             New Loan

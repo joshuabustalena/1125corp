@@ -83,7 +83,7 @@ export default function WriteOffPage() {
               {/* Mobile card list */}
               <div className="md:hidden divide-y divide-border">
                 {loans.map(l => (
-                  <Link key={l.id} href={`/write-off/${l.id}`} className="block p-4 hover:bg-secondary/50">
+                  <Link prefetch={false} key={l.id} href={`/write-off/${l.id}`} className="block p-4 hover:bg-secondary/50">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-medium text-sm">{l.loan_number}</p>
@@ -117,7 +117,7 @@ export default function WriteOffPage() {
                   {loans.map(l => (
                     <TableRow key={l.id} className="cursor-pointer hover:bg-secondary/50" onClick={() => { window.location.href = `/write-off/${l.id}`; }}>
                       <TableCell className="text-sm font-medium">
-                        <Link href={`/write-off/${l.id}`} className="hover:underline">{l.loan_number}</Link>
+                        <Link prefetch={false} href={`/write-off/${l.id}`} className="hover:underline">{l.loan_number}</Link>
                       </TableCell>
                       <TableCell className="text-sm">{formatCustomerName(l.customers?.first_name, l.customers?.last_name)}</TableCell>
                       <TableCell><Badge variant="outline">{l.branches?.name ?? '—'}</Badge></TableCell>

@@ -95,7 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   Signed in as {profile?.full_name ?? 'Unknown'} ({profile?.role_name ?? 'no role'})
                 </p>
               </div>
-              <Link href="/dashboard"><Button>Back to Dashboard</Button></Link>
+              <Link prefetch={false} href="/dashboard"><Button>Back to Dashboard</Button></Link>
             </div>
           )}
         </main>

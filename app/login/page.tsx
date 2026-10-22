@@ -171,7 +171,7 @@ export default function LoginPage() {
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="password" className="text-white/80 text-base">Password</Label>
-                  <Link
+                  <Link prefetch={false}
                     href="/forgot-password"
                     className="text-sm text-white/70 hover:text-white hover:underline"
                   >

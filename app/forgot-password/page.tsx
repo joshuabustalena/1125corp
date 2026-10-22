@@ -46,7 +46,7 @@ export default function ForgotPasswordPage() {
                 We've sent a password reset link to <strong>{email}</strong>.
                 Follow the link to reset your password.
               </p>
-              <Link href="/login">
+              <Link prefetch={false} href="/login">
                 <Button variant="outline" className="w-full">
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Back to login
@@ -86,7 +86,7 @@ export default function ForgotPasswordPage() {
                   )}
                 </Button>
               </form>
-              <Link
+              <Link prefetch={false}
                 href="/login"
                 className="flex items-center gap-2 text-sm text-primary hover:underline mt-6"
               >

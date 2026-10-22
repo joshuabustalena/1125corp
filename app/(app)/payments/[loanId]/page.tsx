@@ -340,7 +340,7 @@ export default function LoanPaymentHistoryPage() {
           <ArrowLeft className="w-4 h-4 mr-2" />
           Back
         </Button>
-        <Link href={`/loans/${loan.id}`}>
+        <Link prefetch={false} href={`/loans/${loan.id}`}>
           <Button variant="outline" size="sm">
             <ExternalLink className="w-4 h-4 mr-2" />
             View Loan Details
