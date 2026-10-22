@@ -367,67 +367,38 @@ export default function RemittancePage() {
       return;
     }
 
-    const { data: remittance, error } = await supabase.from('remittances').insert({
-      collector_id: form.collector_id,
-      amount: form.amount,
-      remittance_date: date,
-      received_by: profile?.id ?? null,
-      notes: form.notes || null,
-      is_write_off_recovery: isRecovery,
-    }).select('id').single();
-
-    if (error || !remittance) {
-      toast({ title: 'Error', description: error?.message ?? 'Could not record remittance', variant: 'destructive' });
-      return;
-    }
-
-    const { data: entry, error: entryError } = await supabase.from('journal_entries').insert({
-      entry_number: generateEntryNumber(),
-      entry_date: date,
-      reference: null,
-      description: isRecovery
-        ? `Collector remittance (write-off recovery) — ${form.collector_name}`
-        : `Collector remittance — ${form.collector_name}`,
-      source: 'remittance',
-      source_id: remittance.id,
-      created_by: profile?.id ?? null,
-      branch_id: (collector as any)?.branch_id ?? null,
-    }).select('id').single();
-
-    if (entryError || !entry) {
-      toast({ title: 'Remittance saved, but ledger post failed', description: entryError?.message, variant: 'destructive' });
-      setDialogOpen(false);
-      loadData();
-      return;
-    }
-
     // Debit whichever cash account(s) the user picked (validLines only —
     // already known to all have an account); the credit side (Loans
     // Receivable, or Miscellaneous Income for a write-off recovery) is
     // always automatic — a remittance is money coming in, never a manual
     // choice on that side.
-    const linesPayload = [
-      ...validLines.map(l => ({
-        journal_entry_id: entry.id,
-        account_id: l.account_id,
-        debit: Number(l.amount) || 0,
-        credit: 0,
-      })),
-      {
-        journal_entry_id: entry.id,
-        account_id: targetAccount.id,
-        debit: 0,
-        credit: totalDebit,
-      },
+    const ledgerLines = [
+      ...validLines.map(l => ({ account_id: l.account_id, debit: Number(l.amount) || 0, credit: 0 })),
+      { account_id: targetAccount.id, debit: 0, credit: totalDebit },
     ];
-    const { error: linesError } = await supabase.from('journal_entry_lines').insert(linesPayload);
-    if (linesError) {
-      // Don't leave a one-sided ledger entry behind — delete the header so
-      // this doesn't join JE-2026-217886 as a credit-only orphan.
-      await supabase.from('journal_entries').delete().eq('id', entry.id);
-      toast({ title: 'Remittance saved, but ledger post failed', description: linesError.message, variant: 'destructive' });
-      setDialogOpen(false);
-      loadData();
+
+    // Remittance, journal entry and its lines in one transaction
+    // (supabase/make_remittance_ledger_atomic.sql). These used to be three
+    // separate inserts, and a dropped connection after the first left the
+    // remittance saved with no ledger post — Reynaldo Taduyo's ₱6,370 on
+    // Oct 22 2026. Now a failure saves nothing, so retrying is safe.
+    const { error } = await supabase.rpc('record_remittance_with_ledger', {
+      p_collector_id: form.collector_id,
+      p_amount: form.amount,
+      p_remittance_date: date,
+      p_received_by: profile?.id ?? null,
+      p_notes: form.notes || null,
+      p_is_recovery: isRecovery,
+      p_entry_number: generateEntryNumber(),
+      p_description: isRecovery
+        ? `Collector remittance (write-off recovery) — ${form.collector_name}`
+        : `Collector remittance — ${form.collector_name}`,
+      p_branch_id: (collector as any)?.branch_id ?? null,
+      p_lines: ledgerLines,
+    });
+
+    if (error) {
+      toast({ title: 'Remittance not saved', description: `${error.message} — nothing was recorded, please try again.`, variant: 'destructive' });
       return;
     }
 
