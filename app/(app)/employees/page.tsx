@@ -508,10 +508,13 @@ export default function EmployeesPage() {
         .select('id');
       loansMoved = movedLoans?.length ?? 0;
 
-      // Carry over ledger attribution too, so the outgoing collector's
-      // in-flight remittance doesn't just vanish from view — see the Sep
-      // 2026 incident this whole feature exists to prevent.
-      await supabase.from('payments').update({ collector_id: transferToId }).eq('collector_id', srcCollector.id);
+      // Past payments deliberately stay with the collector who collected
+      // them. Moving them used to hand the new collector the old one's whole
+      // collection history without the matching remittances, so Remittance
+      // showed a huge false Balance Owed (Oct 26 2026: Marcelino Baronia
+      // Jr.'s ₱459,710, all already remitted, landed on Mc Claude Ajero as
+      // ₱469,200 owed). The outgoing collector's unremitted balance, if any,
+      // still shows on Remittance under their own name even once inactive.
     }
 
     toast({ title: 'Transfer complete', description: `${customerIds.length} customer(s) and ${loansMoved} loan(s) moved.` });
@@ -933,8 +936,9 @@ export default function EmployeesPage() {
             <DialogTitle>Transfer Customers</DialogTitle>
             <DialogDescription>
               Move every customer currently assigned to {transferTarget?.first_name} {transferTarget?.last_name} — along with
-              their still-open loans and in-flight remittance — to another collector. Use this whenever a collector
-              resigns or an area changes hands, instead of editing each customer one by one.
+              their still-open loans — to another collector. Use this whenever a collector resigns or an area
+              changes hands, instead of editing each customer one by one. Payments they already collected stay
+              under their name, so anything they haven&apos;t remitted yet still shows on Remittance for them to turn in.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">

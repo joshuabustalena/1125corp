@@ -113,7 +113,12 @@ export default function RemittancePage() {
 
   async function loadData() {
     setLoading(true);
-    let colQuery = supabase.from('collectors').select('id, branch_id, profile_id, profiles(full_name), branches(name)').eq('status', 'active');
+    // Every collector, not just active ones: a collector who has left still
+    // shows here while they owe a balance (the row filter below hides
+    // anyone with nothing collected, remitted or owed). This is what lets
+    // Transfer Customers leave past payments with the collector who
+    // actually collected them — see handleTransfer on the Employees page.
+    let colQuery = supabase.from('collectors').select('id, branch_id, profile_id, profiles(full_name), branches(name)');
     if (isFieldCollector && profile) colQuery = colQuery.eq('profile_id', profile.id);
     // Collection is a per-branch process: a Cashier/Branch Manager/Accounting
     // user at one branch must not see or collect another branch's collectors
