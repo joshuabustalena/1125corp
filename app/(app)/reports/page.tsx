@@ -16,6 +16,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { StatCard } from '@/components/dashboard/stat-card';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
 import { seesAllBranches } from '@/lib/permissions';
@@ -23,11 +26,11 @@ import { RELEASED_LOAN_STATUSES, collectedAtRelease } from '@/lib/collections';
 import { supabase } from '@/lib/supabase/client';
 import { selectAllRows } from '@/lib/db-chunk';
 import { overdueOrDelayFor } from '@/lib/overdue';
-import { formatCurrency, formatDate, formatTime, exportToCSV, formatCustomerName, dateToStr, todayStr } from '@/lib/format';
+import { formatCurrency, formatDate, formatDateTime, formatTime, exportToCSV, formatCustomerName, dateToStr, todayStr } from '@/lib/format';
 import { buildPrintHtml } from '@/lib/print-document';
 import { COMPANY_NAME_DISPLAY } from '@/lib/document-branding';
 import {
-  FileBarChart, Download, Loader2, Printer, TrendingUp, Users, Wallet, Landmark,
+  FileBarChart, Download, Loader2, Printer, TrendingUp, Users, Wallet, Landmark, Eye, Trash2,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -36,6 +39,11 @@ import {
 // Sentinel branch id that matches no real row — used to scope a non-admin
 // who has no branch assigned down to nothing instead of everything.
 const NO_BRANCH = '00000000-0000-0000-0000-000000000000';
+
+// Worked out from the loans as they stand right now — no date range applies,
+// so they show "As of <today>" instead of a Start/End Date that does nothing
+// (Kat, Nov 2026: Overdue gave the same figures for Sep, Oct and Nov).
+const AS_OF_TODAY_REPORTS = new Set(['overdue_amount', 'delinquent_customers', 'customers_per_area']);
 
 // Explicit list rather than substring guessing on the column name. The old
 // `key.includes('Amount') || key.includes('Pay') || …` test silently missed
@@ -112,6 +120,19 @@ export default function ReportsPage() {
   // empty report) and the per-area groupings all collapse to "Unassigned".
   const [filtersLoaded, setFiltersLoaded] = useState(false);
   const [printing, setPrinting] = useState(false);
+  // Saved Reports (supabase/add_saved_reports.sql): every press of Generate
+  // keeps a copy, listed under the report so a past month can be opened
+  // again without the CSV. Kat, Nov 2026 — Overdue in particular is always
+  // "as of today", so a month's figure only survives if it was saved then.
+  const [savedReports, setSavedReports] = useState<any[]>([]);
+  const [previewSaved, setPreviewSaved] = useState<any | null>(null);
+  const savedDocRef = useRef<HTMLDivElement>(null);
+  // Set synchronously on a Generate press, so a quick second click can't
+  // save the same report twice before the first run finishes.
+  const generatingRef = useRef(false);
+  const [openingSavedId, setOpeningSavedId] = useState<string | null>(null);
+  const [deleteSavedTarget, setDeleteSavedTarget] = useState<any | null>(null);
+  const [deletingSaved, setDeletingSaved] = useState(false);
   const printPageRefs = useRef<(HTMLDivElement | null)[]>([]);
   // Same-size chunks as Collection List's printable worksheet — a full table
   // with its own column headings per sheet, instead of one giant image
@@ -119,6 +140,22 @@ export default function ReportsPage() {
   const ROWS_PER_PRINT_PAGE = 32;
 
   useEffect(() => { loadFilterOptions(); }, []);
+
+  useEffect(() => {
+    if (!profile) return;
+    loadSavedReports();
+  }, [profile, reportType]);
+
+  // Rows are left out here — only fetched when a saved report is opened.
+  async function loadSavedReports() {
+    const { data } = await supabase
+      .from('saved_reports')
+      .select('id, report_type, branch_label, area_label, period_label, stats, created_at, created_by, profiles:created_by(full_name)')
+      .eq('report_type', reportType)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    setSavedReports(data ?? []);
+  }
 
   // Field Collectors are locked to their own assigned area — no company-wide
   // visibility. Everyone else keeps the free Branch/Area filter dropdowns.
@@ -174,7 +211,12 @@ export default function ReportsPage() {
     return q;
   }
 
-  async function generateReport() {
+  // save: true only for a press of Generate — the automatic run when the
+  // page opens isn't kept.
+  async function generateReport(save = false) {
+    if (save && generatingRef.current) return;
+    if (save) generatingRef.current = true;
+    try {
     setLoading(true);
     let reportData: any[] = [];
     // Only the Overdue report sets this; every other report leaves it 0 so
@@ -443,8 +485,88 @@ export default function ReportsPage() {
     setCheckedRows(returnedRows);
     setSavingRows(new Set());
     const total = reportData.reduce((s, r) => s + (r.TotalAmountCollected ?? r.TotalCollections ?? r.OverdueAmount ?? r.Balance ?? r.AmountReleased ?? r.Customers ?? 0), 0);
-    setStats({ total, count: reportData.length, average: reportData.length ? total / reportData.length : 0, overdueRate: overallOverdueRate });
+    const newStats = { total, count: reportData.length, average: reportData.length ? total / reportData.length : 0, overdueRate: overallOverdueRate };
+    setStats(newStats);
     setLoading(false);
+
+    if (save) {
+      const savedBranchId = isFieldCollector
+        ? (profile?.branch_id ?? null)
+        : (branchFilter === 'all' || branchFilter === NO_BRANCH ? null : branchFilter);
+      const { error } = await supabase.from('saved_reports').insert({
+        report_type: reportType,
+        branch_id: savedBranchId,
+        area_id: areaFilter === 'all' ? null : areaFilter,
+        branch_label: branchLabel,
+        area_label: areaLabel,
+        period_label: periodLabel,
+        params: { startDate, endDate, monthFilter },
+        rows: reportData,
+        stats: newStats,
+        created_by: profile?.id ?? null,
+      });
+      if (error) toast({ title: 'Report not saved', description: error.message, variant: 'destructive' });
+      else loadSavedReports();
+    }
+    } finally {
+      if (save) generatingRef.current = false;
+    }
+  }
+
+  // View opens the saved report as the document itself — the same
+  // letterhead, summary and table as the printout — with Download CSV and
+  // Print right there, rather than loading it back into the page.
+  async function openSavedReport(saved: any) {
+    setOpeningSavedId(saved.id);
+    const { data: full, error } = await supabase.from('saved_reports').select('*').eq('id', saved.id).maybeSingle();
+    setOpeningSavedId(null);
+    if (error || !full) {
+      toast({ title: 'Could not open report', description: error?.message ?? 'It may have been deleted.', variant: 'destructive' });
+      return;
+    }
+    setPreviewSaved({ ...saved, ...full, rows: Array.isArray(full.rows) ? full.rows : [] });
+  }
+
+  function downloadSavedCsv() {
+    if (!previewSaved || previewSaved.rows.length === 0) return;
+    exportToCSV(previewSaved.rows, `${previewSaved.report_type}-${dateToStr(new Date(previewSaved.created_at))}.csv`);
+  }
+
+  // Printed straight from the preview's own HTML — the browser paginates the
+  // table itself, so a long saved report needs no page-by-page capture.
+  function printSaved() {
+    const doc = savedDocRef.current;
+    if (!doc) return;
+    const w = window.open('', '_blank', 'width=900,height=1000');
+    if (!w) {
+      toast({ title: 'Print blocked', description: 'Please allow pop-ups for this site to print the report', variant: 'destructive' });
+      return;
+    }
+    const html = doc.innerHTML.replace(/src="\//g, `src="${window.location.origin}/`);
+    w.document.write(`<html><head><title>${reportTypeLabel(previewSaved.report_type, isFieldCollector)} Report</title>
+      <style>@page { size: 8.5in 13in; margin: 12mm; } body { margin: 0; }
+      thead { display: table-header-group; } tr { page-break-inside: avoid; }
+      * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }</style></head>
+      <body>${html}</body></html>`);
+    w.document.close();
+    w.onload = () => w.print();
+    w.onafterprint = () => w.close();
+  }
+
+  async function handleDeleteSaved() {
+    if (!deleteSavedTarget) return;
+    setDeletingSaved(true);
+    const { data: removed, error } = await supabase.from('saved_reports').delete().eq('id', deleteSavedTarget.id).select('id');
+    setDeletingSaved(false);
+    // An RLS-blocked delete comes back with no error and no rows.
+    if (error || !removed?.length) {
+      toast({ title: 'Not deleted', description: error?.message ?? 'Only an Administrator or whoever generated it can delete a saved report.', variant: 'destructive' });
+      return;
+    }
+    if (previewSaved?.id === deleteSavedTarget.id) setPreviewSaved(null);
+    setDeleteSavedTarget(null);
+    toast({ title: 'Saved report deleted' });
+    loadSavedReports();
   }
 
   function handleExport() {
@@ -458,15 +580,15 @@ export default function ReportsPage() {
 
   // Branch/Area/Period line shown under the report title, on-screen filter
   // card values translated to their display names.
-  const branchLabel = isFieldCollector
+  const branchLabel = (isFieldCollector
     ? (myArea?.name ?? 'My Area')
-    : (branchFilter === 'all' ? 'All Branches' : (branches.find(b => b.id === branchFilter)?.name ?? '—'));
-  const areaLabel = isFieldCollector
+    : (branchFilter === 'all' ? 'All Branches' : (branches.find(b => b.id === branchFilter)?.name ?? '—')));
+  const areaLabel = (isFieldCollector
     ? (myArea?.name ?? '—')
-    : (areaFilter === 'all' ? 'All Areas' : (areas.find(a => a.id === areaFilter)?.name ?? '—'));
-  const periodLabel = reportType === 'monthly_release' || reportType === 'monthly_collection'
+    : (areaFilter === 'all' ? 'All Areas' : (areas.find(a => a.id === areaFilter)?.name ?? '—')));
+  const periodLabel = AS_OF_TODAY_REPORTS.has(reportType) ? `As of ${formatDate(todayStr())}` : (reportType === 'monthly_release' || reportType === 'monthly_collection'
     ? new Date(`${monthFilter}-01`).toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
-    : `${formatDate(startDate)} – ${formatDate(endDate)}`;
+    : `${formatDate(startDate)} – ${formatDate(endDate)}`);
 
   // Same chunk-per-sheet approach as Collection List's printable worksheet —
   // each page keeps its own full-size column headings instead of one long
@@ -571,7 +693,7 @@ export default function ReportsPage() {
           Print
         </Button>
         <Button variant="outline" size="sm" onClick={handleExport} disabled={data.length === 0}><Download className="w-4 h-4 mr-2" />Export CSV</Button>
-        <Button size="sm" onClick={generateReport}><FileBarChart className="w-4 h-4 mr-2" />Generate</Button>
+        <Button size="sm" onClick={() => generateReport(true)} disabled={loading}><FileBarChart className="w-4 h-4 mr-2" />Generate</Button>
       </PageHeader>
 
       {/* Report config */}
@@ -636,6 +758,13 @@ export default function ReportsPage() {
                 <Label>Month</Label>
                 <Input type="month" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} />
               </div>
+            ) : AS_OF_TODAY_REPORTS.has(reportType) ? (
+              <div className="space-y-2 flex-1">
+                <Label>As Of</Label>
+                <div className="flex h-10 w-full items-center rounded-md border border-input bg-secondary/50 px-3 py-2 text-sm text-muted-foreground">
+                  Today, {formatDate(todayStr())} — Generate at month end to keep that month on record
+                </div>
+              </div>
             ) : (
               <>
                 <div className="space-y-2 flex-1">
@@ -648,7 +777,7 @@ export default function ReportsPage() {
                 </div>
               </>
             )}
-            <Button onClick={generateReport}>Generate</Button>
+            <Button onClick={() => generateReport(true)} disabled={loading}>Generate</Button>
           </div>
         </CardContent>
       </Card>
@@ -700,7 +829,10 @@ export default function ReportsPage() {
 
       {/* Data table */}
       <Card className="glass-card border-border">
-        <CardHeader><CardTitle>Report Data</CardTitle><CardDescription>{data.length} records{showReturnedColumn && ` · ${checkedRows.size} of ${data.length} docs returned`}</CardDescription></CardHeader>
+        <CardHeader>
+          <CardTitle>Report Data</CardTitle>
+          <CardDescription>{data.length} records{showReturnedColumn && ` · ${checkedRows.size} of ${data.length} docs returned`}</CardDescription>
+        </CardHeader>
         <CardContent>
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
@@ -745,6 +877,173 @@ export default function ReportsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Saved Reports for the selected report type */}
+      <Card className="glass-card border-border">
+        <CardHeader>
+          <CardTitle>Saved Reports</CardTitle>
+          <CardDescription>Every Generate of {reportTypeLabel(reportType, isFieldCollector)} is kept here — open one to view, print or export it again.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {savedReports.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">No saved {reportTypeLabel(reportType, isFieldCollector)} reports yet. Press Generate to save one.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Generated</TableHead>
+                    <TableHead>Branch / Area</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead className="text-right">{reportType === 'customers_per_area' ? 'Customers' : 'Total'}</TableHead>
+                    <TableHead className="text-right">Records</TableHead>
+                    {reportType === 'overdue_amount' && <TableHead className="text-right">Overdue Rate</TableHead>}
+                    <TableHead>Generated By</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {savedReports.map(r => (
+                    <TableRow key={r.id}>
+                      <TableCell className="text-sm whitespace-nowrap">{formatDateTime(r.created_at)}</TableCell>
+                      <TableCell className="text-sm">{r.branch_label} · {r.area_label}</TableCell>
+                      <TableCell className="text-sm">{r.period_label}</TableCell>
+                      <TableCell className="text-sm text-right">
+                        {reportType === 'customers_per_area' ? (r.stats?.total ?? 0) : formatCurrency(r.stats?.total ?? 0)}
+                      </TableCell>
+                      <TableCell className="text-sm text-right">{r.stats?.count ?? 0}</TableCell>
+                      {reportType === 'overdue_amount' && <TableCell className="text-sm text-right">{r.stats?.overdueRate ?? 0}%</TableCell>}
+                      <TableCell className="text-sm">{r.profiles?.full_name ?? '—'}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap">
+                        <Button variant="ghost" size="icon" title="View" disabled={openingSavedId === r.id} onClick={() => openSavedReport(r)}>
+                          {openingSavedId === r.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
+                        </Button>
+                        {(profile?.role_name === 'Administrator' || r.created_by === profile?.id) && (
+                          <Button variant="ghost" size="icon" title="Delete" onClick={() => setDeleteSavedTarget(r)}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!previewSaved} onOpenChange={(open) => !open && setPreviewSaved(null)}>
+        <DialogContent className="max-w-5xl w-[calc(100vw-2rem)] max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>{previewSaved ? reportTypeLabel(previewSaved.report_type, isFieldCollector) : ''} Report</DialogTitle>
+            <DialogDescription>
+              Saved {formatDateTime(previewSaved?.created_at)}{previewSaved?.profiles?.full_name ? ` by ${previewSaved.profiles.full_name}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          {previewSaved && (() => {
+            const cols = previewSaved.rows.length > 0 ? Object.keys(previewSaved.rows[0]) : [];
+            const st = previewSaved.stats ?? {};
+            const type = previewSaved.report_type;
+            const box: React.CSSProperties = { flex: 1, padding: 12, background: '#f4f6f9', borderRadius: 6, textAlign: 'center' };
+            return (
+              <div className="flex-1 overflow-auto rounded-md border border-border">
+                <div ref={savedDocRef}>
+                  <div style={{ background: '#fff', color: '#111', padding: 24, minWidth: 700, fontFamily: '"Times New Roman", Calibri, serif' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '3px solid #000', paddingBottom: 10, marginBottom: 14 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <img src="/image/1125_Corp_Logo.png" alt="1125Corp" style={{ width: 52, height: 52, objectFit: 'contain' }} />
+                        <div style={{ fontSize: 20, fontWeight: 700, color: '#1F4E79' }}>{COMPANY_NAME_DISPLAY}</div>
+                      </div>
+                      <table style={{ fontSize: 11 }}>
+                        <tbody>
+                          <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Report Date:</td><td>{formatDate(previewSaved.created_at)}</td></tr>
+                          <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Report Time:</td><td>{formatTime(previewSaved.created_at)}</td></tr>
+                          <tr><td style={{ fontWeight: 700, paddingRight: 8 }}>Generated by:</td><td>{previewSaved.profiles?.full_name ?? '—'}</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 18, color: '#1F4E79', letterSpacing: 0.5, marginBottom: 4 }}>
+                      {reportTypeLabel(type, isFieldCollector).toUpperCase()} REPORT
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 24, fontSize: 12, color: '#444', marginBottom: 10 }}>
+                      <span><strong>Branch:</strong> {previewSaved.branch_label}</span>
+                      <span><strong>Area:</strong> {previewSaved.area_label}</span>
+                      <span><strong>Period:</strong> {previewSaved.period_label}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 14, marginBottom: 16 }}>
+                      <div style={box}>
+                        <div style={{ fontSize: 10, color: '#666' }}>{type === 'customers_per_area' ? 'Total Customers' : 'Total'}</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#0B7A3D' }}>{type === 'customers_per_area' ? (st.total ?? 0) : formatCurrency(st.total ?? 0)}</div>
+                      </div>
+                      <div style={box}>
+                        <div style={{ fontSize: 10, color: '#666' }}>Records</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#1F4E79' }}>{st.count ?? previewSaved.rows.length}</div>
+                      </div>
+                      {type === 'overdue_amount' ? (
+                        <div style={box}>
+                          <div style={{ fontSize: 10, color: '#666' }}>Overdue Rate</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: '#B91C1C' }}>{st.overdueRate ?? 0}%</div>
+                        </div>
+                      ) : type !== 'customers_per_area' ? (
+                        <div style={box}>
+                          <div style={{ fontSize: 10, color: '#666' }}>Average</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: '#1F4E79' }}>{formatCurrency(st.average ?? 0)}</div>
+                        </div>
+                      ) : null}
+                    </div>
+                    {previewSaved.rows.length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: 24, color: '#666', fontSize: 13 }}>No data in this report</div>
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                        <thead>
+                          <tr style={{ background: '#0B1F3A', color: '#fff' }}>
+                            {cols.map(key => (
+                              <th key={key} style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid #000' }}>{columnLabel(key)}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {previewSaved.rows.map((row: any, i: number) => (
+                            <tr key={i}>
+                              {cols.map(key => (
+                                <td key={key} style={{ padding: '5px 8px', border: '1px solid #000' }}>{formatCell(key, row[key])}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setPreviewSaved(null)}>Close</Button>
+            <Button variant="outline" onClick={printSaved}><Printer className="w-4 h-4 mr-2" />Print</Button>
+            <Button onClick={downloadSavedCsv} disabled={!previewSaved || previewSaved.rows.length === 0}><Download className="w-4 h-4 mr-2" />Download CSV</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteSavedTarget} onOpenChange={(open) => !open && setDeleteSavedTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Saved Report</DialogTitle>
+            <DialogDescription>
+              Delete the {reportTypeLabel(reportType, isFieldCollector)} report generated {formatDateTime(deleteSavedTarget?.created_at)}? This only removes the saved copy — no loans, payments or other records are touched.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteSavedTarget(null)} disabled={deletingSaved}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteSaved} disabled={deletingSaved}>
+              {deletingSaved && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Hidden printable copy — same letterhead (logo + company name) as
           every other printed document in the app, with the report type as
