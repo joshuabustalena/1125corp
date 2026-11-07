@@ -23,6 +23,9 @@ export const PAGE_PERMISSIONS: Record<string, string | null> = {
   // (self-service), never the generate/edit/delete tooling or anyone
   // else's pay. See app/(app)/payroll/page.tsx.
   '/payroll': null,
+  // Same split: 'payroll' prepares and approves everyone's statements;
+  // everyone else sees only their own approved ones.
+  '/incentives': null,
   '/employee-loans': 'employee_loans',
   '/leave-requests': 'leave_requests',
   '/attendance': 'attendance',

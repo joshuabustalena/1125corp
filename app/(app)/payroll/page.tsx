@@ -856,6 +856,24 @@ export default function PayrollPage() {
     // deductions exceeded what they actually earned that cutoff), the
     // shortfall doesn't disappear — it's carried forward and deducted from
     // this payroll too, same as a real payroll advance/deficit ledger.
+    // An approved Incentive Statement fills the Incentive on the 1st-cutoff
+    // payslip after its month (October's goes on the Nov 1 payslip — Kat, Nov
+    // 2026). It holds the TOTAL incentive: the 25% retention is taken below,
+    // the same as for one typed by hand, and it stays editable under Pay
+    // Adjustments. The 16th cutoff has none.
+    const incentiveByEmployee = new Map<string, number>();
+    if (period === '1') {
+      const [payYear, payMonth] = payDate.split('-').map(Number);
+      const statementMonth = new Date(payYear, payMonth - 2, 1);
+      const { data: statements } = await supabase
+        .from('incentive_statements')
+        .select('employee_id, total_incentive')
+        .eq('status', 'approved')
+        .eq('month', toDateStr(statementMonth))
+        .in('employee_id', employeeIds);
+      for (const s of statements ?? []) incentiveByEmployee.set(s.employee_id, Number(s.total_incentive) || 0);
+    }
+
     const { data: priorPayroll } = await supabase
       .from('payroll')
       .select('employee_id, net_pay, pay_date')
@@ -886,11 +904,11 @@ export default function PayrollPage() {
       const sss = resolveDeduction('sss_deduction', 4.5, fullPeriodBasic);
       const philhealth = resolveDeduction('philhealth_deduction', 3.5, fullPeriodBasic);
       const pagIbig = resolveDeduction('pagibig_deduction', 2, fullPeriodBasic);
-      // No fixed formula — like the special-loan deductions below, an
-      // approver enters the incentive manually per cutoff via "Pay
-      // Adjustments" on the generated row. Starts at 0 here; retention is
-      // always 25% of whatever incentive ends up entered.
-      const incentive = 0;
+      // Starts from the employee's approved Incentive Statement, if any (see
+      // incentiveByEmployee above); otherwise 0, entered by hand via "Pay
+      // Adjustments" on the generated row. Retention is always 25% of whatever
+      // incentive ends up entered.
+      const incentive = incentiveByEmployee.get(e.id) ?? 0;
       const retention = incentive * 0.25;
       const loanDeduction = (activeLoans ?? [])
         .filter(l => l.employee_id === e.id)

@@ -222,6 +222,10 @@ export default function ReportsPage() {
     // Only the Overdue report sets this; every other report leaves it 0 so
     // the rate card stays hidden.
     let overallOverdueRate = 0;
+    // Saved with the Overdue report: the whole scope's receivable, including
+    // any area with nothing overdue, which has no row to carry it. Incentive
+    // Statements read it (lib/incentives.ts).
+    let overallReceivable: number | undefined;
     let loanIds: string[] = [];
     const returnedRows = new Set<number>();
 
@@ -383,6 +387,7 @@ export default function ReportsPage() {
         });
 
         const rate = (o: number, r: number) => (r > 0 ? Math.round((o / r) * 1000) / 10 : 0);
+        overallReceivable = Math.round(Object.values(byArea).reduce((s, v) => s + v.receivable, 0) * 100) / 100;
         overallOverdueRate = rate(
           Object.values(byArea).reduce((s, v) => s + v.overdue, 0),
           Object.values(byArea).reduce((s, v) => s + v.receivable, 0),
@@ -502,7 +507,7 @@ export default function ReportsPage() {
         period_label: periodLabel,
         params: { startDate, endDate, monthFilter },
         rows: reportData,
-        stats: newStats,
+        stats: overallReceivable == null ? newStats : { ...newStats, totalReceivable: overallReceivable },
         created_by: profile?.id ?? null,
       });
       if (error) toast({ title: 'Report not saved', description: error.message, variant: 'destructive' });

@@ -28,6 +28,7 @@ import {
   ClipboardList,
   MessageSquare,
   Ban,
+  Award,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -74,6 +75,7 @@ export const navSections: NavSection[] = [
     items: [
       { label: 'Employees', href: '/employees', icon: UserCog },
       { label: 'Payroll', href: '/payroll', icon: ScrollText },
+      { label: 'Incentives', href: '/incentives', icon: Award },
       { label: 'Employee Loans', href: '/employee-loans', icon: Landmark },
       { label: 'Leave Requests', href: '/leave-requests', icon: CalendarClock },
       { label: 'Attendance', href: '/attendance', icon: ClipboardCheck },
