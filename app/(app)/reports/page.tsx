@@ -459,7 +459,7 @@ export default function ReportsPage() {
       // grace-period convention — adjust the 7-day cutoff below if your
       // policy differs.
       case 'delinquent_customers': {
-        let q = supabase.from('loans').select('loan_number, remaining_balance, due_date, branch_id, area_id, customers(first_name, last_name, phone), areas(name)').eq('status', 'active');
+        let q = supabase.from('loans').select('loan_number, remaining_balance, release_date, due_date, branch_id, area_id, customers(first_name, last_name, phone), areas(name)').eq('status', 'active');
         if (areaFilter !== 'all') q = q.eq('area_id', areaFilter);
         else if (branchFilter !== 'all') q = q.eq('branch_id', branchFilter);
         const { data } = await q;
@@ -473,6 +473,8 @@ export default function ReportsPage() {
               Customer: formatCustomerName(l.customers?.first_name, l.customers?.last_name),
               Phone: l.customers?.phone ?? '—',
               Area: l.areas?.name ?? 'Unassigned',
+              LoanDate: l.release_date ?? '—',
+              DueDate: l.due_date,
               DaysOverdue: daysOverdue,
               Bucket: daysOverdue <= 7 ? 'Delayed (1-7d)' : 'Past Due (8d+)',
               Balance: l.remaining_balance,

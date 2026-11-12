@@ -239,6 +239,8 @@ function ManageIncentives({ canManage }: { canManage: boolean }) {
   const [form, setForm] = useState<Form | null>(null);
   const [saving, setSaving] = useState(false);
   const [factorsOpen, setFactorsOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Row | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const actions = useDocumentActions(() => `incentive-${editing ? editing.employee.first_name : ''}-${month}`);
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [month]);
@@ -436,17 +438,27 @@ function ManageIncentives({ canManage }: { canManage: boolean }) {
     load();
   }
 
-  async function discardDraft() {
-    if (!editing?.statement) return;
-    setSaving(true);
-    const { error } = await supabase.from('incentive_statements').delete().eq('id', editing.statement.id).eq('status', 'draft');
-    setSaving(false);
-    if (error) {
-      toast({ title: 'Not deleted', description: error.message, variant: 'destructive' });
+  // Kat (Nov 2026): a wrong computation, approved or not, can be deleted like a
+  // payslip. The row goes back to the system figures. An approved one also
+  // takes its Incentive back off the pending payslip, unless that was edited
+  // by hand since.
+  async function deleteStatement() {
+    const row = deleteTarget;
+    if (!row?.statement) return;
+    setDeleting(true);
+    const { data, error } = await supabase.from('incentive_statements').delete().eq('id', row.statement.id).select('id');
+    if (error || !data?.length) {
+      setDeleting(false);
+      toast({ title: 'Not deleted', description: error?.message ?? 'You may not have permission to delete it.', variant: 'destructive' });
       return;
     }
-    toast({ title: 'Draft discarded', description: 'It goes back to the system figures.' });
-    setEditing(null);
+    const note = row.statement.status === 'approved'
+      ? await setPayslipIncentive(row.employee.id, 0, Number(row.statement.total_incentive) || 0)
+      : '';
+    setDeleting(false);
+    toast({ title: 'Statement deleted', description: `It goes back to the system figures. ${note}`.trim() });
+    setDeleteTarget(null);
+    if (editing?.employee.id === row.employee.id) setEditing(null);
     load();
   }
 
@@ -550,7 +562,14 @@ function ManageIncentives({ canManage }: { canManage: boolean }) {
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="outline" size="sm" onClick={() => openEditor(r)}>{canManage && r.statement?.status !== 'approved' ? 'Review' : 'View'}</Button>
+                        <div className="flex justify-end gap-1">
+                          <Button variant="outline" size="sm" onClick={() => openEditor(r)}>{canManage && r.statement?.status !== 'approved' ? 'Review' : 'View'}</Button>
+                          {canManage && r.statement && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8" title="Delete statement" onClick={() => setDeleteTarget(r)}>
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -646,8 +665,10 @@ function ManageIncentives({ canManage }: { canManage: boolean }) {
               {actions.downloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
               PDF
             </Button>
-            {canManage && editing?.statement?.status === 'draft' && (
-              <Button variant="outline" className="text-destructive hover:text-destructive" onClick={discardDraft} disabled={saving}>Discard Draft</Button>
+            {canManage && editing?.statement && (
+              <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(editing)} disabled={saving}>
+                <Trash2 className="w-4 h-4 mr-2" />Delete
+              </Button>
             )}
             {canManage && isApproved && (
               <Button variant="outline" onClick={unapprove} disabled={saving}>Back to Draft</Button>
@@ -661,6 +682,28 @@ function ManageIncentives({ canManage }: { canManage: boolean }) {
                 </Button>
               </>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Incentive Statement</DialogTitle>
+            <DialogDescription>
+              Delete the {monthLabel(month)} {deleteTarget?.statement?.status === 'approved' ? 'approved' : 'draft'} statement for{' '}
+              {deleteTarget ? formatCustomerName(deleteTarget.employee.first_name, deleteTarget.employee.last_name) : ''}
+              {' '}({deleteTarget ? formatCurrency(Number(deleteTarget.statement?.total_incentive) || 0) : ''} total)?
+              {deleteTarget?.statement?.status === 'approved' && ` The employee will no longer see it, and the Incentive comes off the ${payslip.label} if it hasn't been paid yet.`}
+              {' '}This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+            <Button variant="destructive" onClick={deleteStatement} disabled={deleting}>
+              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
