@@ -11,7 +11,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useAuth } from '@/lib/auth-context';
-import { ADMIN_STAFF_ROLE, seesAllBranches } from '@/lib/permissions';
+import { hasPermission, seesAllBranches } from '@/lib/permissions';
 import { supabase } from '@/lib/supabase/client';
 import { formatCurrency, formatDate, formatCustomerName, todayStr } from '@/lib/format';
 import { buildPrintHtml } from '@/lib/print-document';
@@ -39,16 +39,15 @@ function countCollectionDaysBetween(start: Date, end: Date): number {
 
 export default function CollectionListPage() {
   const { profile } = useAuth();
-  const isAdmin = profile?.role_name === 'Administrator';
   const isFieldCollector = profile?.role_name === 'Branch Field Collector';
-  // Branch Manager: same as Cashier below — sees the full collector-picker
-  // for their own branch (never the branch switcher itself, which only
-  // renders for isAdmin), not locked down to one collector's row the way
-  // isFieldCollector is. Scoping to just their own branch needs no extra
-  // code here — the effect below already forces branchId to
-  // profile.branch_id for every non-admin role, Branch Manager included.
-  const isBranchManager = profile?.role_name === 'Branch Manager';
-  const canAccess = isAdmin || profile?.role_name === 'Cashier' || profile?.role_name === ADMIN_STAFF_ROLE || isFieldCollector || isBranchManager;
+  // Access follows the 'collection_list' permission ticked on the account
+  // (Access tab), the same check the sidebar and route guard use. It used to
+  // be a hard-coded role list, so a Branch Proxy Collector given the
+  // permission (Kat, Nov 2026) still got "no access". A Field Collector is
+  // locked to their own area. Everyone else (Branch Manager, Proxy Collector,
+  // Cashier) picks any area in their own branch: the effect below forces
+  // branchId to profile.branch_id unless the role sees all branches.
+  const canAccess = hasPermission(profile?.permissions, 'collection_list');
   const allBranches = seesAllBranches(profile?.role_name);
   const [date, setDate] = useState(todayStr());
   const [branches, setBranches] = useState<any[]>([]);
@@ -77,6 +76,8 @@ export default function CollectionListPage() {
   useEffect(() => {
     loadBranches();
     if (!allBranches && profile?.branch_id) setBranchId(profile.branch_id);
+    // No branch on the account: nothing to load, so stop the spinner.
+    if (!allBranches && profile && !profile.branch_id) setLoading(false);
     if (isFieldCollector && profile) {
       supabase.from('collectors').select('id').eq('profile_id', profile.id).maybeSingle()
         .then(({ data }) => setMyCollectorId(data?.id ?? null));
