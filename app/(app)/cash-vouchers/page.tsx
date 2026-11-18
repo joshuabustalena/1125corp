@@ -236,7 +236,16 @@ export default function CashVouchersPage() {
   // lines, just checked against a small tolerance for floating-point rounding.
   const cashSourceMismatch = resolvedCashSourceLines.length > 0 && Math.abs(cashSourceTotal - totalAmount) > 0.01;
 
+  // A voucher charged to Loans Receivable moves the Trial Balance but no
+  // loan, which is how Balanga's books and Dashboard drifted apart (Nov 2026:
+  // ₱1,350 in three vouchers). Paying money back to a customer goes through
+  // Loans > Edit, which raises their balance and posts the matching entry; a
+  // voucher here is only for a ledger-only correction, and must say so.
+  const voucherTouchesReceivable = resolvedLines.some(l => /^\s*loans receivable/i.test(l.account_name));
+  const [receivableAck, setReceivableAck] = useState(false);
+
   function resetForm() {
+    setReceivableAck(false);
     setPayee('');
     setParticulars('');
     setLines([{ account_code: '', amount: '' }]);
@@ -246,6 +255,10 @@ export default function CashVouchersPage() {
 
   async function handleGenerate() {
     if (!payee || !particulars || resolvedLines.length === 0 || !branchId) return;
+    if (voucherTouchesReceivable && !receivableAck) {
+      toast({ title: 'Loans Receivable', description: 'Tick the ledger-only box, or have an Administrator pay the customer back through Loans > Edit instead.', variant: 'destructive' });
+      return;
+    }
     if (resolvedCashSourceLines.length === 0 || cashSourceMismatch) {
       toast({ title: 'Cash source doesn’t match the total', description: `The cash source line(s) must add up to exactly ${formatCurrency(totalAmount)}.`, variant: 'destructive' });
       return;
@@ -630,6 +643,20 @@ export default function CashVouchersPage() {
             </div>
           </div>
 
+          {voucherTouchesReceivable && (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 space-y-2 text-sm">
+              <p className="font-medium">This voucher charges Loans Receivable but changes no loan.</p>
+              <p className="text-muted-foreground">
+                The Trial Balance will move and the Dashboard&apos;s Receivable won&apos;t. To pay a customer back (an overpayment, a receipt error), an Administrator should use Loans &gt; Edit on their loan instead: raise the balance and choose this cash account, and it posts the entry for you.
+                Use this voucher only for a correction to the ledger itself, and name the loan in Particulars.
+              </p>
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input type="checkbox" className="mt-0.5" checked={receivableAck} onChange={(e) => setReceivableAck(e.target.checked)} />
+                <span>This is a ledger-only correction. No loan&apos;s balance should change.</span>
+              </label>
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Total: <span className="font-semibold text-foreground">{formatCurrency(totalAmount)}</span></p>
             <div className="flex gap-2">
@@ -644,7 +671,7 @@ export default function CashVouchersPage() {
                 {downloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
                 Download PDF
               </Button>
-              <Button type="button" onClick={handleGenerate} disabled={saving || !payee || !particulars || resolvedLines.length === 0 || !branchId || resolvedCashSourceLines.length === 0 || cashSourceMismatch}>
+              <Button type="button" onClick={handleGenerate} disabled={saving || !payee || !particulars || resolvedLines.length === 0 || !branchId || resolvedCashSourceLines.length === 0 || cashSourceMismatch || (voucherTouchesReceivable && !receivableAck)}>
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Generate
               </Button>

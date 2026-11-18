@@ -23,6 +23,11 @@ import { formatCurrency, formatDate, generateEntryNumber, todayStr } from '@/lib
 import { Plus, Loader2, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type Line = { account_id: string; debit: string; credit: string; memo: string };
+const isLoansReceivable = (name: string) => /^\s*loans receivable/i.test(name ?? '');
+// Entries the app posts from its own records. Deleting one by hand would leave
+// the record (a release, a remittance, a write-off, an Edit Loan change) with
+// no ledger side; each is undone from its own page instead.
+const SYSTEM_SOURCES_ON_RECEIVABLE = new Set(['disbursement', 'remittance', 'write_off', 'loan_adjustment']);
 const SHARED_VALUE = 'shared';
 const PAGE_SIZE = 20;
 
@@ -142,6 +147,7 @@ export default function JournalEntriesPage() {
       { account_id: '', debit: '', credit: '', memo: '' },
       { account_id: '', debit: '', credit: '', memo: '' },
     ]);
+    setLedgerOnlyAck(false);
     setDialogOpen(true);
   }
 
@@ -170,8 +176,21 @@ export default function JournalEntriesPage() {
   const isBalanced = incompleteLines.length === 0 && validLines.length >= 2
     && totalDebit === totalCredit && totalDebit > 0;
 
+  // A manual entry on Loans Receivable moves the Trial Balance but no loan,
+  // so the Dashboard's receivable stops matching (Balanga, Nov 2026). Changing
+  // a customer's balance belongs in Loans > Edit, which posts this entry
+  // itself; a manual one is only for a ledger-only correction, and has to
+  // say so and say what it's for.
+  const lrAccountIds = new Set(accounts.filter(a => isLoansReceivable(a.name)).map(a => a.id));
+  const touchesReceivable = validLines.some(l => lrAccountIds.has(l.account_id));
+  const [ledgerOnlyAck, setLedgerOnlyAck] = useState(false);
+
   async function handleSubmitEntry(e: React.FormEvent) {
     e.preventDefault();
+    if (touchesReceivable && (!ledgerOnlyAck || !entryForm.reference.trim() || !entryForm.description.trim())) {
+      toast({ title: 'Loans Receivable', description: 'Tick the ledger-only box and fill in Reference and Description, or change the loan through Loans > Edit instead.', variant: 'destructive' });
+      return;
+    }
     if (incompleteLines.length > 0) {
       toast({ title: 'Missing account', description: 'Every line with an amount needs an account selected — pick one or clear the amount.', variant: 'destructive' });
       return;
@@ -224,6 +243,16 @@ export default function JournalEntriesPage() {
 
   async function handleDeleteEntry() {
     if (!deleteTarget) return;
+    const hitsReceivable = (deleteTarget.journal_entry_lines ?? []).some((l: any) => isLoansReceivable(l.chart_of_accounts?.name ?? ''));
+    if (hitsReceivable && SYSTEM_SOURCES_ON_RECEIVABLE.has(deleteTarget.source)) {
+      toast({
+        title: 'Cannot delete here',
+        description: 'This entry was posted from a loan, remittance or write-off, and deleting it would leave the Trial Balance and the Dashboard apart. Undo it from its own page instead (e.g. delete the remittance on Remittance).',
+        variant: 'destructive',
+      });
+      setDeleteTarget(null);
+      return;
+    }
     setDeleting(true);
     const { error } = await supabase.from('journal_entries').delete().eq('id', deleteTarget.id);
     if (error) {
@@ -421,13 +450,27 @@ export default function JournalEntriesPage() {
             </div>
 
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>Description{touchesReceivable ? ' *' : ''}</Label>
               <Input value={entryForm.description} onChange={(e) => setEntryForm({ ...entryForm, description: e.target.value })} />
             </div>
 
+            {touchesReceivable && (
+              <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 space-y-2 text-sm">
+                <p className="font-medium">This entry changes Loans Receivable but no loan.</p>
+                <p className="text-muted-foreground">
+                  The Trial Balance will move and the Dashboard&apos;s Receivable won&apos;t. To change what a customer owes, use Loans &gt; Edit on that loan instead: it posts this entry for you.
+                  Use this only for a correction to the ledger itself, and name the loan(s) in Reference or Description.
+                </p>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5" checked={ledgerOnlyAck} onChange={(e) => setLedgerOnlyAck(e.target.checked)} />
+                  <span>This is a ledger-only correction. No loan&apos;s balance should change.</span>
+                </label>
+              </div>
+            )}
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving || !isBalanced}>
+              <Button type="submit" disabled={saving || !isBalanced || (touchesReceivable && (!ledgerOnlyAck || !entryForm.reference.trim() || !entryForm.description.trim()))}>
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Save Entry
               </Button>

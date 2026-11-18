@@ -53,7 +53,7 @@ const AS_OF_TODAY_REPORTS = new Set(['overdue_amount', 'delinquent_customers', '
 // are deliberately absent so they never get a peso sign.
 const MONEY_COLUMNS = new Set([
   'TotalDeduction', 'TotalCollections', 'TotalRelease', 'TotalInterest', 'ServiceFee', 'NetProceeds',
-  'OverdueAmount', 'Balance', 'AmountReleased', 'TotalReceivable', 'TotalCashCollected', 'TotalAmountCollected',
+  'OverdueAmount', 'Receivable', 'Balance', 'AmountReleased', 'TotalReceivable', 'TotalCashCollected', 'TotalAmountCollected',
 ]);
 
 // Friendlier header text for a column whose raw key (still used internally
@@ -402,6 +402,9 @@ export default function ReportsPage() {
             Status: r.isPastDue ? 'Past Due' : 'Delayed',
             DaysOverdue: r.daysOverdue,
             OverdueAmount: r.amount,
+            // The customer's own remaining balance on this loan (Kat, Nov
+            // 2026), next to the area's TotalReceivable.
+            Receivable: Number(r.l.remaining_balance) || 0,
             OverdueRate: rate(byArea[r.area].overdue, byArea[r.area].receivable),
             TotalReceivable: byArea[r.area].receivable,
           }))

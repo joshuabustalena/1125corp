@@ -454,7 +454,7 @@ export default function PaymentsPage() {
     function buildPaymentsQuery() {
       let q = supabase
         .from('payments')
-        .select('*, customers!inner(branch_id), loans(loan_number, release_date, due_date, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
+        .select('*, customers!inner(branch_id), loans(loan_number, status, release_date, due_date, customers(first_name, last_name, phone), branches(name), areas(name)), collectors(profiles(full_name)), receipts(or_number)');
       if (searchLoanIds) q = q.in('loan_id', searchLoanIds);
       if (isCollector) {
         q = q.eq('collector_id', myCollector?.id ?? '00000000-0000-0000-0000-000000000000');
@@ -513,6 +513,15 @@ export default function PaymentsPage() {
   async function handleEditPayment(e: React.FormEvent) {
     e.preventDefault();
     if (!editTarget) return;
+
+    // Same limit as a new payment: this row is the loan's latest, so the most
+    // it can be is what the loan owed before it. Anything above would be
+    // floored away on the loan but still remitted in full to the ledger.
+    const maxAmount = (Number(editTarget.remaining_balance) || 0) + (Number(editTarget.amount_paid) || 0);
+    if (editTarget.loans?.status !== 'written_off' && Number(editForm.amount_paid) > maxAmount + 0.005) {
+      toast({ title: 'More than the balance', description: `The most this payment can be is ${formatCurrency(maxAmount)}, what the loan owed before it.`, variant: 'destructive' });
+      return;
+    }
     setEditSaving(true);
 
     // Row-locked, atomic — same reasoning as apply_loan_payment: computing
@@ -674,6 +683,20 @@ export default function PaymentsPage() {
     submittingRef.current = true;
     try {
     if (!form.loan_id || !form.amount_paid || !location) return;
+
+    // No more than the balance. apply_loan_payment floors the balance at 0,
+    // but the whole amount still reaches the ledger through the remittance,
+    // so an overpayment leaves Loans Receivable lower than the Dashboard by
+    // the excess (Balanga, Nov 2026). A recovery on a written-off loan isn't
+    // a receivable, so it's exempt.
+    if (selectedLoan && !isWrittenOffLoan && Number(form.amount_paid) > Number(selectedLoan.remaining_balance) + 0.005) {
+      toast({
+        title: 'More than the balance',
+        description: `The balance is only ${formatCurrency(Number(selectedLoan.remaining_balance))}. Collect that amount; any extra has to be returned to the customer.`,
+        variant: 'destructive',
+      });
+      return;
+    }
 
     // A REAL post (one that actually updates the balance) can't happen
     // without signal — it has to go through the atomic apply_loan_payment

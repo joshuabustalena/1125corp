@@ -21,7 +21,9 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase/client';
-import { formatCurrency, formatDate, generateLoanNumber, computeLoanDetails, exportToCSV, formatCustomerName, todayStr } from '@/lib/format';
+import { formatCurrency, formatDate, generateLoanNumber, generateEntryNumber, computeLoanDetails, exportToCSV, formatCustomerName, todayStr } from '@/lib/format';
+
+const isLoansReceivable = (name: string) => /^\s*loans receivable/i.test(name ?? '');
 import { notifyRoles } from '@/lib/notify';
 import {
   Landmark, Plus, Search, Download, Eye, Loader2, Calculator, RefreshCw,
@@ -118,6 +120,15 @@ export default function LoansPage() {
     total_payable: '', remaining_balance: '', release_date: '', due_date: '', status: '',
   });
   const [editSaving, setEditSaving] = useState(false);
+  // Edit Loan used to change Remaining Balance or Status with nothing in the
+  // ledger, so the Dashboard's receivable and the Trial Balance's Loans
+  // Receivable drifted apart (Balanga, Nov 2026: Garcia's balance lowered
+  // ₱18,060 by hand, Hepullier set to Renewed at ₱0). Any edit that changes
+  // what the Dashboard counts now posts the matching adjustment, against an
+  // account the editor picks, before the loan itself is saved.
+  const [adjAccounts, setAdjAccounts] = useState<{ id: string; code: string; name: string; branch_id: string | null }[]>([]);
+  const [adjAccountId, setAdjAccountId] = useState('');
+  const [adjReason, setAdjReason] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Loan | null>(null);
   const [deleting, setDeleting] = useState(false);
   const pageSize = 10;
@@ -493,12 +504,90 @@ export default function LoansPage() {
       due_date: l.due_date ?? '',
       status: l.status,
     });
+    setAdjAccountId('');
+    setAdjReason('');
+    supabase.from('chart_of_accounts').select('id, code, name, branch_id').order('code')
+      .then(({ data }) => setAdjAccounts(
+        (data ?? []).filter((a: any) => (a.branch_id === l.branch_id || a.branch_id == null) && !isLoansReceivable(a.name)),
+      ));
+  }
+
+  // What this loan adds to the Dashboard's Receivable: remaining_balance
+  // while active, nothing otherwise — the same rule the Dashboard sums by.
+  const receivableOf = (status: string, remaining: number) => (status === 'active' ? remaining : 0);
+  const editReceivableChange = editTarget
+    ? Math.round((receivableOf(editForm.status, Number(editForm.remaining_balance) || 0)
+        - receivableOf(editTarget.status, Number(editTarget.remaining_balance) || 0)) * 100) / 100
+    : 0;
+  const editNeedsAdjustment = Math.abs(editReceivableChange) >= 0.01;
+
+  // Posts the Loans Receivable side of an Edit Loan change, against the
+  // account the editor chose. Returns the entry id so a failed loan save can
+  // remove it again, or an error message.
+  async function postReceivableAdjustment(loan: Loan, change: number, otherAccountId: string, reason: string): Promise<{ entryId?: string; error?: string }> {
+    let lr = await supabase.from('chart_of_accounts').select('id').eq('branch_id', loan.branch_id ?? '').ilike('name', 'Loans Receivable%').limit(1).maybeSingle();
+    if (!lr.data) lr = await supabase.from('chart_of_accounts').select('id').is('branch_id', null).ilike('name', 'Loans Receivable%').limit(1).maybeSingle();
+    if (!lr.data) return { error: `No Loans Receivable account found${loan.branches?.name ? ` for ${loan.branches.name}` : ''}.` };
+    const amount = Math.abs(change);
+    const customer = formatCustomerName(loan.customers?.first_name, loan.customers?.last_name);
+    const { data: entry, error } = await supabase.from('journal_entries').insert({
+      entry_number: generateEntryNumber(),
+      entry_date: todayStr(),
+      reference: loan.loan_number,
+      description: `Loan balance adjustment — ${loan.loan_number}${customer ? ` — ${customer}` : ''} — ${reason}`,
+      source: 'loan_adjustment',
+      source_id: loan.id,
+      created_by: profile?.id ?? null,
+      branch_id: loan.branch_id ?? null,
+    }).select('id').single();
+    if (error || !entry) return { error: error?.message ?? 'Could not create the journal entry.' };
+    // Receivable going down: credit Loans Receivable, debit the chosen
+    // account. Going up: the reverse.
+    const lrLine = { journal_entry_id: entry.id, account_id: lr.data.id, debit: change > 0 ? amount : 0, credit: change < 0 ? amount : 0, memo: `Edit Loan: ${reason}` };
+    const otherLine = { journal_entry_id: entry.id, account_id: otherAccountId, debit: change < 0 ? amount : 0, credit: change > 0 ? amount : 0, memo: `Edit Loan: ${reason}` };
+    const { error: linesError } = await supabase.from('journal_entry_lines').insert([lrLine, otherLine]);
+    if (linesError) {
+      await supabase.from('journal_entries').delete().eq('id', entry.id);
+      return { error: linesError.message };
+    }
+    return { entryId: entry.id };
   }
 
   async function handleEditLoan(e: React.FormEvent) {
     e.preventDefault();
     if (!editTarget) return;
     setEditSaving(true);
+
+    // Re-read the balance at save time: a payment posted while this dialog
+    // was open would otherwise make the change (and its ledger entry) wrong.
+    const { data: fresh, error: freshError } = await supabase.from('loans').select('status, remaining_balance').eq('id', editTarget.id).single();
+    if (freshError || !fresh) {
+      toast({ title: 'Error', description: freshError?.message ?? 'Could not re-read this loan.', variant: 'destructive' });
+      setEditSaving(false);
+      return;
+    }
+    if (Math.abs((Number(fresh.remaining_balance) || 0) - (Number(editTarget.remaining_balance) || 0)) >= 0.01 || fresh.status !== editTarget.status) {
+      toast({ title: 'Loan changed', description: 'A payment or another edit landed while this was open. Close and open Edit again to start from the current balance.', variant: 'destructive' });
+      setEditSaving(false);
+      return;
+    }
+
+    let adjustmentEntryId: string | undefined;
+    if (editNeedsAdjustment) {
+      if (!adjAccountId || !adjReason.trim()) {
+        toast({ title: 'Adjustment needed', description: 'This changes the receivable. Choose the other account and give a reason.', variant: 'destructive' });
+        setEditSaving(false);
+        return;
+      }
+      const posted = await postReceivableAdjustment(editTarget, editReceivableChange, adjAccountId, adjReason.trim());
+      if (posted.error) {
+        toast({ title: 'Not saved', description: `The ledger adjustment failed, so the loan was left unchanged: ${posted.error}`, variant: 'destructive' });
+        setEditSaving(false);
+        return;
+      }
+      adjustmentEntryId = posted.entryId;
+    }
+
     const { error } = await supabase.from('loans').update({
       amount: Number(editForm.amount),
       interest_rate: Number(editForm.interest_rate),
@@ -513,9 +602,16 @@ export default function LoansPage() {
     }).eq('id', editTarget.id);
 
     if (error) {
+      // Take the adjustment back out so the ledger doesn't move without the loan.
+      if (adjustmentEntryId) await supabase.from('journal_entries').delete().eq('id', adjustmentEntryId);
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } else {
-      toast({ title: 'Loan updated' });
+      toast({
+        title: 'Loan updated',
+        description: adjustmentEntryId
+          ? `Loans Receivable ${editReceivableChange < 0 ? 'credited' : 'debited'} ${formatCurrency(Math.abs(editReceivableChange))} in Journal Entries.`
+          : undefined,
+      });
       setEditTarget(null);
       loadLoans();
     }
@@ -525,6 +621,26 @@ export default function LoansPage() {
   async function handleDeleteLoan() {
     if (!deleteTarget) return;
     setDeleting(true);
+    // A loan that has reached the books can't be deleted: its release entry
+    // (and any remitted payments) would stay in the Trial Balance while the
+    // loan disappears from the Dashboard, the same kind of gap found in
+    // Balanga (Nov 2026). Only applications that never went out can go.
+    const [{ data: current }, { count: paymentCount }, { count: entryCount }] = await Promise.all([
+      supabase.from('loans').select('status, disbursed_at').eq('id', deleteTarget.id).single(),
+      supabase.from('payments').select('id', { count: 'exact', head: true }).eq('loan_id', deleteTarget.id),
+      supabase.from('journal_entries').select('id', { count: 'exact', head: true }).eq('source_id', deleteTarget.id),
+    ]);
+    const neverReleased = ['pending', 'approved', 'declined'].includes(current?.status ?? '');
+    if (!current || current.disbursed_at || !neverReleased || (paymentCount ?? 0) > 0 || (entryCount ?? 0) > 0) {
+      toast({
+        title: 'Cannot delete this loan',
+        description: `${deleteTarget.loan_number} is already in the books (released, paid, or has payments or journal entries). Deleting it would leave it in the Trial Balance. Use Edit to change its balance or status instead; that posts the matching entry.`,
+        variant: 'destructive',
+      });
+      setDeleting(false);
+      setDeleteTarget(null);
+      return;
+    }
     // cash_vouchers/receipts only SET NULL their loan_id on loan delete (they
     // don't cascade) — remove them explicitly so nothing orphaned is left
     // behind. Payments do cascade automatically via the loan delete below.
@@ -1014,7 +1130,7 @@ export default function LoansPage() {
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Loan {editTarget?.loan_number}</DialogTitle>
-            <DialogDescription>Directly overwrites this loan's stored data — use with care, this does not recompute related payment history.</DialogDescription>
+            <DialogDescription>Directly overwrites this loan's stored data — use with care, this does not recompute related payment history. A change to the receivable posts a matching Journal Entry.</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleEditLoan} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1039,9 +1155,37 @@ export default function LoansPage() {
               <div className="space-y-2"><Label>Release Date</Label><Input type="date" value={editForm.release_date} onChange={(e) => setEditForm({ ...editForm, release_date: e.target.value })} /></div>
               <div className="space-y-2"><Label>Due Date</Label><Input type="date" value={editForm.due_date} onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })} /></div>
             </div>
+            {editNeedsAdjustment && (
+              <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 space-y-3">
+                <div className="text-sm">
+                  <p className="font-medium">
+                    This {editReceivableChange < 0 ? 'lowers' : 'raises'} the receivable by {formatCurrency(Math.abs(editReceivableChange))}.
+                  </p>
+                  <p className="text-muted-foreground">
+                    So the Trial Balance stays matched with the Dashboard, Loans Receivable{editTarget?.branches?.name ? ` (${editTarget.branches.name})` : ''} will be {editReceivableChange < 0 ? 'credited' : 'debited'} {formatCurrency(Math.abs(editReceivableChange))} in Journal Entries. Choose where the other side goes.
+                    {' '}For a payment or a write-off, use Payments or Write-Off instead.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>{editReceivableChange < 0 ? 'Debit' : 'Credit'} account *</Label>
+                    <Select value={adjAccountId} onValueChange={setAdjAccountId}>
+                      <SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger>
+                      <SelectContent>
+                        {adjAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code.trim()} — {a.name.trim()}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Reason *</Label>
+                    <Input value={adjReason} onChange={(e) => setAdjReason(e.target.value)} placeholder="e.g. receipt error, overstatement" />
+                  </div>
+                </div>
+              </div>
+            )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
-              <Button type="submit" disabled={editSaving}>{editSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
+              <Button type="submit" disabled={editSaving || (editNeedsAdjustment && (!adjAccountId || !adjReason.trim()))}>{editSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Save</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -1052,7 +1196,7 @@ export default function LoansPage() {
           <DialogHeader>
             <DialogTitle>Delete Loan</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete {deleteTarget?.loan_number}? This permanently removes the loan and all of its payments, receipts, and cash vouchers. This action cannot be undone.
+              Are you sure you want to delete {deleteTarget?.loan_number}? Only an application that was never released can be deleted; a released loan has to be changed through Edit so the books stay matched. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
