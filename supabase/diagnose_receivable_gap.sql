@@ -10,11 +10,16 @@
                      write-offs credit it, and Kat's manual entries and cash
                      vouchers adjust it.
 
-  What the Nov 18 run showed: Dinalupihan matched exactly; Balanga's ledger
-  was 5,070 higher. Every Balanga collector had remitted everything, so the
-  gap was not cash still with a collector. It came from loans whose balance
-  doesn't follow from their release entry and payments (QUERY 2), net of
-  the cash vouchers and manual entries Kat posted to correct them.
+  What the Nov 2026 runs showed: Dinalupihan matched exactly; Balanga's
+  ledger was 5,070 higher. The ledger was right. Perez, Rosa's legacy loan
+  LN-2026-59525 had been saved with status 'overdue' (an Edit Loan option at
+  the time), so the Dashboard and the Collection List, which count only
+  'active', left out its 5,070 balance. Fixed by setting it back to
+  'active'; no journal entry. Check this first next time:
+    SELECT loan_number, status, remaining_balance FROM loans
+    WHERE status = 'overdue' OR (status NOT IN ('active', 'pending', 'approved', 'declined', 'written_off') AND remaining_balance > 0);
+  QUERY 2's other rows (Garcia, Hepullier, ...) had already been evened out
+  by Kat's manual entries.
 
   Not usable for this: payments vs remittances over all time. Payments from
   before the system, and those of deleted collectors (collector_id is SET

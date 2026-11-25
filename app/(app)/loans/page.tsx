@@ -512,9 +512,11 @@ export default function LoansPage() {
       ));
   }
 
-  // What this loan adds to the Dashboard's Receivable: remaining_balance
-  // while active, nothing otherwise — the same rule the Dashboard sums by.
-  const receivableOf = (status: string, remaining: number) => (status === 'active' ? remaining : 0);
+  // What this loan carries in Loans Receivable: remaining_balance while active,
+  // nothing otherwise — the rule the Dashboard sums by. A stray stored
+  // 'overdue' counts as active: its balance never left the ledger, so moving
+  // it back to Active must post nothing.
+  const receivableOf = (status: string, remaining: number) => (status === 'active' || status === 'overdue' ? remaining : 0);
   const editReceivableChange = editTarget
     ? Math.round((receivableOf(editForm.status, Number(editForm.remaining_balance) || 0)
         - receivableOf(editTarget.status, Number(editTarget.remaining_balance) || 0)) * 100) / 100
@@ -1146,7 +1148,13 @@ export default function LoansPage() {
                 <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {['pending', 'approved', 'active', 'overdue', 'paid', 'declined', 'renewed'].map(s => (
+                    {/* No 'overdue': overdue is worked out from the due date, never
+                        stored. A loan saved as 'overdue' dropped out of the
+                        Dashboard and Collection List while its balance stayed
+                        in the ledger (Perez, Rosa, ₱5,070, Nov 2026). It's
+                        still listed for a loan that already has it, so the
+                        dialog can show it and move it back to Active. */}
+                    {['pending', 'approved', 'active', 'paid', 'declined', 'renewed', ...(editTarget?.status === 'overdue' ? ['overdue'] : [])].map(s => (
                       <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>
                     ))}
                   </SelectContent>
